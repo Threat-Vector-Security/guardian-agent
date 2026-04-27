@@ -361,6 +361,202 @@ describe('tool-loop-runtime', () => {
     });
   });
 
+  it('uses the next blocked approval summaries for resumed tool-loop pending prompts', async () => {
+    const pendingAction: PendingActionRecord = {
+      id: 'pending-1',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Waiting for approval to add C:\\Temp\\guardian-smoke to allowed paths.',
+        approvalIds: ['policy-approval'],
+      },
+      intent: {
+        route: 'filesystem_task',
+        operation: 'create',
+        originalUserContent: 'Create the approval smoke file.',
+        summary: 'Create approval smoke file.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: {},
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    };
+    const continuation = readToolLoopContinuationPayload(buildToolLoopContinuationPayload({
+      llmMessages: [
+        { role: 'system', content: 'system prompt' },
+        { role: 'user', content: 'Create the approval smoke file.' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            {
+              id: 'policy-call',
+              name: 'update_tool_policy',
+              arguments: '{"action":"add_path","value":"C:\\\\Temp\\\\guardian-smoke"}',
+            },
+          ],
+        },
+      ],
+      pendingTools: [
+        {
+          approvalId: 'policy-approval',
+          toolCallId: 'policy-call',
+          jobId: 'job-policy',
+          name: 'update_tool_policy',
+        },
+      ],
+      originalMessage: {
+        id: 'msg-1',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+        timestamp: 1,
+        content: 'Create the approval smoke file.',
+      },
+      requestText: 'Create the approval smoke file.',
+      referenceTime: 1,
+      allowModelMemoryMutation: false,
+      activeSkillIds: [],
+      contentTrustLevel: 'trusted',
+      taintReasons: [],
+      intentDecision: {
+        route: 'filesystem_task',
+        operation: 'create',
+        summary: 'Create approval smoke file.',
+        confidence: 'high',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+        entities: {},
+      },
+    }))!;
+    const chatFn = vi.fn(async () => ({
+      content: '',
+      toolCalls: [
+        {
+          id: 'write-call',
+          name: 'fs_write',
+          arguments: '{"path":"C:\\\\Temp\\\\guardian-smoke\\\\approved.txt","content":"ok"}',
+        },
+      ],
+      model: 'test-model',
+      finishReason: 'tool_calls' as const,
+    }));
+    const setChatContinuationGraphPendingApprovalActionForRequest = vi.fn((_userKey, _surfaceId, action) => ({
+      action: {
+        ...pendingAction,
+        id: 'pending-2',
+        blocker: {
+          kind: 'approval' as const,
+          prompt: action.prompt,
+          approvalIds: action.approvalIds,
+          approvalSummaries: action.approvalSummaries,
+        },
+      },
+    }));
+    const buildPendingApprovalBlockedResponse = vi.fn((result, fallbackContent) => ({
+      content: fallbackContent,
+      metadata: result.action ? { pendingAction: result.action } : undefined,
+    }));
+
+    const result = await resumeStoredToolLoopContinuation({
+      pendingAction,
+      continuation,
+      options: {
+        approvalId: 'policy-approval',
+        approvalResult: {
+          success: true,
+          approved: true,
+          executionSucceeded: true,
+          message: "Tool 'update_tool_policy' completed.",
+          result: {
+            success: true,
+            status: 'succeeded',
+          },
+        },
+      },
+      agentId: 'chat',
+      tools: {
+        executeModelTool: vi.fn(async () => ({
+          success: false,
+          status: 'pending_approval',
+          approvalId: 'write-approval',
+          jobId: 'job-write',
+          message: 'Approval required.',
+        })),
+        getApprovalSummaries: vi.fn(() => new Map([
+          ['write-approval', {
+            toolName: 'fs_write',
+            argsPreview: '{"path":"C:\\\\Temp\\\\guardian-smoke\\\\approved.txt","content":"ok"}',
+            actionLabel: 'write C:\\Temp\\guardian-smoke\\approved.txt',
+          }],
+        ])),
+        getToolDefinition: vi.fn(() => undefined),
+        isEnabled: vi.fn(() => true),
+        listAlwaysLoadedDefinitions: vi.fn(() => [{
+          name: 'fs_write',
+          description: 'Write a file.',
+          category: 'filesystem',
+          risk: 'mutating',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              content: { type: 'string' },
+            },
+            required: ['path', 'content'],
+          },
+        }]),
+        listCodeSessionEagerToolDefinitions: vi.fn(() => []),
+        listJobs: vi.fn(() => []),
+      },
+      secondBrainService: null,
+      maxToolRounds: 2,
+      contextBudget: 32_000,
+      buildChatRunner: () => ({
+        providerLocality: 'external',
+        chatFn,
+      }),
+      completePendingAction: vi.fn(),
+      sanitizeToolResultForLlm: vi.fn((_toolName, result) => ({
+        sanitized: result,
+        threats: [],
+        trustLevel: 'trusted',
+        taintReasons: [],
+      })),
+      setChatContinuationGraphPendingApprovalActionForRequest,
+      buildPendingApprovalBlockedResponse,
+      lacksUsableAssistantContent: (content) => !content?.trim(),
+    });
+
+    expect(setChatContinuationGraphPendingApprovalActionForRequest).toHaveBeenCalledWith(
+      'owner:web',
+      'web-guardian-chat',
+      expect.objectContaining({
+        prompt: 'Waiting for approval to write C:\\Temp\\guardian-smoke\\approved.txt.',
+        approvalIds: ['write-approval'],
+      }),
+    );
+    expect(result?.content).toBe('Waiting for approval to write C:\\Temp\\guardian-smoke\\approved.txt.');
+  });
+
   it('does not treat intermediate retry narration as a completed resumed tool-loop answer', async () => {
     const pendingAction: PendingActionRecord = {
       id: 'pending-1',

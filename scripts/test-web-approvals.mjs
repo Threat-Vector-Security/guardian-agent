@@ -65,24 +65,42 @@ function createChatCompletionResponse({ model, content = '', finishReason = 'sto
 function buildRouteIntentDecision(latestUser) {
   if (latestUser.includes('[User approved the pending tool action(s).')) {
     return {
-      route: 'general_assistant',
+      route: 'filesystem_task',
       confidence: 'high',
       operation: 'continue',
       summary: 'Continue the approved file-creation request.',
       turnRelation: 'follow_up',
       resolution: 'ready',
       missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      entities: {},
     };
   }
   if (latestUser.includes('create an empty file called web-empty.txt')) {
     return {
-      route: 'general_assistant',
+      route: 'filesystem_task',
       confidence: 'high',
-      operation: 'execute',
+      operation: 'create',
       summary: 'Create the requested empty file.',
       turnRelation: 'new_request',
       resolution: 'ready',
       missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      entities: {
+        path: 'web-empty.txt',
+      },
     };
   }
   return {
@@ -287,6 +305,19 @@ async function startFakeProvider(testDir, scenarioLog) {
         sendResponse({
           model: 'web-harness-model',
           content: `Done - created ${path.join(testDir, 'web-empty.txt')} as an empty file.`,
+        });
+        return;
+      }
+
+      if (latestUser.includes('What exact tool did you use?')) {
+        sendResponse({
+          model: 'web-harness-model',
+          content: [
+            '1. update_tool_policy',
+            JSON.stringify({ action: 'add_path', value: testDir }, null, 2),
+            '2. fs_write',
+            JSON.stringify({ path: path.join(testDir, 'web-empty.txt'), content: '' }, null, 2),
+          ].join('\n'),
         });
         return;
       }

@@ -530,13 +530,14 @@ export async function resumeStoredToolLoopContinuation(input: {
         if (!nextContinuation) {
           return { content: 'I could not resume the pending coding run after approval.' };
         }
+        const approvalSummaries = buildPendingApprovalMetadata(pendingIds, summaries);
         const pendingActionResult = input.setChatContinuationGraphPendingApprovalActionForRequest(
           `${input.pendingAction.scope.userId}:${input.pendingAction.scope.channel}`,
           input.pendingAction.scope.surfaceId,
           {
-            prompt: input.pendingAction.blocker.prompt || 'Approval required for the pending action.',
+            prompt: formatPendingApprovalMessage(approvalSummaries),
             approvalIds: pendingIds,
-            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+            approvalSummaries,
             originalUserContent: input.pendingAction.intent.originalUserContent,
             route: input.pendingAction.intent.route,
             operation: input.pendingAction.intent.operation,
