@@ -8822,6 +8822,175 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(messages.at(-1)?.content).toBe('Reply with exactly: prod no context ok');
   });
 
+  it('delegates fresh repo-grounded shared code-session requests without stale code-session history', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const nowMs = Date.now();
+    const conversationService = new ConversationService({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-fresh-shared-code-session-history.test.sqlite',
+      maxTurns: 50,
+      maxMessageChars: 20_000,
+      maxContextChars: 20_000,
+      retentionDays: 30,
+      now: () => nowMs,
+    });
+    const continuityThreadStore = new ContinuityThreadStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-fresh-shared-code-session-continuity.test.sqlite',
+      retentionDays: 30,
+      now: () => nowMs,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-fresh-shared-code-session.test.sqlite',
+    });
+    const staleSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner',
+      title: 'Old Guardian Agent task',
+      workspaceRoot: process.cwd(),
+    });
+    codeSessionStore.attachSession({
+      sessionId: staleSession.id,
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'old-code-surface',
+      mode: 'controller',
+    });
+    continuityThreadStore.upsert({
+      assistantId: 'chat',
+      userId: 'owner',
+    }, {
+      touchSurface: {
+        channel: 'web',
+        surfaceId: 'old-code-surface',
+      },
+      focusSummary: 'Old coding work.',
+      lastActionableRequest: 'What tools did you use in my immediately previous request on this surface?',
+      activeExecutionRefs: [
+        {
+          kind: 'execution',
+          id: 'execution:old-tool-report',
+          label: 'What tools did you use in my immediately previous request on this surface?',
+        },
+        {
+          kind: 'code_session',
+          id: staleSession.id,
+        },
+      ],
+    }, nowMs);
+    conversationService.recordTurn(
+      {
+        agentId: 'chat',
+        userId: staleSession.conversationUserId,
+        channel: staleSession.conversationChannel,
+      },
+      'What tools did you use in my immediately previous request on this surface?',
+      'The stale answer said no tools were used.',
+    );
+
+    const localChat = vi.fn(async () => ({
+      content: 'Inline answer.',
+      toolCalls: [],
+      model: 'local-model',
+      finishReason: 'stop',
+    }));
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      conversationService,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    (agent as any).continuityThreadStore = continuityThreadStore;
+    const workerManager = {
+      handleMessage: vi.fn(async () => ({
+        content: 'src/runtime/execution-graph/delegated-worker-retry.ts, src/supervisor/worker-manager.ts',
+      })),
+    };
+
+    const response = await agent.onMessage!({
+      id: 'msg-fresh-shared-code-session-repo-request',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'fresh-api-surface',
+      content: 'Inspect this repo and tell me which files implement delegated worker retry policy. Do not edit anything.',
+      timestamp: nowMs,
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        available: true,
+        decision: {
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Inspect the repository and report grounded findings.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'external',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'chat_synthesis',
+          entities: {},
+        },
+      }),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    }, workerManager as never);
+
+    expect(response.content).toContain('delegated-worker-retry.ts');
+    expect(workerManager.handleMessage).toHaveBeenCalledOnce();
+    const workerInput = workerManager.handleMessage.mock.calls[0][0] as {
+      userId: string;
+      sessionId: string;
+      history: Array<{ content: string }>;
+      message: UserMessage;
+      systemPrompt: string;
+      delegation?: { codeSessionId?: string };
+    };
+    expect(workerInput.userId).toBe('owner');
+    expect(workerInput.sessionId).toBe('owner:web:surface:fresh-api-surface');
+    expect(workerInput.message.metadata?.codeContext).toMatchObject({
+      sessionId: staleSession.id,
+      workspaceRoot: process.cwd(),
+    });
+    expect(workerInput.delegation?.codeSessionId).toBe(staleSession.id);
+    const assembledWorkerContext = [
+      workerInput.systemPrompt,
+      ...workerInput.history.map((entry) => entry.content),
+    ].join('\n');
+    expect(assembledWorkerContext).not.toContain('What tools did you use');
+    expect(assembledWorkerContext).not.toContain('stale answer');
+    expect(localChat).not.toHaveBeenCalled();
+  });
+
   it('delegates structured general-assistant follow-ups that need tool synthesis', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

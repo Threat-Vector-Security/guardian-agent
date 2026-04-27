@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { shouldAttachCodeSessionForRequest } from './code-session-request-scope.js';
+import {
+  IMPLICIT_SHARED_CODE_CONTEXT_SOURCE,
+  isResolvedCodeSessionSharedAttachment,
+  shouldAttachCodeSessionForRequest,
+  shouldUseCodeSessionConversationForRequest,
+} from './code-session-request-scope.js';
 
 describe('shouldAttachCodeSessionForRequest', () => {
   const sharedSession = {
@@ -86,5 +91,53 @@ describe('shouldAttachCodeSessionForRequest', () => {
       resolvedCodeSession: sharedSession,
       gatewayDecision: null,
     })).toBe(false);
+  });
+
+  it('identifies shared attachments separately from same-surface attachments', () => {
+    expect(isResolvedCodeSessionSharedAttachment(sharedSession, 'web', 'second-brain')).toBe(true);
+    expect(isResolvedCodeSessionSharedAttachment(sharedSession, 'web', 'code-panel')).toBe(false);
+  });
+
+  it('does not use implicit shared code context as the conversation scope', () => {
+    expect(shouldUseCodeSessionConversationForRequest({
+      channel: 'web',
+      surfaceId: 'second-brain',
+      requestedCodeContext: {
+        sessionId: 'code-session-1',
+        workspaceRoot: 'S:\\Development\\GuardianAgent',
+      },
+      resolvedCodeSession: {
+        session: {
+          resolvedRoot: 'S:\\Development\\GuardianAgent',
+        },
+      },
+      metadata: {
+        codeContext: {
+          sessionId: 'code-session-1',
+          workspaceRoot: 'S:\\Development\\GuardianAgent',
+          source: IMPLICIT_SHARED_CODE_CONTEXT_SOURCE,
+        },
+      },
+    })).toBe(false);
+  });
+
+  it('uses explicit code context as the conversation scope', () => {
+    expect(shouldUseCodeSessionConversationForRequest({
+      channel: 'web',
+      surfaceId: 'second-brain',
+      requestedCodeContext: {
+        sessionId: 'code-session-1',
+      },
+      resolvedCodeSession: {
+        session: {
+          resolvedRoot: 'S:\\Development\\GuardianAgent',
+        },
+      },
+      metadata: {
+        codeContext: {
+          sessionId: 'code-session-1',
+        },
+      },
+    })).toBe(true);
   });
 });
