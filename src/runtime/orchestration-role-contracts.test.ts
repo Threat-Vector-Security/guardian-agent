@@ -193,6 +193,48 @@ describe('orchestration role contracts', () => {
     expect(descriptor).toBeUndefined();
   });
 
+  it('keeps no-evidence security refusals out of delegated verifier orchestration', () => {
+    const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
+      route: 'security_task',
+      operation: 'read',
+      executionClass: 'security_analysis',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+    }));
+
+    expect(descriptor).toBeUndefined();
+  });
+
+  it('infers security verifier orchestration for source-backed security analysis', () => {
+    const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
+      route: 'security_task',
+      operation: 'inspect',
+      executionClass: 'security_analysis',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'chat_synthesis',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Inspect relevant source files for security evidence.',
+          expectedToolCategories: ['fs_search', 'fs_read'],
+          required: true,
+        },
+      ],
+    }));
+
+    expect(descriptor).toEqual({
+      role: 'verifier',
+      label: 'Security Verifier',
+      lenses: ['security'],
+    });
+  });
+
   it('infers coordinator metadata for structured general-assistant tool orchestration', () => {
     const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
       route: 'general_assistant',

@@ -1,6 +1,7 @@
 import type { SelectedExecutionProfile } from '../execution-profiles.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import { deriveAnswerConstraints } from '../intent/request-patterns.js';
+import { requiresSecurityEvidence } from '../intent/planned-steps.js';
 import { normalizeUserFacingIntentGatewaySummary } from '../intent/summary.js';
 import {
   buildPlannedTask,
@@ -183,6 +184,17 @@ function buildBaseDelegatedTaskContract(
     };
   }
   if (decision?.route === 'security_task' || decision?.executionClass === 'security_analysis') {
+    if (!requiresSecurityEvidence(decision)) {
+      return {
+        kind: 'general_answer',
+        route: decision?.route,
+        operation: decision?.operation,
+        requiresEvidence: false,
+        allowsAnswerFirst: true,
+        requireExactFileReferences: false,
+        summary,
+      };
+    }
     const answerConstraints = deriveAnswerConstraints(decision?.resolvedContent);
     return {
       kind: 'security_analysis' as const,
@@ -356,7 +368,7 @@ function areProviderModelsEquivalent(
 function isDatedSnapshotOfAlias(alias: string, snapshot: string): boolean {
   if (!alias || !snapshot.startsWith(`${alias}-`)) return false;
   const suffix = snapshot.slice(alias.length + 1);
-  return /^\d{4}-\d{2}-\d{2}$/u.test(suffix) || /^\d{2}-\d{2}$/u.test(suffix);
+  return /^\d{8}$/u.test(suffix) || /^\d{4}-\d{2}-\d{2}$/u.test(suffix) || /^\d{2}-\d{2}$/u.test(suffix);
 }
 
 function verifyExactFileReferenceRequirements(

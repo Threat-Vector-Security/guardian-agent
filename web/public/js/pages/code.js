@@ -3598,7 +3598,7 @@ export async function renderCode(container) {
     if (statusResult?.platform) detectedPlatform = statusResult.platform;
     if (Array.isArray(statusResult?.shellOptions)) shellOptionsCache = statusResult.shellOptions;
 
-    codeState = normalizeState(codeState);
+    codeState = normalizeState(codeState, { preserveEditorDrafts: hasRenderedOnce });
     if (shouldOpenRequestedCodeActivityPanel() && codeState.activePanel !== 'activity') {
       codeState.activePanel = 'activity';
       saveState(codeState);
@@ -7755,7 +7755,19 @@ function loadState() {
   }
 }
 
-function normalizeState(raw) {
+function normalizeOpenTabs(value, { preserveDrafts = false } = {}) {
+  return Array.isArray(value) ? value.map((tab) => {
+    const filePath = tab?.filePath || '';
+    const dirty = preserveDrafts && !!tab?.dirty;
+    return {
+      filePath,
+      dirty,
+      content: dirty && typeof tab?.content === 'string' ? tab.content : null,
+    };
+  }).filter((tab) => tab.filePath) : [];
+}
+
+function normalizeState(raw, { preserveEditorDrafts = false } = {}) {
   const next = {
     sessions: Array.isArray(raw?.sessions) ? raw.sessions.map((session) => {
       const terminalTabs = normalizeTerminalTabs(session.terminalTabs);
@@ -7767,11 +7779,7 @@ function normalizeState(raw) {
         currentDirectory: session.currentDirectory || null,
         selectedFilePath: session.selectedFilePath || null,
         showDiff: !!session.showDiff,
-        openTabs: Array.isArray(session.openTabs) ? session.openTabs.map((t) => ({
-          filePath: t.filePath || '',
-          dirty: false,
-          content: null,
-        })).filter((t) => t.filePath) : [],
+        openTabs: normalizeOpenTabs(session.openTabs, { preserveDrafts: preserveEditorDrafts }),
         activeTabIndex: typeof session.activeTabIndex === 'number' ? session.activeTabIndex : -1,
         agentId: session.agentId || null,
         status: session.status || 'idle',
@@ -7877,6 +7885,7 @@ function saveState(state) {
       ? state.sessions.map((session) => {
         return {
           ...session,
+          openTabs: normalizeOpenTabs(session.openTabs),
           terminalTabs: Array.isArray(session.terminalTabs)
             ? session.terminalTabs.map((tab) => ({
               id: tab.id,

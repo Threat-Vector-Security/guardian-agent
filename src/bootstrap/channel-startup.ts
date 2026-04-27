@@ -37,7 +37,13 @@ function createChannelDispatchHandler(args: {
   runtime: DispatchRuntimeLike;
 }): (msg: IncomingDispatchMessage) => Promise<{ content: string; metadata?: Record<string, unknown> }> {
   return async (msg) => {
-    const prepared = await args.prepareIncomingDispatch(args.channelDefault, msg);
+    const messageId = (msg as IncomingDispatchMessage & { id?: unknown }).id;
+    const inboundRequestId = msg.requestId?.trim()
+      || (typeof messageId === 'string' ? messageId.trim() : '');
+    const dispatchMessage = inboundRequestId
+      ? { ...msg, requestId: inboundRequestId }
+      : msg;
+    const prepared = await args.prepareIncomingDispatch(args.channelDefault, dispatchMessage);
     if (args.dashboardCallbacks.onDispatch) {
       return args.dashboardCallbacks.onDispatch(
         prepared.decision.agentId,
@@ -50,8 +56,8 @@ function createChannelDispatchHandler(args: {
     const channel = msg.channel?.trim() || 'web';
     const userId = msg.userId?.trim() || `${channel}-user`;
     return args.runtime.dispatchMessage(prepared.decision.agentId, {
-      ...msg,
-      id: msg.requestId ?? randomUUID(),
+      ...dispatchMessage,
+      id: prepared.requestId || dispatchMessage.requestId || randomUUID(),
       userId,
       channel,
       timestamp: Date.now(),

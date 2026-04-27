@@ -210,7 +210,7 @@ export async function handleWebChatRoutes(context: WebChatRoutesContext): Promis
       try {
         const principal = context.resolveRequestPrincipal(req);
         const response = await context.onMessage({
-          id: context.generateMessageId(),
+          id: requestId ?? context.generateMessageId(),
           userId: parsed.userId ?? 'web-user',
           surfaceId: trimOptionalString(parsed.surfaceId),
           principalId: principal.principalId,

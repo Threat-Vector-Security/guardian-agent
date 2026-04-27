@@ -31,6 +31,7 @@ import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } fr
 import type { ResolvedSkill } from '../../skills/types.js';
 import type { ModelFallbackChain } from '../../llm/model-fallback.js';
 import { parseWebSearchIntent } from '../search-intent.js';
+import { hasRequiredToolBackedAnswerPlan } from '../intent/planned-steps.js';
 import type { SecondBrainService } from '../second-brain/second-brain-service.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { SelectedExecutionProfile } from '../execution-profiles.js';
@@ -284,6 +285,16 @@ export async function runLiveToolLoopController(
 
   const providerLocality = input.resolveToolResultProviderKind(ctx);
   const tools = input.tools;
+
+  if (shouldUseNoToolDirectAnswer(directIntentDecision)) {
+    const response = await chatFn(input.llmMessages, { tools: [] });
+    finalContent = response.content;
+    return {
+      finalContent: finalContent || 'I could not generate a final response for that request.',
+      lastToolRoundResults,
+      ...(responseSource ? { responseSource } : {}),
+    };
+  }
 
   if (!tools?.isEnabled()) {
     const response = await chatFn(input.llmMessages);
@@ -975,6 +986,16 @@ export async function runLiveToolLoopController(
     ...(latestContextCompaction ? { latestContextCompaction } : {}),
     ...(responseSource ? { responseSource } : {}),
   };
+}
+
+function shouldUseNoToolDirectAnswer(
+  decision: IntentGatewayDecision | undefined,
+): boolean {
+  if (!decision) return false;
+  return decision.preferredAnswerPath === 'direct'
+    && decision.requiresRepoGrounding !== true
+    && decision.requiresToolSynthesis !== true
+    && !hasRequiredToolBackedAnswerPlan(decision);
 }
 
 function recoverResponseToolCalls(response: ChatResponse, llmToolDefs: LlmToolDefinition[]): ChatResponse {

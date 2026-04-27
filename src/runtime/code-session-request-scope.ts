@@ -1,6 +1,10 @@
 import { posix as posixPath, win32 as win32Path } from 'node:path';
 
 import type { IntentGatewayDecision } from './intent-gateway.js';
+import {
+  isRawCredentialDisclosureRequest,
+  looksLikeSelfContainedDirectAnswerTurn,
+} from './intent/request-patterns.js';
 import { extractPathHint } from './search-intent.js';
 
 interface RequestedCodeContextLike {
@@ -63,6 +67,11 @@ function hasExplicitPathOutsideWorkspace(
   return !isPathInsideRoot(explicitPath, workspaceRoot);
 }
 
+function isSelfContainedNonWorkspaceRequest(content: string): boolean {
+  return looksLikeSelfContainedDirectAnswerTurn(content)
+    || isRawCredentialDisclosureRequest(content);
+}
+
 export function shouldAttachCodeSessionForRequest(
   input: ShouldAttachCodeSessionForRequestInput,
 ): boolean {
@@ -73,6 +82,9 @@ export function shouldAttachCodeSessionForRequest(
   }
   if (input.requestedCodeContext?.sessionId || input.requestedCodeContext?.workspaceRoot) {
     return true;
+  }
+  if (isSelfContainedNonWorkspaceRequest(input.content)) {
+    return false;
   }
 
   const workspaceRoot = input.resolvedCodeSession.session.resolvedRoot?.trim();

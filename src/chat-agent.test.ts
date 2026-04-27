@@ -16,6 +16,7 @@ import {
   tryDirectCodingBackendDelegation,
   type DirectCodingBackendDeps,
 } from './runtime/chat-agent/direct-coding-backend.js';
+import { resolveConversationHistoryChannel } from './runtime/channel-surface-ids.js';
 import { tryDirectGoogleWorkspaceRead } from './runtime/chat-agent/direct-mailbox-runtime.js';
 import {
   tryDirectPersonalAssistantRead,
@@ -8444,8 +8445,20 @@ describe('LLMChatAgent direct intent metadata', () => {
     }, nowMs);
     conversationService.recordTurn(
       { agentId: 'chat', userId: 'owner', channel: 'web' },
-      'hello guardian',
-      'hello guardian',
+      'hello stale guardian surface',
+      'hello stale guardian surface',
+    );
+    conversationService.recordTurn(
+      {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: resolveConversationHistoryChannel({
+          channel: 'web',
+          surfaceId: 'config-panel',
+        }),
+      },
+      'hello config panel',
+      'hello config panel',
     );
     conversationService.recordTurn(
       {
@@ -8524,12 +8537,145 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(response.content).toContain('request correlation');
     expect(localChat).toHaveBeenCalledOnce();
     const messages = localChat.mock.calls[0][0] as Array<{ role: string; content: string }>;
-    const staleWebIndex = messages.findIndex((entry) => entry.content === 'hello guardian');
+    const staleWebIndex = messages.findIndex((entry) => entry.content === 'hello stale guardian surface');
+    const configSurfaceIndex = messages.findIndex((entry) => entry.content === 'hello config panel');
     const codeAnswerIndex = messages.findIndex((entry) => entry.content.includes('run-timeline-context.js'));
-    expect(staleWebIndex).toBeGreaterThan(-1);
-    expect(codeAnswerIndex).toBeGreaterThan(staleWebIndex);
+    expect(staleWebIndex).toBe(-1);
+    expect(configSurfaceIndex).toBeGreaterThan(-1);
+    expect(codeAnswerIndex).toBeGreaterThan(configSurfaceIndex);
     expect(messages.at(-2)?.content).toContain('run-timeline-context.js');
     expect(messages.at(-1)?.content).toContain('Based on your last answer');
+  });
+
+  it('uses same-surface history for direct-assistant continuity without unrelated surface turns', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const nowMs = Date.now();
+    const conversationService = new ConversationService({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-same-surface-history.test.sqlite',
+      maxTurns: 50,
+      maxMessageChars: 20_000,
+      maxContextChars: 20_000,
+      retentionDays: 30,
+      now: () => nowMs,
+    });
+    const continuityThreadStore = new ContinuityThreadStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-same-surface-continuity.test.sqlite',
+      retentionDays: 30,
+      now: () => nowMs,
+    });
+    conversationService.recordTurn(
+      {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: resolveConversationHistoryChannel({
+          channel: 'web',
+          surfaceId: 'other-panel',
+        }),
+      },
+      'The exact marker is STALE-MARKER.',
+      'acknowledged',
+    );
+
+    const localChat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: 'acknowledged',
+        toolCalls: [],
+        model: 'test-model',
+        finishReason: 'stop',
+      })
+      .mockResolvedValueOnce({
+        content: 'CURRENT-MARKER',
+        toolCalls: [],
+        model: 'test-model',
+        finishReason: 'stop',
+      });
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      conversationService,
+    );
+    (agent as any).continuityThreadStore = continuityThreadStore;
+
+    const gateway = (turnRelation: 'new_request' | 'follow_up'): IntentGatewayRecord => ({
+      available: true,
+      decision: {
+        route: 'general_assistant',
+        confidence: 'high',
+        operation: 'answer',
+        summary: 'Answer directly.',
+        turnRelation,
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'direct_assistant',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
+        simpleVsComplex: 'simple',
+        entities: {},
+      },
+    });
+
+    await agent.onMessage!({
+      id: 'msg-same-surface-marker-1',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'current-panel',
+      content: 'For this conversation only, the exact marker is CURRENT-MARKER. Reply exactly: acknowledged',
+      timestamp: nowMs,
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, gateway('new_request')),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    });
+
+    const response = await agent.onMessage!({
+      id: 'msg-same-surface-marker-2',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'current-panel',
+      content: 'What exact marker did I give in my previous message on this same surface? Reply exactly with only the marker.',
+      timestamp: nowMs + 1,
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, gateway('follow_up')),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    });
+
+    expect(response.content).toBe('CURRENT-MARKER');
+    expect(localChat).toHaveBeenCalledTimes(2);
+    const messages = localChat.mock.calls[1][0] as Array<{ role: string; content: string }>;
+    const rendered = messages.map((entry) => entry.content).join('\n');
+    expect(rendered).toContain('CURRENT-MARKER');
+    expect(rendered).not.toContain('STALE-MARKER');
   });
 
   it('does not inject stale owner continuity into fresh direct-assistant surfaces', async () => {

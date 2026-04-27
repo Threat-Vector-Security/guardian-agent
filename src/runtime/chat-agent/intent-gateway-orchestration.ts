@@ -354,7 +354,10 @@ export function resolveIntentGatewayContent(input: {
   if (memoryContinuation) {
     return memoryContinuation;
   }
-  if (decision.resolvedContent?.trim()) {
+  if (
+    decision.resolvedContent?.trim()
+    && shouldUseResolvedContentForDecision(decision, input.pendingAction)
+  ) {
     return decision.resolvedContent.trim();
   }
 
@@ -400,6 +403,16 @@ export function resolveIntentGatewayContent(input: {
   }
 
   return null;
+}
+
+function shouldUseResolvedContentForDecision(
+  decision: IntentGatewayDecision,
+  pendingAction: PendingActionRecord | null,
+): boolean {
+  if (decision.turnRelation === 'clarification_answer' || decision.turnRelation === 'correction') {
+    return true;
+  }
+  return !!pendingAction && decision.turnRelation !== 'new_request';
 }
 
 export function filterIntentGatewayClassificationContext(input: {

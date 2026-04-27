@@ -36,3 +36,15 @@ export function resolveWebSurfaceId(
 ): string {
   return trimSurfaceValue(surfaceId) || fallbackSurfaceId;
 }
+
+export function resolveConversationHistoryChannel(args: {
+  channel?: string;
+  surfaceId?: string;
+}): string {
+  const channel = trimSurfaceValue(args.channel) || 'web';
+  const surfaceId = trimSurfaceValue(args.surfaceId);
+  if (!surfaceId) {
+    return channel;
+  }
+  return `${channel}:surface:${encodeURIComponent(surfaceId)}`;
+}

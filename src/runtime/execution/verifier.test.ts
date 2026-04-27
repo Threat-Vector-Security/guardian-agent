@@ -89,6 +89,33 @@ function buildFilesystemMutationTaskContract(overrides: Partial<DelegatedTaskCon
   };
 }
 
+function buildSimpleSecurityTaskContract(overrides: Partial<DelegatedTaskContract> = {}): DelegatedTaskContract {
+  return {
+    ...buildDelegatedTaskContract({
+      route: 'security_task',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Refuse to expose raw credential values.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'security_analysis',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'chat_synthesis',
+      simpleVsComplex: 'simple',
+      plannedSteps: [
+        { kind: 'answer', summary: 'Answer safely without exposing credentials.', required: true },
+      ],
+      entities: {},
+    }),
+    ...overrides,
+  };
+}
+
 function buildEnvelope(input?: {
   taskContract?: DelegatedTaskContract;
   finalUserAnswer?: string;
@@ -181,6 +208,16 @@ describe('verifyDelegatedResult', () => {
     expect(taskContract.requiresEvidence).toBe(true);
     expect(taskContract.allowsAnswerFirst).toBe(false);
     expect(taskContract.plan.steps.map((step) => step.kind)).toEqual(['read', 'answer']);
+  });
+
+  it('keeps simple no-tool security refusals on an answer-first contract', () => {
+    const taskContract = buildSimpleSecurityTaskContract();
+
+    expect(taskContract.kind).toBe('general_answer');
+    expect(taskContract.requiresEvidence).toBe(false);
+    expect(taskContract.allowsAnswerFirst).toBe(true);
+    expect(taskContract.requireExactFileReferences).toBe(false);
+    expect(taskContract.plan.steps.map((step) => step.kind)).toEqual(['answer']);
   });
 
   it('verifies normalized automation catalog evidence plus answer synthesis', () => {
@@ -1011,6 +1048,58 @@ describe('verifyDelegatedResult', () => {
           resolvedProviderType: 'openrouter',
           resolvedProviderProfileName: 'openrouter-coding',
           resolvedProviderModel: 'qwen/qwen3.6-plus-04-02',
+        },
+      }),
+    });
+
+    expect(decision.decision).toBe('satisfied');
+  });
+
+  it('accepts OpenRouter compact dated snapshot ids when they match the selected alias model', () => {
+    const taskContract = buildRepoInspectionTaskContract();
+    const decision = verifyDelegatedResult({
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'openrouter-direct',
+        providerType: 'openrouter',
+        providerModel: 'moonshotai/kimi-k2.6',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 1,
+        maxRuntimeNotices: 2,
+        reason: 'test profile',
+      },
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        stepReceipts: taskContract.plan.steps.map((step, index) => ({
+          stepId: step.stepId,
+          status: 'satisfied',
+          evidenceReceiptIds: index === 0 ? ['receipt-1'] : index === 1 ? ['answer:1'] : [],
+          summary: step.summary,
+          startedAt: index + 1,
+          endedAt: index + 2,
+        })),
+        evidenceReceipts: [{
+          receiptId: 'receipt-1',
+          sourceType: 'tool_call',
+          toolName: 'fs_read',
+          status: 'succeeded',
+          refs: ['src/runtime/run-timeline.ts'],
+          summary: 'Read src/runtime/run-timeline.ts',
+          startedAt: 1,
+          endedAt: 2,
+        }],
+        modelProvenance: {
+          resolvedProviderName: 'openrouter',
+          resolvedProviderType: 'openrouter',
+          resolvedProviderProfileName: 'openrouter-direct',
+          resolvedProviderModel: 'moonshotai/kimi-k2.6-20260420',
         },
       }),
     });

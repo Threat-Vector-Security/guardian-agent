@@ -30,7 +30,7 @@ type DashboardRuntimeCallbacks = Pick<
 
 type PreparedIncomingDispatchResult = Pick<
   Awaited<ReturnType<PrepareIncomingDispatch>>,
-  'decision' | 'gateway' | 'routedMessage'
+  'requestId' | 'decision' | 'gateway' | 'routedMessage'
 >;
 
 interface DashboardRuntimeCallbackOptions {
@@ -68,6 +68,16 @@ async function prepareExplicitAgentDispatch(
   msg: Parameters<NonNullable<DashboardCallbacks['onStreamDispatch']>>[1],
 ): Promise<PreparedIncomingDispatchResult> {
   return prepareIncomingDispatch(undefined, msg);
+}
+
+function buildPreparationMessage(
+  msg: Parameters<NonNullable<DashboardCallbacks['onDispatch']>>[1],
+  requestId: string | undefined,
+): Parameters<NonNullable<DashboardCallbacks['onStreamDispatch']>>[1] {
+  return {
+    ...msg,
+    ...(requestId ? { requestId } : {}),
+  };
 }
 
 function readStructuredRequestError(err: unknown): { error: string; errorCode?: string } | null {
@@ -196,18 +206,44 @@ export function createDashboardRuntimeCallbacks(
       };
     },
 
-    onDispatch: async (agentId, msg, routeDecision, dispatchOptions, precomputedIntentGateway) => (
-      options.dispatchDashboardMessage({
-        agentId: resolveDispatchTargetAgentId(agentId)
-          ?? resolveDispatchTargetAgentId(options.configRef.current.channels.web?.defaultAgent)
+    onDispatch: async (agentId, msg, routeDecision, dispatchOptions, precomputedIntentGateway) => {
+      const explicitAgentId = resolveDispatchTargetAgentId(agentId);
+      const configuredWebDefaultAgentId = resolveDispatchTargetAgentId(options.configRef.current.channels.web?.defaultAgent);
+
+      if (!routeDecision && !precomputedIntentGateway) {
+        const preparationMessage = buildPreparationMessage(msg, dispatchOptions?.requestId);
+        const prepared = explicitAgentId
+          ? await prepareExplicitAgentDispatch(options.prepareIncomingDispatch, preparationMessage)
+          : await options.prepareIncomingDispatch(configuredWebDefaultAgentId, preparationMessage);
+        return options.dispatchDashboardMessage({
+          agentId: explicitAgentId
+            || prepared.decision?.agentId
+            || configuredWebDefaultAgentId
+            || options.configRef.current.agents[0]?.id
+            || 'default',
+          msg: prepared.routedMessage,
+          routeDecision: prepared.decision,
+          precomputedIntentGateway: prepared.gateway,
+          options: {
+            ...(dispatchOptions ?? {}),
+            priority: dispatchOptions?.priority ?? 'high',
+            requestType: dispatchOptions?.requestType ?? 'chat',
+            requestId: dispatchOptions?.requestId ?? prepared.requestId,
+          },
+        });
+      }
+
+      return options.dispatchDashboardMessage({
+        agentId: explicitAgentId
+          ?? configuredWebDefaultAgentId
           ?? options.configRef.current.agents[0]?.id
           ?? 'default',
         msg,
         routeDecision,
         options: dispatchOptions,
         precomputedIntentGateway,
-      })
-    ),
+      });
+    },
 
     onStreamDispatch: async (agentId, msg, emitSSE) => {
       const explicitAgentId = resolveDispatchTargetAgentId(agentId);

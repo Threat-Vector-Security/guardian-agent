@@ -218,7 +218,7 @@ describe('startBootstrapChannels', () => {
       defaultAgent: 'external',
     } as never;
 
-    let startHandler: ((msg: { content: string; channel: string }) => Promise<{ content: string; metadata?: Record<string, unknown> }>) | null = null;
+    let startHandler: ((msg: { content: string; channel: string; id?: string }) => Promise<{ content: string; metadata?: Record<string, unknown> }>) | null = null;
     const webChannel = {
       start: vi.fn(async (handler) => {
         startHandler = handler;
@@ -231,7 +231,7 @@ describe('startBootstrapChannels', () => {
     };
     const createWebChannel = vi.fn(() => webChannel);
     const prepareIncomingDispatch = vi.fn(async (_channelDefault, msg) => ({
-      requestId: 'req-2',
+      requestId: msg.requestId ?? 'req-2',
       decision: { agentId: 'prepared-agent', confidence: 'high', reason: 'prepared' },
       gateway: null,
       routedMessage: msg,
@@ -246,7 +246,7 @@ describe('startBootstrapChannels', () => {
     });
 
     await startBootstrapChannels(args);
-    await startHandler?.({ content: 'hello', channel: 'web' });
+    await startHandler?.({ content: 'hello', channel: 'web', id: 'req-from-web-route' });
 
     expect(createWebChannel).toHaveBeenCalledWith(expect.objectContaining({
       defaultAgent: 'default-agent',
@@ -254,6 +254,11 @@ describe('startBootstrapChannels', () => {
     expect(prepareIncomingDispatch).toHaveBeenCalledWith('default-agent', expect.objectContaining({
       content: 'hello',
       channel: 'web',
+      requestId: 'req-from-web-route',
+    }));
+    expect(args.runtime.dispatchMessage).toHaveBeenCalledWith('prepared-agent', expect.objectContaining({
+      id: 'req-from-web-route',
+      requestId: 'req-from-web-route',
     }));
   });
 });

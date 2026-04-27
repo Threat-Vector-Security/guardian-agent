@@ -33,6 +33,7 @@ import {
 import { attachExecutionIdentityMetadata } from './execution-identity.js';
 import { buildIntentGatewayHistoryQuery } from './intent/history-context.js';
 import { shouldAttachCodeSessionForRequest } from './code-session-request-scope.js';
+import { resolveConversationHistoryChannel } from './channel-surface-ids.js';
 import {
   readChatProviderSelectionMetadata,
   type RequestedChatProviderSelection,
@@ -237,6 +238,12 @@ export function createIncomingDispatchPreparer(args: {
       ? continuity
       : null;
     const continuitySummary = args.summarizeContinuityThreadForGateway(continuityForGateway);
+    const conversationUserId = resolvedCodeSession?.session?.conversationUserId ?? canonicalUserId;
+    const conversationChannel = resolvedCodeSession?.session?.conversationChannel
+      ?? resolveConversationHistoryChannel({
+        channel,
+        surfaceId: msg.surfaceId,
+      });
     const recentHistory = continuity && !continuityForGateway
       ? []
       : buildContinuityAwareHistory({
@@ -245,8 +252,8 @@ export function createIncomingDispatchPreparer(args: {
           continuityThread: continuityForGateway,
           currentConversationKey: {
             agentId: stateAgentId,
-            userId: canonicalUserId,
-            channel,
+            userId: conversationUserId,
+            channel: conversationChannel,
           },
           currentUserId: canonicalUserId,
           currentPrincipalId: msg.principalId,
@@ -341,15 +348,57 @@ export function createIncomingDispatchPreparer(args: {
     const channel = input.msg.channel?.trim() || 'web';
     const channelUserId = input.msg.userId?.trim() || `${channel}-user`;
     const canonicalUserId = args.identity.resolveCanonicalUserId(channel, channelUserId);
-    const continuity = args.summarizeContinuityThreadForGateway(
-      args.continuityThreadStore.get(
-        {
-          assistantId: resolveRoutingStateAgentId(input.agentId),
-          userId: canonicalUserId,
-        },
-        now(),
-      ),
+    const stateAgentId = resolveRoutingStateAgentId(input.agentId);
+    const continuityRecord = args.continuityThreadStore.get(
+      {
+        assistantId: stateAgentId,
+        userId: canonicalUserId,
+      },
+      now(),
     );
+    const continuity = (() => {
+      if (!continuityRecord) {
+        return null;
+      }
+      const surfaceId = args.getCodeSessionSurfaceId({
+        channel,
+        surfaceId: input.msg.surfaceId ?? args.readMessageSurfaceId(input.msg.metadata),
+        userId: canonicalUserId,
+        principalId: input.msg.principalId,
+      });
+      const pendingAction = args.pendingActionStore.resolveActiveForSurface({
+        agentId: stateAgentId,
+        userId: canonicalUserId,
+        channel,
+        surfaceId,
+      });
+      const requestedCodeContext = args.readCodeRequestMetadata(input.msg.metadata);
+      const resolvedCodeSession = args.codeSessionStore.resolveForRequest({
+        requestedSessionId: requestedCodeContext?.sessionId,
+        userId: canonicalUserId,
+        principalId: input.msg.principalId,
+        channel,
+        surfaceId,
+        touchAttachment: false,
+        allowSharedAttachment: false,
+      });
+      const turnRelation = typeof input.details?.turnRelation === 'string'
+        ? input.details.turnRelation
+        : undefined;
+      return args.summarizeContinuityThreadForGateway(shouldUseContinuityThreadForTurn({
+        record: continuityRecord,
+        surfaceHadContinuityBeforeTurn: hasContinuityThreadSurfaceLink({
+          record: continuityRecord,
+          channel,
+          surfaceId,
+        }),
+        hasPendingAction: !!pendingAction,
+        hasResolvedCodeSession: !!resolvedCodeSession,
+        turnRelation,
+      })
+        ? continuityRecord
+        : null);
+    })();
     const details = {
       ...(continuity?.continuityKey ? { continuityKey: continuity.continuityKey } : {}),
       ...(continuity?.activeExecutionRefs?.length ? { activeExecutionRefs: continuity.activeExecutionRefs } : {}),
@@ -585,41 +634,69 @@ export function createIncomingDispatchPreparer(args: {
       return null;
     };
     if (resolvedCodeSession) {
-      const gateway = await getGateway({ force: true });
-      const shouldApplyCodeSession = shouldAttachCodeSessionForRequest({
+      const canAttachCodeSessionBeforeGateway = shouldAttachCodeSessionForRequest({
         content: normalizedContent,
         channel,
         surfaceId: resolvedSurfaceId,
         requestedCodeContext,
         resolvedCodeSession,
-        gatewayDecision: gateway?.decision ?? null,
+        gatewayDecision: null,
       });
-      if (shouldApplyCodeSession) {
-        const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
-        const decision = resolvedChannelDefault
-          ? { agentId: resolvedChannelDefault, confidence: 'high' as const, reason: 'channel default override' }
-          : gateway && hasRoles
-            ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
-            : hasRoles
-              ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
-              : args.router.route(normalizedContent);
-        const profile = selectProfileForResolvedRoute(
-          decision,
-          gateway,
-          tierMode,
-          requestedChatProvider?.providerName,
-        );
-        const resolvedDecision = {
-          ...decision,
-          reason: requestedCodeContext?.sessionId
-            ? 'explicit attached coding session with gateway-first auto routing'
-            : 'attached coding session with gateway-first auto routing',
-        };
-        recordResolvedRoute(resolvedDecision, gateway, profile);
-        return {
-          decision: resolvedDecision,
-          gateway,
-        };
+      if (!canAttachCodeSessionBeforeGateway) {
+        if (!resolvedChannelDefault) {
+          const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
+          const decision = hasRoles
+            ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
+            : args.router.route(normalizedContent);
+          const profile = selectProfileForResolvedRoute(
+            decision,
+            null,
+            tierMode,
+            requestedChatProvider?.providerName,
+          );
+          recordResolvedRoute(decision, null, profile);
+          return {
+            decision,
+            gateway: null,
+          };
+        }
+      } else {
+        const gateway = await getGateway({ force: true });
+        const shouldApplyCodeSession = shouldAttachCodeSessionForRequest({
+          content: normalizedContent,
+          channel,
+          surfaceId: resolvedSurfaceId,
+          requestedCodeContext,
+          resolvedCodeSession,
+          gatewayDecision: gateway?.decision ?? null,
+        });
+        if (shouldApplyCodeSession) {
+          const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
+          const decision = resolvedChannelDefault
+            ? { agentId: resolvedChannelDefault, confidence: 'high' as const, reason: 'channel default override' }
+            : gateway && hasRoles
+              ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
+              : hasRoles
+                ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
+                : args.router.route(normalizedContent);
+          const profile = selectProfileForResolvedRoute(
+            decision,
+            gateway,
+            tierMode,
+            requestedChatProvider?.providerName,
+          );
+          const resolvedDecision = {
+            ...decision,
+            reason: requestedCodeContext?.sessionId
+              ? 'explicit attached coding session with gateway-first auto routing'
+              : 'attached coding session with gateway-first auto routing',
+          };
+          recordResolvedRoute(resolvedDecision, gateway, profile);
+          return {
+            decision: resolvedDecision,
+            gateway,
+          };
+        }
       }
     }
     if (requestedCodeContext?.workspaceRoot) {

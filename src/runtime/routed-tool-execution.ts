@@ -8,6 +8,7 @@ import type {
   SecondBrainPersonRecord,
   SecondBrainTaskRecord,
 } from './second-brain/types.js';
+import { requiresSecurityEvidence } from './intent/planned-steps.js';
 
 const PROVIDER_MUTATION_METHOD_PATTERN = /\b(create|insert|update|patch|delete|send|remove|modify|forward|reply)\b/i;
 const REPO_INSPECTION_SHELL_PATTERN = /\b(?:git\s+grep|grep|rg|findstr|sed|head|tail|cat|type|get-content)\b/i;
@@ -233,7 +234,7 @@ export function buildToolExecutionCorrectionPrompt(
     ].join(' ');
   }
 
-  if (decision.route === 'security_task' && (decision.requiresRepoGrounding || decision.executionClass === 'security_analysis')) {
+  if (decision.route === 'security_task' && requiresSecurityEvidence(decision)) {
     return [
       'System correction: this turn is a source-backed security review request.',
       'Do not fabricate file paths, tool results, or findings.',
@@ -408,13 +409,17 @@ function buildRoutedIntentRuleLines(decision: IntentGatewayDecision): string[] {
   }
   if (decision.route === 'security_task') {
     const lines = [
-      'This turn is a security analysis request.',
+      requiresSecurityEvidence(decision)
+        ? 'This turn is a security analysis request.'
+        : 'This turn is a security control response request.',
     ];
-    if (decision.requiresRepoGrounding || decision.executionClass === 'security_analysis') {
+    if (requiresSecurityEvidence(decision)) {
       lines.push('Inspect the relevant source files before citing exact files, control flow, or findings.');
       lines.push('Do not fabricate file paths, tool outputs, or security findings.');
+      lines.push('When findings are requested, report the highest-risk findings first and anchor them to the inspected evidence.');
+    } else {
+      lines.push('Answer directly without reading or printing protected credentials, tokens, or secrets through chat.');
     }
-    lines.push('When findings are requested, report the highest-risk findings first and anchor them to the inspected evidence.');
     return lines;
   }
   if (decision.route === 'personal_assistant_task') {

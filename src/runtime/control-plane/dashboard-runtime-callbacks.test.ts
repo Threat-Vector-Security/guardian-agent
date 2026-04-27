@@ -218,9 +218,25 @@ describe('createDashboardRuntimeCallbacks', () => {
       undefined,
       null,
     )).resolves.toEqual({ content: 'dispatch reply', metadata: { step: 'direct' } });
+    expect(prepareIncomingDispatch).toHaveBeenNthCalledWith(1, undefined, {
+      content: 'hello',
+      userId: 'web-user',
+      channel: 'web',
+    });
     expect(dispatchDashboardMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({
       agentId: 'agent-1',
-      msg: { content: 'hello', userId: 'web-user', channel: 'web' },
+      msg: { content: 'prepared message', userId: 'prepared-user', channel: 'web' },
+      routeDecision: { agentId: 'prepared-agent', confidence: 'high', reason: 'prepared' },
+      precomputedIntentGateway: expect.objectContaining({
+        decision: expect.objectContaining({
+          route: 'chat',
+        }),
+      }),
+      options: {
+        priority: 'high',
+        requestType: 'chat',
+        requestId: 'prepared-1',
+      },
     }));
 
     await expect(callbacks.onStreamDispatch?.(
@@ -233,7 +249,7 @@ describe('createDashboardRuntimeCallbacks', () => {
       content: 'stream reply',
       metadata: { step: 'stream' },
     });
-    expect(prepareIncomingDispatch).toHaveBeenCalledWith('default-agent', { content: 'stream this', userId: 'web-user', channel: 'web' });
+    expect(prepareIncomingDispatch).toHaveBeenNthCalledWith(2, 'default-agent', { content: 'stream this', userId: 'web-user', channel: 'web' });
     expect(dispatchDashboardMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
       agentId: 'prepared-agent',
       msg: { content: 'prepared message', userId: 'prepared-user', channel: 'web' },
@@ -325,6 +341,95 @@ describe('createDashboardRuntimeCallbacks', () => {
           }),
         }),
       }),
+    }));
+  });
+
+  it('prepares routing metadata and preserves request ids for non-stream dispatches', async () => {
+    const dispatchDashboardMessage = vi.fn(async () => ({ content: 'dispatch reply', metadata: { step: 'direct' } }));
+    const prepareIncomingDispatch = vi.fn(async () => ({
+      requestId: 'api-request-1',
+      decision: { agentId: 'prepared-agent', confidence: 'high' as const, reason: 'prepared' },
+      gateway: {
+        mode: 'primary' as const,
+        available: true,
+        model: 'test-model',
+        latencyMs: 2,
+        decision: {
+          route: 'general_assistant',
+          confidence: 'high' as const,
+          operation: 'inspect' as const,
+          summary: 'Exact answer.',
+          turnRelation: 'new_request' as const,
+          resolution: 'ready' as const,
+          missingFields: [],
+          entities: {},
+        },
+      },
+      routedMessage: {
+        content: 'prepared exact answer',
+        userId: 'prepared-user',
+        channel: 'web',
+        requestId: 'api-request-1',
+        metadata: {
+          __guardian_execution_profile: {
+            providerName: 'openrouter-direct',
+          },
+        },
+      },
+    }));
+    const options = createHarness({
+      dispatchDashboardMessage,
+      prepareIncomingDispatch,
+    });
+    const callbacks = createDashboardRuntimeCallbacks(options);
+
+    await expect(callbacks.onDispatch?.(
+      'default-agent',
+      {
+        content: 'Reply exactly: marker',
+        userId: 'web-user',
+        channel: 'web',
+        metadata: {
+          __guardian_chat_provider_selection: {
+            providerName: 'openrouter-direct',
+          },
+        },
+      },
+      undefined,
+      { requestId: 'api-request-1', priority: 'normal', requestType: 'chat' },
+    )).resolves.toEqual({ content: 'dispatch reply', metadata: { step: 'direct' } });
+
+    expect(prepareIncomingDispatch).toHaveBeenCalledWith(undefined, expect.objectContaining({
+      content: 'Reply exactly: marker',
+      requestId: 'api-request-1',
+      metadata: {
+        __guardian_chat_provider_selection: {
+          providerName: 'openrouter-direct',
+        },
+      },
+    }));
+    expect(dispatchDashboardMessage).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'default-agent',
+      routeDecision: { agentId: 'prepared-agent', confidence: 'high', reason: 'prepared' },
+      precomputedIntentGateway: expect.objectContaining({
+        decision: expect.objectContaining({
+          route: 'general_assistant',
+        }),
+      }),
+      msg: expect.objectContaining({
+        content: 'prepared exact answer',
+        requestId: 'api-request-1',
+        metadata: expect.objectContaining({
+          __guardian_execution_profile: expect.objectContaining({
+            providerName: 'openrouter-direct',
+          }),
+        }),
+      }),
+      options: {
+        priority: 'normal',
+        requestType: 'chat',
+        requestId: 'api-request-1',
+      },
     }));
   });
 
