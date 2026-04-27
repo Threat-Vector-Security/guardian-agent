@@ -554,6 +554,146 @@ describe('BrokeredWorkerSession automation control', () => {
     });
   });
 
+  it('treats browser read receipts as evidence for read plus answer plans', async () => {
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'browser_task',
+            confidence: 'high',
+            operation: 'read',
+            summary: 'Read the page title.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      const sawBrowserResult = messages.some((message) => (
+        message.role === 'tool'
+        && String(message.content ?? '').includes('Page Title: Example Domain')
+      ));
+      if (sawBrowserResult) {
+        return {
+          content: 'Example Domain',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      return {
+        content: '',
+        model: 'test-model',
+        finishReason: 'tool_calls',
+        toolCalls: [{
+          id: 'call-browser-read-1',
+          name: 'browser_read',
+          arguments: JSON.stringify({ url: 'https://example.com', maxChars: 3000 }),
+        }],
+      } satisfies ChatResponse;
+    });
+    const callTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      message: 'Read https://example.com via Playwright accessibility snapshot.',
+      output: {
+        url: 'https://example.com',
+        content: [
+          '### Page',
+          '- Page URL: https://example.com/',
+          '- Page Title: Example Domain',
+        ].join('\n'),
+      },
+    }));
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'browser_read',
+        description: 'Read the current browser page through a Playwright accessibility snapshot.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string' },
+            maxChars: { type: 'number' },
+          },
+        },
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-browser-read-answer',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Use the browser/read capability for https://example.com. Reply with only the page title.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'browser_task',
+            confidence: 'high',
+            operation: 'read',
+            summary: 'Read the page title.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'tool_orchestration',
+            preferredTier: 'external',
+            requiresRepoGrounding: false,
+            requiresToolSynthesis: true,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            plannedSteps: [
+              {
+                kind: 'read',
+                summary: 'Use the browser/read capability for https://example.com.',
+                expectedToolCategories: ['read'],
+                required: true,
+              },
+              {
+                kind: 'answer',
+                summary: 'Reply with only the page title.',
+                required: true,
+                dependsOn: ['step_1'],
+              },
+            ],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    expect(result.content).toBe('Example Domain');
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'browser_read',
+    }));
+    expect(result.metadata).toMatchObject({
+      workerExecution: {
+        lifecycle: 'completed',
+        completionReason: 'model_response',
+        successfulToolResultCount: 1,
+      },
+      delegatedResult: {
+        runStatus: 'completed',
+        finalUserAnswer: 'Example Domain',
+        stepReceipts: [
+          expect.objectContaining({ stepId: 'step_1', status: 'satisfied' }),
+          expect.objectContaining({ stepId: 'step_2', status: 'satisfied' }),
+        ],
+      },
+    });
+  });
+
   it('suppresses approval-looking text when no real approval metadata exists', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;

@@ -293,6 +293,54 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
+  it('defers browser read plus answer plans to the worker synthesis path', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({
+        route: 'browser_task',
+        operation: 'read',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Read the page with the browser.',
+            expectedToolCategories: ['browser_read'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Answer with the page title only.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual([]);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('keeps browser-only action plans on the direct browser candidate', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({
+        route: 'browser_task',
+        operation: 'read',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Read the page with the browser.',
+            expectedToolCategories: ['browser_read'],
+            required: true,
+          },
+        ],
+      }),
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual(['browser']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
   it('maps memory_task save requests to the memory_write candidate', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'memory_task', operation: 'save' }),

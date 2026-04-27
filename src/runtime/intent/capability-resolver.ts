@@ -145,6 +145,12 @@ function shouldDeferDirectCapabilityCandidates(decision: IntentGatewayDecision):
     });
   }
 
+  if (decision.route === 'browser_task') {
+    const nonAnswerSteps = requiredSteps.filter((step) => step.kind !== 'answer');
+    const answerSteps = requiredSteps.filter((step) => step.kind === 'answer');
+    return nonAnswerSteps.length > 0 && answerSteps.length > 0;
+  }
+
   return false;
 }
 

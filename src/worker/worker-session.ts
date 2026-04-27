@@ -828,6 +828,7 @@ const READ_ONLY_EVIDENCE_TOOLS = new Set([
   'find_tools', 'fs_list', 'fs_read', 'fs_search', 'code_symbol_search',
   'code_git_diff', 'memory_search', 'memory_recall', 'sys_info',
   'sys_resources', 'sys_processes', 'web_search', 'web_fetch',
+  'browser_read', 'browser_links', 'browser_extract', 'browser_state',
   'intel_summary', 'intel_findings', 'security_alert_search',
   'windows_defender_status', 'code_session_list', 'code_session_current',
   'code_session_attach', 'code_session_detach', 'code_session_create',
