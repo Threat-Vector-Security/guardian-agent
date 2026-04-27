@@ -150,6 +150,13 @@ describe('request-patterns', () => {
       expect(constraints.requiresSymbolNames).toBe(true);
     });
 
+    it('sets strict comma-separated file path constraints', () => {
+      const constraints = deriveAnswerConstraints('Inspect this repo and tell me which files implement delegated retry policy. Reply with only comma-separated relative file paths.');
+      expect(constraints.requiresImplementationFiles).toBe(true);
+      expect(constraints.commaSeparatedFilePaths).toBe(true);
+      expect(constraints.strictOutputOnly).toBe(true);
+    });
+
     it('returns empty constraints for simple requests', () => {
       const constraints = deriveAnswerConstraints('Just reply hello back');
       expect(constraints.requiresImplementationFiles).toBeUndefined();

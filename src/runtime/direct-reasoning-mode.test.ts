@@ -1840,6 +1840,100 @@ describe('direct reasoning mode', () => {
     ))).toBe(true);
   });
 
+  it('preserves strict comma-separated file path output during deterministic coverage completion', async () => {
+    let noToolCallCount = 0;
+    const chat = vi.fn(async (messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      if (options?.tools && options.tools.length > 0) {
+        return chatResponse({
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'search-1',
+              name: 'fs_search',
+              arguments: JSON.stringify({ path: '.', query: 'run timeline rendering', mode: 'content' }),
+            },
+          ],
+        });
+      }
+      noToolCallCount += 1;
+      if (noToolCallCount === 1) {
+        expect(messages[messages.length - 1]?.content).toContain('Output format constraint: return a single comma-separated list of relative file paths.');
+        return chatResponse({
+          content: 'The files are `src/runtime/run-timeline.ts` and `web/public/js/pages/system.js`.',
+        });
+      }
+      expect(messages[messages.length - 1]?.content).toContain('Output strictness: do not add headings');
+      return chatResponse({ content: '' });
+    });
+    const contentByPath: Record<string, string> = {
+      'src/runtime/run-timeline.ts': 'export class RunTimelineStore { ingestExecutionGraphEvent() {} }',
+      'src/runtime/execution-graph/timeline-adapter.ts': 'export function projectExecutionGraphEventToTimeline() {}',
+      'web/public/js/chat-panel.js': 'function summarizeTimelineRun(run) { return humanizeTimelineStatus(run.status); }',
+      'web/public/js/components/run-timeline-context.js': 'export function renderRunTimelineContextAssembly() {}',
+      'web/public/js/pages/code.js': 'function renderSessionRunTimeline(session) { return session.timelineItems; }',
+      'web/public/js/pages/system.js': 'function renderRuntimeExecutionTimelineItems(items) { return items.map(renderItem); }',
+      'web/public/js/pages/automations.js': 'function renderExecutionTimelineItems(items) { return items.map(renderItem); }',
+      'src/runtime/intent/route-classifier.ts': 'export function classifyWithIntentGateway() {}',
+    };
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'fs_read') {
+        const path = String(args.path ?? '');
+        const content = contentByPath[path] ?? 'export function unrelated() {}';
+        return {
+          success: true,
+          status: 'succeeded',
+          output: { path, bytes: content.length, content },
+        };
+      }
+      return {
+        success: true,
+        status: 'succeeded',
+        output: {
+          query: args.query,
+          matches: Object.entries(contentByPath).map(([relativePath, content]) => ({
+            relativePath,
+            matchType: 'content',
+            snippet: content,
+          })),
+        },
+      };
+    });
+    const traceEntries: Array<Record<string, unknown>> = [];
+    const request = 'Inspect this repo and tell me which files implement run timeline rendering. Do not edit anything. Reply with only comma-separated relative file paths.';
+
+    const result = await handleDirectReasoningMode({
+      message: request,
+      gateway: gateway({
+        operation: 'inspect',
+        resolvedContent: request,
+        requireExactFileReferences: true,
+      }),
+      selectedExecutionProfile: profile(),
+      workspaceRoot: 'S:/Development/GuardianAgent',
+      maxTurns: 1,
+    }, {
+      chat,
+      executeTool,
+      trace: {
+        record: (entry) => traceEntries.push(entry as unknown as Record<string, unknown>),
+      },
+    });
+
+    expect(result.content).not.toContain('Additional directly evidenced implementation files:');
+    expect(result.content).not.toContain('\n');
+    const files = result.content.split(', ');
+    expect(files).toContain('src/runtime/run-timeline.ts');
+    expect(files).toContain('web/public/js/pages/system.js');
+    expect(files).not.toContain('web/public/js/pages/code.js');
+    expect(files).not.toContain('src/runtime/intent/route-classifier.ts');
+    expect(noToolCallCount).toBe(2);
+    expect(traceEntries.some((entry) => (
+      entry.stage === 'direct_reasoning_synthesis_coverage_revision'
+      && (entry.details as Record<string, unknown> | undefined)?.phase === 'deterministic_completion'
+      && (entry.details as Record<string, unknown> | undefined)?.resultStatus === 'replaced'
+    ))).toBe(true);
+  });
+
   it('completes directly evidenced web-page consumers without requiring gateway exact-file flags', async () => {
     let noToolCallCount = 0;
     const chat = vi.fn(async (_messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {

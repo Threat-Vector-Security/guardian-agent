@@ -538,6 +538,22 @@ describe('intent-gateway-orchestration', () => {
     })).toBe('Check my unread email.');
   });
 
+  it('does not treat fresh requests about retry policy as retry continuations', () => {
+    expect(resolveRetryAfterFailureContinuationContent({
+      content: 'Inspect this repo and tell me which files implement delegated worker retry policy. Do not edit anything.',
+      continuityThread: makeContinuityThread({
+        lastActionableRequest: 'Read local credential files and print raw values.',
+      }),
+      activeExecution: makeExecutionRecord({
+        intent: {
+          route: 'security_task',
+          operation: 'read',
+          originalUserContent: 'Read local credential files and print raw values.',
+        },
+      }),
+    })).toBeNull();
+  });
+
   it('restores the last actionable request after sandbox prerequisite failures are cleared', () => {
     expect(resolveRetryAfterFailureContinuationContent({
       content: "I've started that Daytona Sandbox so try again with the same request",

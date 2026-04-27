@@ -30,7 +30,7 @@ import {
   type PendingActionSwitchCandidatePayload,
 } from './orchestration-state.js';
 
-const RETRY_AFTER_FAILURE_PATTERN = /\b(?:try|run|do)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)|the\s+same\s+thing)\s+again\b|\bretry\b/i;
+const RETRY_AFTER_FAILURE_PATTERN = /^(?:ok(?:ay)?[,\s]*)?(?:please\s+)?(?:retry|try\s+again)\b|\b(?:try|run|do)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)|the\s+same\s+thing)\s+again\b/i;
 const PREREQUISITE_RECOVERY_PATTERN = /\b(?:it|that|this|they)(?:['’]s| are| is)?\s+(?:connected|linked|enabled|fixed|working|ready|configured|authenticated|started|restarted|running)\s+now\b|\bi(?:['’]ve| have)\s+(?:connected|linked|enabled|fixed|configured|authenticated|started|restarted)\b/i;
 const EXECUTION_RESUME_PATTERN = /^(?:ok(?:ay)?[,\s]*)?(?:now\s+)?(?:please\s+)?(?:resume|continue|finish)\s+(?:the\s+)?(?:current|last|previous)\s+(?:request|task|one)\b.*$/i;
 
