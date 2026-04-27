@@ -107,7 +107,10 @@ import {
   tryRepairGenericIntentGatewayPlan,
 } from './runtime/intent/gateway-plan-repair.js';
 import { buildContinuityAwareHistory } from './runtime/continuity-history.js';
-import { shouldAttachCodeSessionForRequest } from './runtime/code-session-request-scope.js';
+import {
+  shouldAttachCodeSessionForRequest,
+  shouldUseCodeSessionConversationForRequest,
+} from './runtime/code-session-request-scope.js';
 import type { ToolApprovalDecisionResult, ToolExecutor } from './tools/executor.js';
 import type { PrincipalRole } from './tools/types.js';
 import {
@@ -918,8 +921,16 @@ interface DegradedDirectIntentResponseInput {
         ),
       );
     }
-    const conversationUserId = resolvedCodeSession?.session.conversationUserId ?? effectiveMessage.userId;
-    const conversationChannel = resolvedCodeSession?.session.conversationChannel
+    const useCodeSessionConversation = shouldUseCodeSessionConversationForRequest({
+      channel: effectiveMessage.channel,
+      surfaceId: pendingActionSurfaceId,
+      requestedCodeContext,
+      resolvedCodeSession,
+      metadata: effectiveMessage.metadata,
+    });
+    const scopedCodeSession = useCodeSessionConversation ? resolvedCodeSession : null;
+    const conversationUserId = scopedCodeSession?.session.conversationUserId ?? effectiveMessage.userId;
+    const conversationChannel = scopedCodeSession?.session.conversationChannel
       ?? resolveConversationHistoryChannel({
         channel: effectiveMessage.channel,
         surfaceId: effectiveMessage.surfaceId,
@@ -993,7 +1004,7 @@ interface DegradedDirectIntentResponseInput {
         record: continuityThread,
         surfaceHadContinuityBeforeTurn,
         hasPendingAction: !!pendingAction,
-        hasResolvedCodeSession: !!resolvedCodeSession?.session || !!effectiveCodeContext?.sessionId,
+        hasResolvedCodeSession: !!scopedCodeSession?.session || (useCodeSessionConversation && !!effectiveCodeContext?.sessionId),
         turnRelation: gateway?.decision.turnRelation,
       })
     );
@@ -1012,7 +1023,7 @@ interface DegradedDirectIntentResponseInput {
         currentConversationKey: conversationKey,
         currentUserId: pendingActionUserId,
         currentPrincipalId: effectiveMessage.principalId,
-        resolvedCodeSession: resolvedCodeSession?.session ?? null,
+        resolvedCodeSession: scopedCodeSession?.session ?? null,
         query: buildIntentGatewayHistoryQuery({
           content: stripLeadingContextPrefix(scopedMessage.content),
           continuity: continuitySummaryForHistory,
@@ -1047,10 +1058,10 @@ interface DegradedDirectIntentResponseInput {
     const groundedScopedMessage = scopedMessage;
     const referencedCodeSessions = this.resolveReferencedCodeSessionsForSurface(
       message,
-      resolvedCodeSession?.session,
+      scopedCodeSession?.session,
     );
     const referencedCodeSessionsSection = this.buildReferencedCodeSessionsSection(
-      resolvedCodeSession?.session,
+      scopedCodeSession?.session,
       referencedCodeSessions,
     );
     let preResolvedSkills: ResolvedSkill[] = [];
@@ -1571,7 +1582,7 @@ interface DegradedDirectIntentResponseInput {
       messageContent: routedScopedMessage.content,
       continuityThread: continuityThreadForContext,
       pendingAction,
-      resolvedCodeSession,
+      resolvedCodeSession: scopedCodeSession,
     });
     let contextAssemblyMeta: PromptAssemblyDiagnostics | undefined;
     let latestContextCompaction: ContextCompactionResult | undefined;
@@ -1598,11 +1609,11 @@ interface DegradedDirectIntentResponseInput {
       queryPreview?: string;
     };
     type PromptSkillMaterialBundle = SkillPromptMaterialResult | undefined;
-    const maintainedSummarySource = resolvedCodeSession?.session.workState.compactedSummary?.trim()
+    const maintainedSummarySource = scopedCodeSession?.session.workState.compactedSummary?.trim()
       ? 'code_session_compacted_summary'
-      : resolvedCodeSession?.session.workState.planSummary?.trim()
+      : scopedCodeSession?.session.workState.planSummary?.trim()
         ? 'code_session_plan_summary'
-        : resolvedCodeSession?.session.workState.focusSummary?.trim()
+        : scopedCodeSession?.session.workState.focusSummary?.trim()
           ? 'code_session_focus_summary'
           : undefined;
     const buildSectionFootprints = (
@@ -1680,12 +1691,12 @@ interface DegradedDirectIntentResponseInput {
     );
     let llmMessages: import('./llm/types.js').ChatMessage[];
     let skipDirectTools = false;
-    let enrichedSystemPrompt = this.buildScopedSystemPrompt(resolvedCodeSession, message);
+    let enrichedSystemPrompt = this.buildScopedSystemPrompt(scopedCodeSession, message);
     let activeSkills: ResolvedSkill[] = [];
     let skillPromptMaterial: SkillPromptMaterialResult | undefined;
 
     activeSkills = preResolvedSkills;
-    const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
+    const promptKnowledge = this.loadPromptKnowledgeBases(scopedCodeSession, knowledgeBaseQuery);
     if (activeSkills.length > 0) {
       this.trackResolvedSkills(message, 'chat', activeSkills, 'prompt_injected');
       skillPromptMaterial = buildSkillPromptMaterial(
@@ -1694,7 +1705,7 @@ interface DegradedDirectIntentResponseInput {
           skills: activeSkills,
           requestText: routedScopedMessage.content,
           ...(earlyGateway?.decision.route ? { route: earlyGateway.decision.route } : {}),
-          artifactReferences: this.resolveSkillArtifactReferences(activeSkills, resolvedCodeSession),
+          artifactReferences: this.resolveSkillArtifactReferences(activeSkills, scopedCodeSession),
         },
         createSkillPromptMaterialCache(),
       );
@@ -1736,7 +1747,7 @@ interface DegradedDirectIntentResponseInput {
       toolContext,
       runtimeNotices,
       baseSystemPrompt,
-      codeSessionId: resolvedCodeSession?.session.id,
+      codeSessionId: scopedCodeSession?.session.id,
       additionalSections: promptAdditionalSections,
       executionProfile: selectedExecutionProfile,
     });
@@ -1889,7 +1900,7 @@ interface DegradedDirectIntentResponseInput {
         if (!ctx.llm || !this.tools) {
           throw new Error('Direct reasoning requires an LLM provider and tool executor.');
         }
-        const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
+        const promptKnowledge = this.loadPromptKnowledgeBases(scopedCodeSession, knowledgeBaseQuery);
         const directToolContext = this.tools.getToolContext({
           userId: conversationUserId,
           principalId: message.principalId ?? conversationUserId,
@@ -1981,8 +1992,8 @@ interface DegradedDirectIntentResponseInput {
 
     if (workerManager && delegatedOrchestration && !handleDirectAssistantInline) {
       try {
-        const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
-        const workerSystemPrompt = this.buildScopedSystemPrompt(resolvedCodeSession, message);
+        const promptKnowledge = this.loadPromptKnowledgeBases(scopedCodeSession, knowledgeBaseQuery);
+        const workerSystemPrompt = this.buildScopedSystemPrompt(scopedCodeSession, message);
         const workerSkillPromptMaterial = skillPromptMaterial
           ?? (
             preResolvedSkills.length > 0 && this.skillRegistry
@@ -1992,7 +2003,7 @@ interface DegradedDirectIntentResponseInput {
                   skills: preResolvedSkills,
                   requestText: routedScopedMessage.content,
                   ...(earlyGateway?.decision.route ? { route: earlyGateway.decision.route } : {}),
-                  artifactReferences: this.resolveSkillArtifactReferences(preResolvedSkills, resolvedCodeSession),
+                  artifactReferences: this.resolveSkillArtifactReferences(preResolvedSkills, scopedCodeSession),
                 },
                 createSkillPromptMaterialCache(),
               )
@@ -2039,7 +2050,7 @@ interface DegradedDirectIntentResponseInput {
           toolContext: workerToolContext,
           runtimeNotices: workerRuntimeNotices,
           baseSystemPrompt: workerSystemPrompt,
-          codeSessionId: resolvedCodeSession?.session.id,
+          codeSessionId: scopedCodeSession?.session.id,
           additionalSections: workerAdditionalSections,
           compaction: latestContextCompaction,
           executionProfile: workerExecutionProfile,

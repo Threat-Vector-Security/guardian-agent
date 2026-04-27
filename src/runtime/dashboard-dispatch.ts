@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { GuardianAgentConfig } from '../config/types.js';
 import type { AnalyticsService } from './analytics.js';
-import { shouldAttachCodeSessionForRequest } from './code-session-request-scope.js';
+import {
+  IMPLICIT_SHARED_CODE_CONTEXT_SOURCE,
+  isResolvedCodeSessionSharedAttachment,
+  shouldAttachCodeSessionForRequest,
+  shouldUseCodeSessionConversationForRequest,
+} from './code-session-request-scope.js';
 import type { CodeSessionStore, ResolvedCodeSessionContext } from './code-sessions.js';
 import {
   readSelectedExecutionProfileMetadata,
@@ -167,8 +172,22 @@ export function createDashboardMessageDispatcher(args: {
       dispatchCodeSession = null;
     }
 
-    const dispatchUserId = dispatchCodeSession?.session.conversationUserId ?? canonicalUserId;
-    const dispatchChannel = dispatchCodeSession?.session.conversationChannel ?? channel;
+    const useCodeSessionConversation = shouldUseCodeSessionConversationForRequest({
+      channel,
+      surfaceId,
+      requestedCodeContext,
+      resolvedCodeSession: dispatchCodeSession,
+      metadata: msg.metadata,
+    });
+    const implicitSharedCodeContext = !!dispatchCodeSession
+      && !useCodeSessionConversation
+      && isResolvedCodeSessionSharedAttachment(dispatchCodeSession, channel, surfaceId);
+    const dispatchUserId = useCodeSessionConversation
+      ? dispatchCodeSession?.session.conversationUserId ?? canonicalUserId
+      : canonicalUserId;
+    const dispatchChannel = useCodeSessionConversation
+      ? dispatchCodeSession?.session.conversationChannel ?? channel
+      : channel;
     const sanitizedIncomingMetadata = isRecord(msg.metadata)
       ? Object.fromEntries(
           Object.entries(msg.metadata).filter(([key]) => key !== PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY),
@@ -184,6 +203,7 @@ export function createDashboardMessageDispatcher(args: {
             ...(existingCodeContext ?? {}),
             sessionId: dispatchCodeSession.session.id,
             workspaceRoot: dispatchCodeSession.session.resolvedRoot,
+            ...(implicitSharedCodeContext ? { source: IMPLICIT_SHARED_CODE_CONTEXT_SOURCE } : {}),
           },
         }
       : sanitizedIncomingMetadata;

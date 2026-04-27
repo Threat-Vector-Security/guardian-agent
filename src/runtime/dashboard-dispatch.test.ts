@@ -4,6 +4,7 @@ import {
   attachSelectedExecutionProfileMetadata,
   type SelectedExecutionProfile,
 } from './execution-profiles.js';
+import { IMPLICIT_SHARED_CODE_CONTEXT_SOURCE } from './code-session-request-scope.js';
 import { readPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from './intent-gateway.js';
 import { createDashboardMessageDispatcher } from './dashboard-dispatch.js';
 import type { MessageRouter, RouteDecision } from './message-router.js';
@@ -12,7 +13,9 @@ function createConfig(): GuardianAgentConfig {
   return structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
 }
 
-function createGatewayRecord(): IntentGatewayRecord {
+function createGatewayRecord(
+  overrides: Partial<IntentGatewayRecord['decision']> = {},
+): IntentGatewayRecord {
   return {
     mode: 'primary',
     available: true,
@@ -27,6 +30,7 @@ function createGatewayRecord(): IntentGatewayRecord {
       resolution: 'ready',
       missingFields: [],
       entities: {},
+      ...overrides,
     },
   };
 }
@@ -276,6 +280,86 @@ describe('createDashboardMessageDispatcher', () => {
       existing: 'value',
     });
     expect(dispatchedMessage.metadata?.codeContext).toBeUndefined();
+  });
+
+  it('keeps repo-grounded shared code context off the conversation dispatch scope', async () => {
+    const runtime = {
+      dispatchMessage: vi.fn(async () => ({
+        content: 'Repo answer.',
+        metadata: {
+          responseSource: {
+            locality: 'external',
+            providerName: 'ollama_cloud',
+            model: 'test-model',
+            durationMs: 14,
+          },
+        },
+      })),
+    };
+    const options = createOptions({
+      runtime,
+      codeSessionStore: {
+        resolveForRequest: vi.fn(() => ({
+          session: {
+            id: 'code-session-1',
+            resolvedRoot: 'S:\\Development\\GuardianAgent',
+            conversationUserId: 'code-session:1',
+            conversationChannel: 'code-session',
+          },
+          attachment: {
+            id: 'attachment-1',
+            codeSessionId: 'code-session-1',
+            userId: 'canonical:web-user',
+            channel: 'web',
+            surfaceId: 'code-panel',
+            mode: 'controller',
+            attachedAt: 1,
+            lastSeenAt: 1,
+            active: true,
+          },
+        })),
+      },
+    });
+    const dispatchDashboardMessage = createDashboardMessageDispatcher(options);
+
+    await dispatchDashboardMessage({
+      agentId: 'external-agent',
+      msg: {
+        content: 'Inspect this repo and tell me which files implement delegated worker retry policy.',
+        userId: 'web-user',
+        principalId: 'owner',
+        channel: 'web',
+        surfaceId: 'fresh-api-surface',
+        metadata: { existing: 'value' },
+      },
+      precomputedIntentGateway: createGatewayRecord({
+        route: 'coding_task',
+        operation: 'inspect',
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'chat_synthesis',
+      }),
+    });
+
+    expect(options.orchestrator.dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'external-agent',
+      userId: 'canonical:web-user',
+      channel: 'web',
+    }), expect.any(Function));
+    const dispatchedMessage = runtime.dispatchMessage.mock.calls[0]?.[1];
+    expect(dispatchedMessage.userId).toBe('canonical:web-user');
+    expect(dispatchedMessage.channel).toBe('web');
+    expect(dispatchedMessage.metadata).toMatchObject({
+      existing: 'value',
+      codeContext: {
+        sessionId: 'code-session-1',
+        workspaceRoot: 'S:\\Development\\GuardianAgent',
+        source: IMPLICIT_SHARED_CODE_CONTEXT_SOURCE,
+      },
+    });
   });
 
   it('falls back to the alternate tier when the primary dispatch fails', async () => {

@@ -31,6 +31,20 @@ interface ShouldAttachCodeSessionForRequestInput {
   gatewayDecision?: Pick<IntentGatewayDecision, 'route' | 'requiresRepoGrounding'> | null;
 }
 
+interface CodeContextMetadataLike {
+  codeContext?: unknown;
+}
+
+interface ShouldUseCodeSessionConversationInput {
+  channel?: string;
+  surfaceId?: string;
+  requestedCodeContext?: RequestedCodeContextLike;
+  resolvedCodeSession?: ResolvedCodeSessionLike | null;
+  metadata?: unknown;
+}
+
+export const IMPLICIT_SHARED_CODE_CONTEXT_SOURCE = 'implicit_shared_attachment';
+
 function usesWindowsPath(value: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(value) || value.includes('\\');
 }
@@ -46,7 +60,11 @@ function isPathInsideRoot(candidatePath: string, rootPath: string): boolean {
     || (!relativePath.startsWith('..') && !pathApi.isAbsolute(relativePath));
 }
 
-function isSharedAttachment(
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function isResolvedCodeSessionSharedAttachment(
   resolvedCodeSession: ResolvedCodeSessionLike | null | undefined,
   channel: string | undefined,
   surfaceId: string | undefined,
@@ -55,6 +73,26 @@ function isSharedAttachment(
   if (!attachment) return false;
   if (!channel || !surfaceId) return false;
   return attachment.channel !== channel || attachment.surfaceId !== surfaceId;
+}
+
+export function isImplicitSharedCodeContextMetadata(metadata: unknown): boolean {
+  if (!isRecord(metadata)) return false;
+  const codeContext = (metadata as CodeContextMetadataLike).codeContext;
+  if (!isRecord(codeContext)) return false;
+  return codeContext.source === IMPLICIT_SHARED_CODE_CONTEXT_SOURCE;
+}
+
+export function shouldUseCodeSessionConversationForRequest(
+  input: ShouldUseCodeSessionConversationInput,
+): boolean {
+  if (!input.resolvedCodeSession) return false;
+  if (isImplicitSharedCodeContextMetadata(input.metadata)) {
+    return false;
+  }
+  if (input.requestedCodeContext?.sessionId || input.requestedCodeContext?.workspaceRoot) {
+    return true;
+  }
+  return !isResolvedCodeSessionSharedAttachment(input.resolvedCodeSession, input.channel, input.surfaceId);
 }
 
 function hasExplicitPathOutsideWorkspace(
@@ -88,7 +126,7 @@ export function shouldAttachCodeSessionForRequest(
   }
 
   const workspaceRoot = input.resolvedCodeSession.session.resolvedRoot?.trim();
-  const sharedAttachment = isSharedAttachment(input.resolvedCodeSession, input.channel, input.surfaceId);
+  const sharedAttachment = isResolvedCodeSessionSharedAttachment(input.resolvedCodeSession, input.channel, input.surfaceId);
   if (hasExplicitPathOutsideWorkspace(input.content, workspaceRoot)) {
     return false;
   }
