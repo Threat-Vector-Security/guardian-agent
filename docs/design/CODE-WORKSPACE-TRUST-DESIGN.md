@@ -59,6 +59,12 @@ It reviews a limited set of text-like repo files and looks for:
 - encoded execution patterns such as PowerShell `-EncodedCommand`
 - inline interpreter execution such as `node -e` and `python -c`
 - suspicious network-fetch commands inside executable repo files such as scripts, workflows, Dockerfiles, and devcontainer files
+- public frontend environment variables that appear to contain secrets, such as `NEXT_PUBLIC_*SECRET*`, `VITE_*TOKEN*`, or `REACT_APP_*API_KEY*`
+- privileged service-role credential references in client-exposed or public environment contexts
+- hardcoded fallback values for secret-like environment lookups
+- permissive Supabase/Postgres RLS policies such as `using (true)` or auth-only policies that do not bind rows to owners
+- public storage bucket configuration
+- webhook-like handlers that consume request bodies without an obvious signature verification check
 
 Current scoring:
 
@@ -127,6 +133,17 @@ Current behavior:
 
 This is a prompt-hardening layer for repo content. It is separate from remote-content tainting in the contextual-security uplift.
 
+## Active Monitoring Integration
+
+Workspace trust findings are also consumed by Assistant Security monitoring.
+
+Current behavior:
+
+- workspace trust findings remain persisted on the code session
+- high-risk workspace trust findings contribute to the code-session target risk level
+- SaaS anti-pattern findings are promoted as Assistant Security incident candidates when no manual trust review is active
+- manual trust review changes the effective workspace trust state for execution gating, but it does not erase raw findings or make repo-derived instructions trusted
+
 ## Execution And Approval Behavior
 
 Workspace trust now narrows which code-session tools are auto-approved.
@@ -173,7 +190,6 @@ The shipped version does **not** yet provide:
 
 - Git-host attestation or publisher trust
 - package-signature or SBOM verification
-- automatic Security-page alerts for repo trust findings
 - agentic repo trust review or dynamic detonation/sandbox execution
 - WSL-to-Windows Defender bridging when Guardian itself is not running on Windows
 - autonomous remediation or autonomous trust promotion

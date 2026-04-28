@@ -46,7 +46,7 @@ The as-built spec is the canonical current-state document for the defensive suit
 | Indirect prompt injection via remote or tool output | `OutputGuardian` trust classification, quarantined reinjection suppression, taint reminders, taint-aware tool gating | Enabled by default | low-trust summaries can still be misleading evidence even when they are no longer active instructions |
 | Credential leakage through model output | `GuardedLLMProvider`, recursive secret scanning, redaction/blocking, audit trail | Enabled by default | credentials are still resolved in-process, not through a separate secret broker |
 | Secret leakage through inter-agent events | event-payload secret scanning, source validation, audit logging | Enabled by default | events are mediated only on managed framework paths |
-| Unauthorized managed file access | `allowedPaths`, denied-path patterns, path normalization, symlink resolution, code-session workspace scoping | Restricted by default | manual PTY shells remain a separate operator surface |
+| Unauthorized managed file access | `allowedPaths`, denied-path patterns, path normalization, symlink resolution, code-session workspace scoping, session-required web workbench file/diff APIs | Restricted by default | valid web access still allows operations inside the resolved active code-session root |
 | Capability escalation by an agent | frozen per-agent capabilities, runtime-owned orchestration role contracts for known capability narrowing, Guardian action checks, no raw `ctx.fs` / `ctx.http` / `ctx.exec` | Enabled by default | supervisor/runtime code is still the trusted computing base |
 | Tool-policy widening from chat or remote channels | `update_tool_policy` approval flow plus `assistant.tools.agentPolicyUpdates.*` gates | Disabled by default for paths, commands, domains, and per-tool policy changes | if operators enable these gates, each change still needs explicit approval |
 | Shell command injection and shell-expression abuse | tokenizer, shell chain splitting, redirect validation, execution-class checks, direct exec for simple binaries | Restricted by default | descendant executable identity is not fully enforced after the allowed top-level launch |
@@ -56,15 +56,15 @@ The as-built spec is the canonical current-state document for the defensive suit
 | Data exfiltration from degraded sandbox hosts | strict mode, `allowedDomains`, network-off worker, degraded-backend network/browser/MCP defaults | Network and browser-style degraded fallback is disabled by default | permissive degraded hosts still have more host exposure than strong sandbox backends |
 | Browser-session abuse | domain allowlists, browser containment, alert-driven containment, degraded-backend browser block | Disabled by default on degraded backends | Guardian does not control the operator's normal browser outside managed browser tools |
 | Over-broad third-party MCP servers | MCP startup admission (`startupApproved`), MCP namespacing, Guardian/tool policy checks, conservative third-party risk defaults, risk-floor-only `trustLevel`, call limits, degraded-backend MCP block | Third-party MCP is restricted by default | MCP server code still runs as a local process when operators explicitly trust and enable it |
-| Manual PTY abuse in Code | session ownership checks plus degraded-backend terminal block | Disabled by default on degraded backends | PTY remains outside the assistant's repo-bound command validator if enabled |
+| Manual PTY abuse in Code | code-session-required terminal creation, session-root cwd resolution, hardened workspace environment, session ownership checks, degraded-backend terminal block | Disabled by default on degraded backends | PTY keystrokes remain an operator-controlled shell surface inside the selected workspace |
 | Dangerous non-read-only tool actions | approval workflows, per-tool policies, Guardian Agent inline LLM evaluation, host/gateway containment hooks | `approve_each` by default for the main assistant | if operators switch to looser policy modes, more risk moves to runtime boundaries and approvals |
 | Read-only direct reasoning drift | direct reasoning runs inside the brokered worker, exposes only `fs_search`, `fs_read`, and `fs_list`, preserves brokered tool context, and fails closed on budget exhaustion | Enabled for eligible non-local repo-inspection turns | semantic correctness still depends on the model reading and citing the right evidence |
 | Memory poisoning / durable backdoors | trust-aware memory, quarantined memory status, provenance, low-trust writes quarantined by default | Enabled by default | reviewed but incorrect content can still be promoted by an operator |
 | Broken-tool overspend / runaway retries | per-chain tool budgets, repeated-failure suppression, schedule caps, auto-pause | Enabled by default | expensive but varied failure patterns can still consume approved budget |
 | Overlapping scheduled side effects | per-task active-run locks, approval expiry, principal binding, scope hash drift checks | Enabled by default | different schedules can still target overlapping real-world systems if operators configure them that way |
 | Script drift during automation creation | native automation compiler, intercepted automation-intent path, script/code-file authoring bans for native Guardian automations | Enabled by default | generic chat outside automation-authoring intent still requires normal tool governance |
-| Suspicious repo/workspace content in coding sessions | bounded repo trust review, native AV enrichment, approval gating for execution/persistence, trust invalidation on drift | Enabled by default | a `trusted` result is not a proof the repo is safe |
-| Malicious or hijacked public package installs | managed `package_install` staging path, bounded archive review, native AV enrichment, caution acceptance, unified install alerts | Available through the dedicated tool path | coverage is currently limited to Guardian-managed installs and v1 stages the requested top-level artifacts rather than the full resolved dependency closure |
+| Suspicious repo/workspace content in coding sessions | bounded repo trust review, SaaS anti-pattern checks, native AV enrichment, approval gating for execution/persistence, trust invalidation on drift | Enabled by default | a `trusted` result is not a proof the repo is safe |
+| Malicious or hijacked public package installs | managed `package_install` staging path, allowed-path cwd resolution, bounded archive review, native AV enrichment, caution acceptance, unified install alerts | Available through the dedicated tool path | coverage is currently limited to Guardian-managed installs and v1 stages the requested top-level artifacts rather than the full resolved dependency closure |
 | Host drift or suspicious local activity | host monitor, unified alerts, containment recommendations, risk-action blocking under critical or stacked alerts | Available but operator-configurable | this is practical host monitoring, not full EDR-grade telemetry |
 | Gateway firewall drift | gateway monitor, unified alerts, containment recommendations, risky-network-action blocking | Available but operator-configurable | relies on operator-supplied collectors and normalized gateway state |
 | Browser-to-localhost attacks against the web UI | bearer auth, HttpOnly `SameSite=Strict` cookies, CORS validation, privileged tickets, auth-failure rate limiting, SSE auth | Enabled by default | a valid bearer token still grants web access within the authorization model |
@@ -109,7 +109,8 @@ GuardianAgent includes a host-level package supply-chain control for public pack
 ### Scope
 
 - The primary surface is the `package_install` tool
-- The feature is target-agnostic rather than workspace-scoped: it can install into the working directory, an explicit directory such as `--prefix` or `--target`, user-level locations, or global targets when the command is otherwise allowed
+- The package review is separate from workspace trust, but the install working directory must resolve inside the active workspace or configured `allowedPaths`
+- Package-manager target flags such as `--prefix`, `--target`, `--user`, or `-g` remain explicit command-level target choices when supported by the managed parser
 - The current v1 path supports explicit public-registry installs for `npm`, `pnpm`, `yarn`, `bun`, and `pip install`
 - Current coverage applies to Guardian-managed installs only; unmanaged terminal installs are not yet intercepted by the same trust path
 
@@ -130,6 +131,18 @@ GuardianAgent includes a host-level package supply-chain control for public pack
 - A `trusted` result means the current bounded checks did not find deterministic indicators; it is not a proof the package is safe
 - `blocked` results are not overridable through `allowCaution`
 - On degraded sandbox backends, install-like package-manager commands remain disabled unless the operator explicitly enables degraded package-manager fallback
+
+## Coding Workspace Web Boundary
+
+The web Coding Workspace is a client of backend-owned `CodeSession` records. It does not authorize workspace access from browser-supplied filesystem paths or browser-supplied owner identifiers.
+
+Current boundary:
+
+- Web file and git workbench routes require a `sessionId`; requests without a resolvable backend code session fail closed.
+- File read/write/list and git diff paths are resolved through the selected session root and rejected if they escape that root.
+- Web code-session routes derive the web owner/channel on the server side and do not trust client-supplied `userId` or `channel` values for session ownership.
+- Manual Code terminals require a backend code session; terminal cwd is resolved under that session root.
+- Manual Code terminals start with a minimal workspace-scoped environment and filter secret-like environment names instead of inheriting the full Guardian process environment.
 
 ### Operator Surfaces
 
