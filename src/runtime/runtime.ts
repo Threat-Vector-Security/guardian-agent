@@ -48,6 +48,32 @@ const TRUSTED_SERVICE_EVENT_SOURCES = new Set([
   'notification-service',
 ]);
 
+function abortControllerFromSignal(controller: AbortController, signal: AbortSignal): void {
+  if (controller.signal.aborted) return;
+  const reason = (signal as { reason?: unknown }).reason;
+  if (reason === undefined) {
+    controller.abort();
+    return;
+  }
+  controller.abort(reason);
+}
+
+function mergeAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (activeSignals.length === 0) return undefined;
+  if (activeSignals.length === 1) return activeSignals[0];
+
+  const controller = new AbortController();
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      abortControllerFromSignal(controller, signal);
+      break;
+    }
+    signal.addEventListener('abort', () => abortControllerFromSignal(controller, signal), { once: true });
+  }
+  return controller.signal;
+}
+
 export class Runtime {
   readonly registry: AgentRegistry;
   readonly lifecycle: LifecycleManager;
@@ -294,9 +320,17 @@ export class Runtime {
       }
     }
 
-    const ctx = this.createAgentContext(agentId, { lineage: currentLineage, message });
     const limits = instance.definition.resourceLimits;
     const budgetMs = limits.maxInvocationBudgetMs;
+    const budgetAbortController = budgetMs > 0 ? new AbortController() : undefined;
+    const invocationAbortSignal = mergeAbortSignals([
+      message.abortSignal,
+      budgetAbortController?.signal,
+    ]);
+    const invocationMessage = invocationAbortSignal === message.abortSignal
+      ? message
+      : { ...message, abortSignal: invocationAbortSignal };
+    const ctx = this.createAgentContext(agentId, { lineage: currentLineage, message: invocationMessage });
 
     // Check resource limits before invocation
     this.checkTokenRateLimit(agentId, limits.maxTokensPerMinute);
@@ -311,10 +345,17 @@ export class Runtime {
     try {
       const response = await this.withBudgetTimeout(
         () => {
-          return instance.agent.onMessage!(message, ctx, this.workerManager);
+          return instance.agent.onMessage!(invocationMessage, ctx, this.workerManager);
         },
         agentId,
         budgetMs,
+        {
+          onTimeout: (error) => {
+            if (budgetAbortController && !budgetAbortController.signal.aborted) {
+              budgetAbortController.abort(error);
+            }
+          },
+        },
       );
       this.watchdog.clearErrors(agentId);
       this.watchdog.recordActivity(agentId);
@@ -1012,29 +1053,44 @@ export class Runtime {
     fn: () => Promise<T>,
     agentId: string,
     budgetMs: number,
+    options?: {
+      onTimeout?: (error: Error) => void;
+    },
   ): Promise<T> {
     if (budgetMs <= 0) return fn();
 
     return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const settleResolve = (value: T) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const settleReject = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      };
       const timer = setTimeout(() => {
+        if (settled) return;
+        const error = new Error(`Agent '${agentId}' exceeded budget timeout (${budgetMs}ms)`);
+        options?.onTimeout?.(error);
         this.auditLog.record({
           type: 'agent_error',
           severity: 'warn',
           agentId,
           details: { error: 'budget_timeout', budgetMs },
         });
-        reject(new Error(`Agent '${agentId}' exceeded budget timeout (${budgetMs}ms)`));
+        settleReject(error);
       }, budgetMs);
 
-      fn()
-        .then((result) => {
-          clearTimeout(timer);
-          resolve(result);
-        })
-        .catch((err) => {
-          clearTimeout(timer);
-          reject(err);
-        });
+      try {
+        fn().then(settleResolve).catch(settleReject);
+      } catch (err) {
+        settleReject(err);
+      }
     });
   }
 

@@ -195,6 +195,17 @@ const WORKER_WORKSPACE_CLEANUP_RETRY_DELAY_MS = 100;
 const workerManagerPath = fileURLToPath(import.meta.url);
 const workerManagerDir = dirname(workerManagerPath);
 
+function describeAbortReason(signal: AbortSignal): string {
+  const reason = (signal as { reason?: unknown }).reason;
+  if (reason instanceof Error && reason.message.trim()) return reason.message;
+  if (typeof reason === 'string' && reason.trim()) return reason;
+  return 'request aborted';
+}
+
+function createWorkerDispatchCanceledError(signal: AbortSignal): Error {
+  return new Error(`Worker message dispatch canceled: ${describeAbortReason(signal)}`);
+}
+
 function buildWorkerSessionKey(sessionId: string, agentId: string): string {
   return `${sessionId}::${agentId}`;
 }
@@ -3727,36 +3738,81 @@ export class WorkerManager {
     if (!this.workers.has(worker.id) || worker.status !== 'ready') {
       return Promise.reject(new Error('Worker is not available for dispatch'));
     }
+    const abortSignal = params.message.abortSignal;
+    if (abortSignal?.aborted) {
+      return Promise.reject(createWorkerDispatchCanceledError(abortSignal));
+    }
     worker.lastActivityMs = Date.now();
 
     return new Promise((resolve, reject) => {
-      worker.pendingMessageResolve = resolve;
-      worker.pendingMessageReject = reject;
-
-      const timeout = setTimeout(() => {
-        if (worker.pendingMessageReject) {
-          worker.pendingMessageReject(new Error('Worker message dispatch timed out'));
-          worker.pendingMessageResolve = undefined;
-          worker.pendingMessageReject = undefined;
-        }
-      }, 1800_000);
-
-      const wrappedResolve = (value: { content: string; metadata?: Record<string, unknown> }) => {
+      let settled = false;
+      const cleanupDispatch = () => {
         clearTimeout(timeout);
+        abortSignal?.removeEventListener('abort', abortDispatch);
+        worker.pendingMessageResolve = undefined;
+        worker.pendingMessageReject = undefined;
+      };
+      const wrappedResolve = (value: { content: string; metadata?: Record<string, unknown> }) => {
+        if (settled) return;
+        settled = true;
+        cleanupDispatch();
         resolve(value);
       };
       const wrappedReject = (error: Error) => {
-        clearTimeout(timeout);
+        if (settled) return;
+        settled = true;
+        cleanupDispatch();
         reject(error);
       };
+      const abortDispatch = () => {
+        const error = createWorkerDispatchCanceledError(abortSignal!);
+        wrappedReject(error);
+        this.retireAbortedWorkerDispatch(worker, error);
+      };
+      const timeout = setTimeout(() => {
+        wrappedReject(new Error('Worker message dispatch timed out'));
+      }, 1800_000);
 
       worker.pendingMessageResolve = wrappedResolve;
       worker.pendingMessageReject = wrappedReject;
+      abortSignal?.addEventListener('abort', abortDispatch, { once: true });
 
-      worker.brokerServer.sendNotification('message.handle', {
-        ...params,
-      });
+      const { abortSignal: _abortSignal, ...messageForWorker } = params.message;
+      try {
+        worker.brokerServer.sendNotification('message.handle', {
+          ...params,
+          message: messageForWorker,
+        });
+      } catch (error) {
+        wrappedReject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
+  }
+
+  private retireAbortedWorkerDispatch(worker: WorkerProcess, error: Error): void {
+    if (!this.workers.has(worker.id) || worker.status === 'shutting_down') return;
+    worker.status = 'shutting_down';
+    log.warn({ workerId: worker.id, reason: error.message }, 'Worker dispatch aborted; shutting down worker');
+    try {
+      worker.brokerServer.sendNotification('worker.shutdown', {
+        reason: 'dispatch_aborted',
+        gracePeriodMs: this.config.workerShutdownGracePeriodMs,
+      });
+    } catch (sendError) {
+      log.warn(
+        {
+          workerId: worker.id,
+          error: sendError instanceof Error ? sendError.message : String(sendError),
+        },
+        'Failed to notify worker shutdown after aborted dispatch',
+      );
+    }
+    setTimeout(() => {
+      const current = this.workers.get(worker.id);
+      if (!current) return;
+      this.safeKillWorker(current);
+      this.cleanupWorker(current);
+    }, this.config.workerShutdownGracePeriodMs);
   }
 
   private reapIdleWorkers(): void {

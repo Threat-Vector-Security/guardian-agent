@@ -757,6 +757,72 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
+  it('cancels an in-flight brokered worker dispatch when the message aborts', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    let releaseHandlerStart: (() => void) | undefined;
+    const handlerStarted = new Promise<void>((resolve) => {
+      releaseHandlerStart = resolve;
+    });
+    let workerReceivedAbortSignal = false;
+    workerMessageHandler = (params) => {
+      const message = params.message as Record<string, unknown> | undefined;
+      workerReceivedAbortSignal = Boolean(message?.abortSignal);
+      releaseHandlerStart?.();
+      return new Promise<{ content: string }>(() => undefined);
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    const controller = new AbortController();
+    const dispatch = manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-abort',
+        userId: 'tester',
+        channel: 'web',
+        content: 'slow delegated task',
+        abortSignal: controller.signal,
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+    });
+
+    await handlerStarted;
+    controller.abort(new Error('budget elapsed'));
+
+    await expect(dispatch).rejects.toThrow('Worker message dispatch canceled: budget elapsed');
+    expect(workerReceivedAbortSignal).toBe(false);
+    expect(workerNotifications.map((entry) => entry.method)).toContain('worker.shutdown');
+
+    manager.shutdown();
+  });
+
   it('does not use graph-controlled mutation for general assistant read/write plans', async () => {
     const { shouldUseGraphControlledExecution } = await import('../runtime/execution-graph/graph-controller.js');
     const decision = {
