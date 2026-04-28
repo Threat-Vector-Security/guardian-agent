@@ -1310,6 +1310,16 @@ Checkpoint after the delegated terminal handoff ownership cleanup:
 - Live API startup/regression smoke passed with request id `handoff-extract-42804`: `/api/message` returned exactly `HANDOFF-EXTRACT-42804`, the routing trace classified `general_assistant`, selected `ollama-cloud-direct` / `minimax-m2.1`, completed the run, and reported no provider fallback.
 - Delegated terminal handoff behavior was proven with focused execution-graph/WorkerManager tests in this slice. The live API spot check was a startup/direct-regression check, not an artificial blocked delegated run.
 
+Checkpoint after the delegated verification/reconciliation ownership cleanup:
+
+- `src/runtime/execution-graph/delegated-worker-verification.ts` now owns delegated result-envelope verification, job-snapshot evidence reconciliation, synthetic envelope creation for partial/budget-exhausted worker progress, missing-envelope contradiction decisions, and in-flight delegated-job status normalization.
+- `WorkerManager` still owns brokered worker dispatch, delegated job polling through `ToolExecutor`, extended evidence-drain timing, progress publication, and graph persistence callbacks. It no longer carries the pure verification/reconciliation helper block or the local delegated job snapshot type.
+- Focused coverage passed: `npx vitest run src/runtime/execution-graph/delegated-worker-verification.test.ts src/runtime/execution-graph/delegated-worker-retry.test.ts src/supervisor/worker-manager.test.ts` reported 60 passing tests.
+- Full local gates passed after the extraction: `npm run check`, `npm run build`, and full `npm test` (314 files, 3396 tests).
+- The actual app was restarted with `scripts/start-dev-windows.ps1 -StartOnly`; `GET http://localhost:3000/api/status` returned `status=running`, and `GET http://localhost:3000/api/providers` exposed the configured managed-cloud Ollama Cloud/OpenRouter/NVIDIA profiles.
+- Live API startup/regression smoke passed with request id `verify-extract-42804`: `/api/message` returned exactly `VERIFY-EXTRACT-42804`, the routing trace classified `general_assistant`, selected `ollama-cloud-direct` / `minimax-m2.1`, completed the run, and reported no provider fallback.
+- Delegated verification/reconciliation behavior was proven with focused execution-graph/WorkerManager tests in this slice. The live API spot check was a startup/direct-regression check, not an artificial partial delegated run.
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.
