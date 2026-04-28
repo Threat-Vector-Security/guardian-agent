@@ -2,7 +2,7 @@ import { stat, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { appendSecureFile, mkdirSecure } from '../util/secure-fs.js';
 import { createLogger } from '../util/logging.js';
-import { isSensitiveKeyName, normalizeSensitiveKeyName } from '../util/crypto-guardrails.js';
+import { isSensitiveKeyName, normalizeSensitiveKeyName, redactSensitiveText } from '../util/crypto-guardrails.js';
 import { intentRoutingTraceEntryMatchesContextFilters } from './trace-context-filters.js';
 
 import { getGuardianBaseDir } from '../util/env.js';
@@ -171,21 +171,7 @@ function previewText(value: string | undefined, previewChars: number): string | 
 }
 
 function redactSensitiveTraceText(value: string): string {
-  return value
-    .replace(/\b(Authorization\s*[:=]\s*)Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1Bearer [REDACTED]')
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [REDACTED]')
-    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, TRACE_REDACTED_VALUE)
-    .replace(/\b\d{6,12}:[A-Za-z0-9_-]{20,}\b/g, TRACE_REDACTED_VALUE)
-    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, TRACE_REDACTED_VALUE)
-    .replace(/\b(?:sk|rk|xox[baprs]|gh[pousr]|glpat|github_pat|hf)[-_][A-Za-z0-9._-]{12,}\b/g, TRACE_REDACTED_VALUE)
-    .replace(
-      /\b(authorization)\s*[:=]\s*(?!Bearer\s+\[REDACTED\])["']?[^"',;\s)}\]]{4,}/gi,
-      (_match, key: string) => `${key}=${TRACE_REDACTED_VALUE}`,
-    )
-    .replace(
-      /\b(api[_-]?key|access[_-]?token|client[_-]?secret|credential|password|refresh[_-]?token|secret|token)\s*[:=]\s*["']?(?!\[REDACTED\])[^"',;\s)}\]]{4,}/gi,
-      (_match, key: string) => `${key}=${TRACE_REDACTED_VALUE}`,
-    );
+  return redactSensitiveText(value, TRACE_REDACTED_VALUE);
 }
 
 function isTraceSensitiveKey(key: string): boolean {

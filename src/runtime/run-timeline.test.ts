@@ -333,6 +333,72 @@ describe('RunTimelineStore', () => {
     expect(contextItem?.contextAssembly?.selectedMemoryEntries?.[0]?.matchReasons).toEqual(['query summary', 'summary terms 4']);
   });
 
+  it('redacts sensitive strings from run timeline previews and context assembly details', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-redaction',
+      runId: 'req-redaction',
+      messagePreview: '[Context: User is currently viewing the dashboard panel] Check Authorization: Bearer abcdefghijklmnop.',
+      responsePreview: 'Completed with apiKey=sk-test_123456789012345 and token=github_pat_1234567890abcdef.',
+      nodes: [{
+        id: 'compile-redaction',
+        kind: 'compile',
+        name: 'Assembled context',
+        startedAt: 118,
+        completedAt: 119,
+        status: 'succeeded',
+        metadata: {
+          summary: 'global memory loaded with access_token=secretvalue12345',
+          detail: 'memoryScope=global; credential=plaincredential12345',
+          compactedSummaryPreview: 'Prior summary included client_secret=supersecretvalue12345.',
+          knowledgeBaseQueryPreview: 'lookup password=notarealpassword12345',
+          selectedMemoryEntries: [{
+            scope: 'global',
+            category: 'Project Notes',
+            createdAt: '2026-04-28',
+            preview: 'Remembered bearer Bearer memorytoken1234567890 for a connector.',
+            renderMode: 'summary',
+            queryScore: 10,
+            isContextFlush: false,
+            matchReasons: ['query token=matchsecret12345'],
+          }],
+        },
+      }],
+    }));
+    store.ingestCodeSession(createCodeSession('code-redaction', 180, {
+      pendingApprovals: [{
+        id: 'approval-redaction',
+        toolName: 'code_write',
+        argsPreview: 'Write tmp/file.txt with Authorization: Bearer approvaltoken1234567890',
+        createdAt: 175,
+        requestId: 'req-redaction',
+      }],
+      recentJobs: [{
+        id: 'job-redaction',
+        toolName: 'code_write',
+        status: 'succeeded',
+        createdAt: 120,
+        completedAt: 140,
+        requestId: 'req-redaction',
+        resultPreview: 'Wrote file; refresh_token=refreshsecret12345',
+      }],
+    }));
+
+    const run = store.getRun('req-redaction');
+    const serialized = JSON.stringify(run);
+    expect(run?.summary.title).toBe('Check Authorization: Bearer [REDACTED]');
+    expect(serialized).toContain('apiKey=[REDACTED]');
+    expect(serialized).toContain('Bearer [REDACTED]');
+    expect(serialized).toContain('credential=[REDACTED]');
+    expect(serialized).toContain('refresh_token=[REDACTED]');
+    expect(serialized).not.toContain('abcdefghijklmnop');
+    expect(serialized).not.toContain('sk-test_123456789012345');
+    expect(serialized).not.toContain('github_pat_1234567890abcdef');
+    expect(serialized).not.toContain('plaincredential12345');
+    expect(serialized).not.toContain('approvaltoken1234567890');
+    expect(serialized).not.toContain('refreshsecret12345');
+  });
+
   it('preserves section footprints and execution state in context assembly timeline details', () => {
     const store = new RunTimelineStore({ now: () => 500 });
     store.ingestAssistantTrace(createTrace({

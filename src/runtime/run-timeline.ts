@@ -13,6 +13,7 @@ import { projectExecutionGraphEventToTimeline } from './execution-graph/timeline
 import type { OrchestrationRunEvent } from './run-events.js';
 import type { ScheduledTaskHistoryEntry } from './scheduled-tasks.js';
 import { runDetailMatchesContextFilters } from './trace-context-filters.js';
+import { redactSensitiveText } from '../util/crypto-guardrails.js';
 
 export type DashboardRunStatus =
   | 'queued'
@@ -312,7 +313,7 @@ export class RunTimelineStore {
         requestType: trace.requestType,
         startedAt: trace.startedAt ?? trace.queuedAt,
         completedAt: trace.completedAt,
-        error: nonEmptyText(trace.error),
+        error: sanitizeTimelineText(trace.error),
         tags: [trace.channel, trace.requestType],
       },
       items,
@@ -500,7 +501,7 @@ export class RunTimelineStore {
           ? Math.max(0, event.approvalCount ?? 0)
           : 0,
         verificationPendingCount: 0,
-        error: event.kind === 'failed' ? nonEmptyText(event.detail) : undefined,
+        error: event.kind === 'failed' ? sanitizeTimelineText(event.detail) : undefined,
         tags: [
           'delegated-worker',
           'delegated-task',
@@ -600,7 +601,7 @@ export class RunTimelineStore {
           groupId: run.playbookId,
           kind: 'automation_run',
           title: `Automation: ${run.playbookName}`,
-          subtitle: nonEmptyText(run.message),
+          subtitle: sanitizeTimelineText(run.message),
           agentId: run.requestedBy ?? undefined,
           channel: run.origin,
           startedAt: run.startedAt,
@@ -624,7 +625,7 @@ export class RunTimelineStore {
           groupId: entry.taskId,
           kind: 'scheduled_task',
           title: `Scheduled: ${entry.taskName}`,
-          subtitle: nonEmptyText(entry.message),
+          subtitle: sanitizeTimelineText(entry.message),
           channel: 'scheduled',
           startedAt,
           completedAt,
@@ -667,15 +668,16 @@ export class RunTimelineStore {
     if (items.length > this.maxItemsPerRun) {
       items = items.slice(items.length - this.maxItemsPerRun);
     }
+    const sanitizedItems = items.map(sanitizeTimelineItemText);
 
     const baseStatus = input.baseStatus ?? existing?.baseStatus ?? 'queued';
     const startedAt = nextSummary.startedAt > 0
       ? nextSummary.startedAt
-      : (items[0]?.timestamp ?? this.now());
+      : (sanitizedItems[0]?.timestamp ?? this.now());
     const lastUpdatedAt = Math.max(
       nextSummary.completedAt ?? 0,
       nextSummary.lastUpdatedAt ?? 0,
-      items[items.length - 1]?.timestamp ?? 0,
+      sanitizedItems[sanitizedItems.length - 1]?.timestamp ?? 0,
       startedAt,
     );
     const completedAt = nextSummary.completedAt
@@ -685,7 +687,7 @@ export class RunTimelineStore {
       : nextSummary.durationMs;
 
     const detail: DashboardRunDetail = {
-      summary: {
+      summary: sanitizeRunSummaryText({
         ...nextSummary,
         runId: normalizedRunId,
         groupId: nonEmptyText(nextSummary.groupId) ?? normalizedRunId,
@@ -699,15 +701,15 @@ export class RunTimelineStore {
         completedAt,
         lastUpdatedAt,
         durationMs,
-      },
-      items,
+      }),
+      items: sanitizedItems,
       liveSummary: buildRunLiveSummary(
         overlayStatus(
           baseStatus,
           nextSummary.pendingApprovalCount ?? 0,
           nextSummary.verificationPendingCount ?? 0,
         ),
-        items,
+        sanitizedItems,
       ),
     };
 
@@ -757,6 +759,79 @@ export class RunTimelineStore {
           || left.summary.runId.localeCompare(right.summary.runId);
       });
   }
+}
+
+function sanitizeRunSummaryText(summary: DashboardRunSummary): DashboardRunSummary {
+  const title = sanitizeTimelineText(summary.title) ?? summary.title;
+  const subtitle = sanitizeTimelineText(summary.subtitle);
+  const error = sanitizeTimelineText(summary.error);
+  return {
+    ...summary,
+    title,
+    ...(subtitle ? { subtitle } : {}),
+    ...(error ? { error } : {}),
+  };
+}
+
+function sanitizeTimelineItemText(item: DashboardRunTimelineItem): DashboardRunTimelineItem {
+  const { detail, contextAssembly, ...rest } = item;
+  const sanitizedDetail = sanitizeTimelineText(detail);
+  const sanitizedContextAssembly = contextAssembly
+    ? sanitizeContextAssemblyText(contextAssembly)
+    : undefined;
+  return {
+    ...rest,
+    title: sanitizeTimelineText(item.title) ?? item.title,
+    ...(sanitizedDetail ? { detail: sanitizedDetail } : {}),
+    ...(sanitizedContextAssembly ? { contextAssembly: sanitizedContextAssembly } : {}),
+  };
+}
+
+function sanitizeContextAssemblyText(
+  contextAssembly: DashboardRunTimelineContextAssembly,
+): DashboardRunTimelineContextAssembly | undefined {
+  const summary = sanitizeTimelineText(contextAssembly.summary);
+  const detail = sanitizeTimelineText(contextAssembly.detail);
+  const knowledgeBaseQueryPreview = sanitizeTimelineText(contextAssembly.knowledgeBaseQueryPreview);
+  const compactedSummaryPreview = sanitizeTimelineText(contextAssembly.compactedSummaryPreview);
+  const selectedMemoryEntries = contextAssembly.selectedMemoryEntries?.map((entry) => {
+    const matchReasons = entry.matchReasons
+      ?.map((reason) => sanitizeTimelineText(reason))
+      .filter((reason): reason is string => !!reason);
+    return {
+      ...entry,
+      preview: sanitizeTimelineText(entry.preview) ?? entry.preview,
+      ...(matchReasons && matchReasons.length > 0 ? { matchReasons } : {}),
+    };
+  });
+  const preservedObjective = sanitizeTimelineText(contextAssembly.preservedExecutionState?.objective);
+  const preservedBlockerSummary = sanitizeTimelineText(contextAssembly.preservedExecutionState?.blockerSummary);
+  const preservedMaintainedSummarySource = sanitizeTimelineText(contextAssembly.preservedExecutionState?.maintainedSummarySource);
+  const preservedExecutionState = contextAssembly.preservedExecutionState
+    ? {
+        ...(preservedObjective ? { objective: preservedObjective } : {}),
+        ...(preservedBlockerSummary ? { blockerSummary: preservedBlockerSummary } : {}),
+        ...(Array.isArray(contextAssembly.preservedExecutionState.activeExecutionRefs)
+          ? { activeExecutionRefs: [...contextAssembly.preservedExecutionState.activeExecutionRefs] }
+          : {}),
+        ...(preservedMaintainedSummarySource ? { maintainedSummarySource: preservedMaintainedSummarySource } : {}),
+      }
+    : undefined;
+  const skillArtifactReferences = contextAssembly.skillArtifactReferences?.map((entry) => ({
+    ...entry,
+    title: sanitizeTimelineText(entry.title) ?? entry.title,
+  }));
+  const sanitized: DashboardRunTimelineContextAssembly = {
+    ...contextAssembly,
+    ...(summary ? { summary } : {}),
+    ...(detail ? { detail } : {}),
+    ...(knowledgeBaseQueryPreview ? { knowledgeBaseQueryPreview } : {}),
+    ...(selectedMemoryEntries && selectedMemoryEntries.length > 0 ? { selectedMemoryEntries } : {}),
+    ...(compactedSummaryPreview ? { compactedSummaryPreview } : {}),
+    ...(skillArtifactReferences && skillArtifactReferences.length > 0 ? { skillArtifactReferences } : {}),
+    ...(preservedExecutionState && Object.keys(preservedExecutionState).length > 0 ? { preservedExecutionState } : {}),
+  };
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
 function defaultSummary(runId: string): DashboardRunSummary {
@@ -970,7 +1045,7 @@ function buildPendingApprovalItem(
     status: 'blocked',
     source: 'code_session',
     title: `Approval requested: ${humanizeToolName(approval.toolName)}`,
-    detail: nonEmptyText(approval.argsPreview),
+    detail: sanitizeTimelineText(approval.argsPreview),
     toolName: approval.toolName,
     approvalId: approval.id,
   };
@@ -995,7 +1070,7 @@ function buildApprovalResolvedItem(
       ? `Approval denied: ${humanizeToolName(toolName)}`
       : `Approval cleared: ${humanizeToolName(toolName)}`,
     detail: denied
-      ? nonEmptyText(relatedJob?.error) ?? 'The pending action was denied.'
+      ? sanitizeTimelineText(relatedJob?.error) ?? 'The pending action was denied.'
       : 'The pending action was cleared and execution continued.',
     toolName,
     approvalId,
@@ -1006,7 +1081,7 @@ function buildJobItems(runId: string, job: CodeSessionRecentJob, fallbackTimesta
   const remoteDetail = job.remoteExecution?.profileName
     ? `Remote sandbox: ${job.remoteExecution.profileName}${job.remoteExecution.leaseReused ? ' (lease reused)' : ''}.`
     : null;
-  const argsDetail = nonEmptyText(job.argsPreview);
+  const argsDetail = sanitizeTimelineText(job.argsPreview);
   const items: DashboardRunTimelineItem[] = [{
     id: `job:${job.id}:started`,
     runId,
@@ -1028,7 +1103,7 @@ function buildJobItems(runId: string, job: CodeSessionRecentJob, fallbackTimesta
       status: job.status === 'denied' ? 'failed' : 'blocked',
       source: 'code_session',
       title: `Approval requested: ${humanizeToolName(job.toolName)}`,
-      detail: nonEmptyText(job.argsPreview),
+      detail: sanitizeTimelineText(job.argsPreview),
       toolName: job.toolName,
       approvalId: job.approvalId,
     });
@@ -1043,7 +1118,7 @@ function buildJobItems(runId: string, job: CodeSessionRecentJob, fallbackTimesta
       status: mapJobItemStatus(job.status),
       source: 'code_session',
       title: buildJobCompletionTitle(job),
-      detail: [nonEmptyText(job.error) ?? nonEmptyText(job.resultPreview), remoteDetail].filter(Boolean).join('\n') || undefined,
+      detail: [sanitizeTimelineText(job.error) ?? sanitizeTimelineText(job.resultPreview), remoteDetail].filter(Boolean).join('\n') || undefined,
       toolName: job.toolName,
     });
   }
@@ -1069,7 +1144,7 @@ function buildVerificationItem(runId: string, entry: CodeSessionVerificationEntr
     title: pending
       ? `Verification pending: ${humanizeVerificationKind(entry.kind)}`
       : `Verification ${entry.status}: ${humanizeVerificationKind(entry.kind)}`,
-    detail: nonEmptyText(entry.summary),
+    detail: sanitizeTimelineText(entry.summary),
     verificationKind: entry.kind,
   };
 }
@@ -1085,7 +1160,7 @@ function buildCodingBackendProgressItem(runId: string, event: CodingBackendProgr
         status: 'running',
         source: 'code_session',
         title: `Delegated to ${event.backendName}`,
-        detail: nonEmptyText(event.detail),
+        detail: sanitizeTimelineText(event.detail),
         toolName: 'coding_backend_run',
       };
     case 'progress':
@@ -1097,7 +1172,7 @@ function buildCodingBackendProgressItem(runId: string, event: CodingBackendProgr
         status: 'running',
         source: 'code_session',
         title: `${event.backendName} is working`,
-        detail: nonEmptyText(event.detail),
+        detail: sanitizeTimelineText(event.detail),
         toolName: 'coding_backend_run',
       };
     case 'completed':
@@ -1109,7 +1184,7 @@ function buildCodingBackendProgressItem(runId: string, event: CodingBackendProgr
         status: 'succeeded',
         source: 'code_session',
         title: `${event.backendName} completed`,
-        detail: nonEmptyText(event.detail),
+        detail: sanitizeTimelineText(event.detail),
         toolName: 'coding_backend_run',
       };
     case 'timed_out':
@@ -1121,7 +1196,7 @@ function buildCodingBackendProgressItem(runId: string, event: CodingBackendProgr
         status: 'failed',
         source: 'code_session',
         title: `${event.backendName} timed out`,
-        detail: nonEmptyText(event.detail),
+        detail: sanitizeTimelineText(event.detail),
         toolName: 'coding_backend_run',
       };
     case 'failed':
@@ -1134,7 +1209,7 @@ function buildCodingBackendProgressItem(runId: string, event: CodingBackendProgr
         status: 'failed',
         source: 'code_session',
         title: `${event.backendName} failed`,
-        detail: nonEmptyText(event.detail),
+        detail: sanitizeTimelineText(event.detail),
         toolName: 'coding_backend_run',
       };
   }
@@ -1359,7 +1434,7 @@ function buildAssistantTraceItems(trace: AssistantDispatchTrace): DashboardRunTi
       status: 'failed',
       source: 'orchestrator',
       title: 'Run failed',
-      detail: nonEmptyText(trace.error),
+      detail: sanitizeTimelineText(trace.error),
     });
   }
 
@@ -1506,7 +1581,7 @@ function mapWorkflowEventToItem(
     runId,
     timestamp: event.timestamp,
     source,
-    detail: nonEmptyText(event.message),
+    detail: sanitizeTimelineText(event.message),
     nodeId: event.nodeId,
   } as const;
 
@@ -1545,7 +1620,7 @@ function mapWorkflowEventToItem(
 function sanitizePreview(value: unknown): string | undefined {
   const normalized = nonEmptyText(typeof value === 'string' ? value : undefined);
   if (!normalized) return undefined;
-  return normalized.replace(/^\[Context:\s*User is currently viewing the [^\]]+\]\s*/i, '') || undefined;
+  return sanitizeTimelineText(normalized.replace(/^\[Context:\s*User is currently viewing the [^\]]+\]\s*/i, ''));
 }
 
 function inferCompletedAt(baseStatus: DashboardRunStatus, lastUpdatedAt: number): number | undefined {
@@ -1689,7 +1764,7 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
           : undefined;
         const category = nonEmptyText(typeof entry.category === 'string' ? entry.category : undefined);
         const createdAt = nonEmptyText(typeof entry.createdAt === 'string' ? entry.createdAt : undefined);
-        const preview = nonEmptyText(typeof entry.preview === 'string' ? entry.preview : undefined);
+        const preview = sanitizeTimelineText(typeof entry.preview === 'string' ? entry.preview : undefined);
         const renderMode = entry.renderMode === 'full' || entry.renderMode === 'summary'
           ? entry.renderMode
           : null;
@@ -1708,7 +1783,8 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
           ...(Array.isArray(entry.matchReasons)
             ? {
                 matchReasons: entry.matchReasons
-                  .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                  .map((value) => typeof value === 'string' ? sanitizeTimelineText(value) : undefined)
+                  .filter((value): value is string => !!value)
                   .slice(0, 3),
               }
             : {}),
@@ -1744,11 +1820,11 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
     : [];
   const preservedExecutionState = isRecord(metadata.preservedExecutionState)
     ? {
-        ...(nonEmptyText(typeof metadata.preservedExecutionState.objective === 'string' ? metadata.preservedExecutionState.objective : undefined)
-          ? { objective: nonEmptyText(typeof metadata.preservedExecutionState.objective === 'string' ? metadata.preservedExecutionState.objective : undefined) }
+        ...(sanitizeTimelineText(typeof metadata.preservedExecutionState.objective === 'string' ? metadata.preservedExecutionState.objective : undefined)
+          ? { objective: sanitizeTimelineText(typeof metadata.preservedExecutionState.objective === 'string' ? metadata.preservedExecutionState.objective : undefined) }
           : {}),
-        ...(nonEmptyText(typeof metadata.preservedExecutionState.blockerSummary === 'string' ? metadata.preservedExecutionState.blockerSummary : undefined)
-          ? { blockerSummary: nonEmptyText(typeof metadata.preservedExecutionState.blockerSummary === 'string' ? metadata.preservedExecutionState.blockerSummary : undefined) }
+        ...(sanitizeTimelineText(typeof metadata.preservedExecutionState.blockerSummary === 'string' ? metadata.preservedExecutionState.blockerSummary : undefined)
+          ? { blockerSummary: sanitizeTimelineText(typeof metadata.preservedExecutionState.blockerSummary === 'string' ? metadata.preservedExecutionState.blockerSummary : undefined) }
           : {}),
         ...(Array.isArray(metadata.preservedExecutionState.activeExecutionRefs)
           ? {
@@ -1757,8 +1833,8 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
                 .map((value) => value.trim()),
             }
           : {}),
-        ...(nonEmptyText(typeof metadata.preservedExecutionState.maintainedSummarySource === 'string' ? metadata.preservedExecutionState.maintainedSummarySource : undefined)
-          ? { maintainedSummarySource: nonEmptyText(typeof metadata.preservedExecutionState.maintainedSummarySource === 'string' ? metadata.preservedExecutionState.maintainedSummarySource : undefined) }
+        ...(sanitizeTimelineText(typeof metadata.preservedExecutionState.maintainedSummarySource === 'string' ? metadata.preservedExecutionState.maintainedSummarySource : undefined)
+          ? { maintainedSummarySource: sanitizeTimelineText(typeof metadata.preservedExecutionState.maintainedSummarySource === 'string' ? metadata.preservedExecutionState.maintainedSummarySource : undefined) }
           : {}),
       }
     : undefined;
@@ -1802,21 +1878,21 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
           skillId: entry.skillId.trim(),
           scope: entry.scope,
           slug: entry.slug.trim(),
-          title: entry.title.trim(),
+          title: sanitizeTimelineText(entry.title) ?? entry.title.trim(),
           sourceClass: entry.sourceClass.trim(),
         }))
     : [];
   const contextAssembly: DashboardRunTimelineContextAssembly = {
-    ...(nonEmptyText(typeof metadata.summary === 'string' ? metadata.summary : undefined) ? { summary: nonEmptyText(typeof metadata.summary === 'string' ? metadata.summary : undefined) } : {}),
-    ...(nonEmptyText(typeof metadata.detail === 'string' ? metadata.detail : undefined) ? { detail: nonEmptyText(typeof metadata.detail === 'string' ? metadata.detail : undefined) } : {}),
+    ...(sanitizeTimelineText(typeof metadata.summary === 'string' ? metadata.summary : undefined) ? { summary: sanitizeTimelineText(typeof metadata.summary === 'string' ? metadata.summary : undefined) } : {}),
+    ...(sanitizeTimelineText(typeof metadata.detail === 'string' ? metadata.detail : undefined) ? { detail: sanitizeTimelineText(typeof metadata.detail === 'string' ? metadata.detail : undefined) } : {}),
     ...(memoryScope ? { memoryScope } : {}),
     ...(typeof metadata.knowledgeBaseLoaded === 'boolean' ? { knowledgeBaseLoaded: metadata.knowledgeBaseLoaded } : {}),
     ...(typeof metadata.codingMemoryLoaded === 'boolean' ? { codingMemoryLoaded: metadata.codingMemoryLoaded } : {}),
     ...(typeof metadata.codingMemoryChars === 'number' && Number.isFinite(metadata.codingMemoryChars)
       ? { codingMemoryChars: metadata.codingMemoryChars }
       : {}),
-    ...(nonEmptyText(typeof metadata.knowledgeBaseQueryPreview === 'string' ? metadata.knowledgeBaseQueryPreview : undefined)
-      ? { knowledgeBaseQueryPreview: nonEmptyText(typeof metadata.knowledgeBaseQueryPreview === 'string' ? metadata.knowledgeBaseQueryPreview : undefined) }
+    ...(sanitizeTimelineText(typeof metadata.knowledgeBaseQueryPreview === 'string' ? metadata.knowledgeBaseQueryPreview : undefined)
+      ? { knowledgeBaseQueryPreview: sanitizeTimelineText(typeof metadata.knowledgeBaseQueryPreview === 'string' ? metadata.knowledgeBaseQueryPreview : undefined) }
       : {}),
     ...(nonEmptyText(typeof metadata.continuityKey === 'string' ? metadata.continuityKey : undefined)
       ? { continuityKey: nonEmptyText(typeof metadata.continuityKey === 'string' ? metadata.continuityKey : undefined) }
@@ -1857,8 +1933,8 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
             .map((value) => value.trim()),
         }
       : {}),
-    ...(nonEmptyText(typeof metadata.compactedSummaryPreview === 'string' ? metadata.compactedSummaryPreview : undefined)
-      ? { compactedSummaryPreview: nonEmptyText(typeof metadata.compactedSummaryPreview === 'string' ? metadata.compactedSummaryPreview : undefined) }
+    ...(sanitizeTimelineText(typeof metadata.compactedSummaryPreview === 'string' ? metadata.compactedSummaryPreview : undefined)
+      ? { compactedSummaryPreview: sanitizeTimelineText(typeof metadata.compactedSummaryPreview === 'string' ? metadata.compactedSummaryPreview : undefined) }
       : {}),
     ...(sectionFootprints.length > 0 ? { sectionFootprints } : {}),
     ...(preservedExecutionState && Object.keys(preservedExecutionState).length > 0 ? { preservedExecutionState } : {}),
@@ -1909,6 +1985,13 @@ function nonEmptyText(value: string | null | undefined): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function sanitizeTimelineText(value: string | null | undefined): string | undefined {
+  const normalized = nonEmptyText(value);
+  if (!normalized) return undefined;
+  const redacted = redactSensitiveText(normalized).trim();
+  return redacted ? redacted : undefined;
 }
 
 function describeDelegatedWorkerTarget(event: DelegatedWorkerProgressEvent): string {
@@ -1998,7 +2081,7 @@ function mapDelegatedExecutionEventStatus(event: ExecutionEvent): DashboardRunTi
 }
 
 function buildDelegatedWorkerProgressDetail(event: DelegatedWorkerProgressEvent): string | undefined {
-  const detail = nonEmptyText(event.detail);
+  const detail = sanitizeTimelineText(event.detail);
   const profileSentence = buildDelegatedWorkerExecutionProfileSentence(event);
   if (!profileSentence) return detail;
   if (!detail) return profileSentence;
@@ -2042,9 +2125,10 @@ function buildDelegatedWorkerContextAssembly(
 }
 
 function truncateText(value: string | undefined, maxLength: number): string | undefined {
-  if (!value) return undefined;
-  if (value.length <= maxLength) return value;
-  return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
+  const normalized = sanitizeTimelineText(value);
+  if (!normalized) return undefined;
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
 function mapDelegatedWorkerProgressStatus(event: DelegatedWorkerProgressEvent): DashboardRunStatus {

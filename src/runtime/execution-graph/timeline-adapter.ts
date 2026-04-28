@@ -3,6 +3,7 @@ import type {
   DashboardRunSummary,
   DashboardRunTimelineItem,
 } from '../run-timeline.js';
+import { redactSensitiveText } from '../../util/crypto-guardrails.js';
 import type { ExecutionGraphEvent } from './graph-events.js';
 import type { ExecutionNodeKind } from './types.js';
 
@@ -270,7 +271,7 @@ function stringPayload(event: ExecutionGraphEvent, key: string): string | undefi
 }
 
 function normalizeText(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
+  const normalized = value ? redactSensitiveText(value).trim() : undefined;
   return normalized ? normalized : undefined;
 }
 
