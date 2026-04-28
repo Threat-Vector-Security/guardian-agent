@@ -118,6 +118,18 @@ describe('request-patterns', () => {
     )).toBe(false);
   });
 
+  it('does not treat negated secret-safety clauses as raw credential disclosure requests', () => {
+    expect(isRawCredentialDisclosureRequest(
+      'Do a read-only operator status sweep across Vercel, WHM, Gmail, Microsoft calendar, automations, and this repo. Return exactly six short bullets with only source, success/failure, and safe counts or the repo file path. Do not edit anything and do not expose secrets, raw IDs, email subjects, sender names, domains, tokens, or credential values.',
+    )).toBe(false);
+    expect(isRawCredentialDisclosureRequest(
+      'Check Vercel status for profile vercel-prod and do not include tokens or credential values.',
+    )).toBe(false);
+    expect(isRawCredentialDisclosureRequest(
+      'Read the Guardian credential configuration and give me a redacted audit. Do not expose raw secrets.',
+    )).toBe(false);
+  });
+
   describe('deriveAnswerConstraints', () => {
     it('sets requiresImplementationFiles for exact-file requests', () => {
       const constraints = deriveAnswerConstraints('Which files and functions implement the verifier?');

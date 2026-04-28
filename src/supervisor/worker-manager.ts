@@ -2306,15 +2306,44 @@ export class WorkerManager {
       if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
         effectiveTaskContract = verifiedResult.envelope.taskContract;
       }
-      let answerSynthesisFallback:
-        | {
-            verifiedResult: typeof verifiedResult;
-            insufficiency: DelegatedResultSufficiencyFailure;
-            jobSnapshots: DelegatedJobSnapshot[];
-          }
-        | null = insufficiency && isDelegatedAnswerSynthesisRetry(insufficiency)
+      type AnswerSynthesisFallback = {
+        verifiedResult: typeof verifiedResult;
+        insufficiency: DelegatedResultSufficiencyFailure;
+        jobSnapshots: DelegatedJobSnapshot[];
+      };
+      const buildAnswerSynthesisFallback = (): AnswerSynthesisFallback | null => (
+        insufficiency && isDelegatedAnswerSynthesisRetry(insufficiency)
           ? { verifiedResult, insufficiency, jobSnapshots }
-          : null;
+          : null
+      );
+      const extendedFirstDrain = await awaitExtendedDelegatedEvidenceDrain({
+        tools: this.tools,
+        requestId,
+        metadata: result.metadata,
+        intentDecision: effectiveIntentDecision ?? undefined,
+        executionProfile: effectiveExecutionProfile,
+        taskContract: effectiveTaskContract,
+        decision: verifiedResult.decision,
+        jobSnapshots,
+      });
+      if (extendedFirstDrain) {
+        if (extendedFirstDrain.inFlightRemaining > 0) {
+          this.recordDelegatedWorkerTrace('delegated_job_wait_expired', input, delegatedTarget, {
+            requestId,
+            taskRunId: delegatedTaskRunId,
+            lifecycle: 'running',
+            taskContract: effectiveTaskContract,
+            reason: `${extendedFirstDrain.inFlightRemaining} delegated evidence job(s) remained in flight after ${extendedFirstDrain.waitedMs}ms extended drain`,
+          });
+        }
+        jobSnapshots = extendedFirstDrain.jobSnapshots;
+        verifiedResult = extendedFirstDrain.verifiedResult;
+        if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
+          effectiveTaskContract = verifiedResult.envelope.taskContract;
+        }
+        insufficiency = extendedFirstDrain.insufficiency;
+      }
+      let answerSynthesisFallback = buildAnswerSynthesisFallback();
       if (insufficiency) {
         const shouldUseSameProfileRetry = shouldRetryDelegatedAnswerSynthesisOnSameProfile(
           insufficiency,
@@ -2430,9 +2459,34 @@ export class WorkerManager {
             effectiveTaskContract = verifiedResult.envelope.taskContract;
           }
           insufficiency = buildDelegatedRetryableFailure(verifiedResult.decision, verifiedResult.envelope);
-          if (insufficiency && isDelegatedAnswerSynthesisRetry(insufficiency)) {
-            answerSynthesisFallback = { verifiedResult, insufficiency, jobSnapshots };
+          const extendedRetryDrain = await awaitExtendedDelegatedEvidenceDrain({
+            tools: this.tools,
+            requestId,
+            metadata: result.metadata,
+            intentDecision: effectiveIntentDecision ?? undefined,
+            executionProfile: effectiveExecutionProfile,
+            taskContract: effectiveTaskContract,
+            decision: verifiedResult.decision,
+            jobSnapshots,
+          });
+          if (extendedRetryDrain) {
+            if (extendedRetryDrain.inFlightRemaining > 0) {
+              this.recordDelegatedWorkerTrace('delegated_job_wait_expired', effectiveInput, delegatedTarget, {
+                requestId,
+                taskRunId: delegatedTaskRunId,
+                lifecycle: 'running',
+                taskContract: effectiveTaskContract,
+                reason: `${extendedRetryDrain.inFlightRemaining} delegated evidence job(s) remained in flight after ${extendedRetryDrain.waitedMs}ms extended drain (retry)`,
+              });
+            }
+            jobSnapshots = extendedRetryDrain.jobSnapshots;
+            verifiedResult = extendedRetryDrain.verifiedResult;
+            if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
+              effectiveTaskContract = verifiedResult.envelope.taskContract;
+            }
+            insufficiency = extendedRetryDrain.insufficiency;
           }
+          answerSynthesisFallback = buildAnswerSynthesisFallback();
         }
       }
       if (insufficiency && answerSynthesisFallback) {
@@ -5001,7 +5055,80 @@ function synthesizeDelegatedEvidenceReceiptsFromJobs(
 }
 
 const DELEGATED_JOB_DRAIN_DEADLINE_MS = 2500;
+const DELEGATED_EVIDENCE_DRAIN_DEADLINE_MS = 60_000;
 const DELEGATED_JOB_DRAIN_POLL_MS = 50;
+
+async function awaitExtendedDelegatedEvidenceDrain(input: {
+  tools: ToolExecutor;
+  requestId: string;
+  metadata: Record<string, unknown> | undefined;
+  intentDecision: IntentGatewayDecision | undefined;
+  executionProfile: SelectedExecutionProfile | undefined;
+  taskContract: DelegatedResultEnvelope['taskContract'];
+  decision: VerificationDecision;
+  jobSnapshots: DelegatedJobSnapshot[];
+}) {
+  const workerExecution = readWorkerExecutionMetadata(input.metadata);
+  if (isDelegatedWorkerBudgetExhausted(workerExecution?.terminationReason)) {
+    return null;
+  }
+  if (!shouldExtendDelegatedEvidenceDrain({
+    taskContract: input.taskContract,
+    decision: input.decision,
+    jobSnapshots: input.jobSnapshots,
+  })) {
+    return null;
+  }
+  const drain = await awaitPendingDelegatedJobs(
+    input.tools,
+    input.requestId,
+    DELEGATED_EVIDENCE_DRAIN_DEADLINE_MS,
+  );
+  const verifiedResult = verifyDelegatedWorkerResult({
+    metadata: input.metadata,
+    intentDecision: input.intentDecision,
+    executionProfile: input.executionProfile,
+    taskContract: input.taskContract,
+    jobSnapshots: drain.snapshots,
+  });
+  return {
+    jobSnapshots: drain.snapshots,
+    waitedMs: drain.waitedMs,
+    inFlightRemaining: drain.inFlightRemaining,
+    verifiedResult,
+    insufficiency: buildDelegatedRetryableFailure(verifiedResult.decision, verifiedResult.envelope),
+  };
+}
+
+function shouldExtendDelegatedEvidenceDrain(input: {
+  taskContract: DelegatedResultEnvelope['taskContract'];
+  decision: VerificationDecision;
+  jobSnapshots: DelegatedJobSnapshot[];
+}): boolean {
+  if (!input.decision.retryable) return false;
+  if (!input.jobSnapshots.some((snapshot) => isDelegatedJobInFlight(snapshot.status))) {
+    return false;
+  }
+  const missingEvidenceKinds = input.decision.missingEvidenceKinds ?? [];
+  if (missingEvidenceKinds.some((kind) => kind !== 'answer')) {
+    return true;
+  }
+  const unsatisfiedStepIds = new Set(input.decision.unsatisfiedStepIds ?? []);
+  if (unsatisfiedStepIds.size === 0) {
+    return false;
+  }
+  return input.taskContract.plan.steps.some((step) => (
+    step.required !== false
+    && step.kind !== 'answer'
+    && unsatisfiedStepIds.has(step.stepId)
+  ));
+}
+
+function isDelegatedWorkerBudgetExhausted(terminationReason: string | undefined): boolean {
+  return terminationReason === 'max_rounds'
+    || terminationReason === 'max_wall_clock'
+    || terminationReason === 'watchdog_kill';
+}
 
 async function awaitPendingDelegatedJobs(
   tools: ToolExecutor,
