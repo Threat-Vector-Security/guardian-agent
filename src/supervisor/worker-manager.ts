@@ -129,9 +129,7 @@ import {
   shouldUseGraphControlledExecution,
 } from '../runtime/execution-graph/graph-controller.js';
 import {
-  buildRecoveryAdvisorGraphContext,
-  runRecoveryAdvisorGraph,
-  type RecoveryGraphPatch,
+  runRecoveryAdvisorInvocation,
 } from '../runtime/execution-graph/node-recovery.js';
 import { readWorkerExecutionMetadata } from '../runtime/worker-execution-metadata.js';
 import {
@@ -139,14 +137,7 @@ import {
   readExecutionEvents,
 } from '../runtime/execution/metadata.js';
 import { buildDelegatedTaskContract } from '../runtime/execution/verifier.js';
-import {
-  buildDeterministicRecoveryAdvice,
-  buildGraphRecoveryProposalCandidateFromAdvice,
-  buildRecoveryAdvisorRequest,
-  readRecoveryAdvisorProposal,
-  validateRecoveryAdvisorProposal,
-  type RecoveryAdvisorRequest,
-} from '../runtime/execution/recovery-advisor.js';
+import type { RecoveryAdvisorRequest } from '../runtime/execution/recovery-advisor.js';
 import {
   shouldHandleDirectReasoningMode,
   type DirectReasoningTraceContext,
@@ -376,14 +367,6 @@ interface WorkerSuspensionGraphResumeContext {
   artifactIds: string[];
   sequenceStart: number;
   expiresAt: number;
-}
-
-interface RecoveryAdvisorGraphResult {
-  graphId: string;
-  proposalArtifactId: string;
-  patch: RecoveryGraphPatch;
-  events: ExecutionGraphEvent[];
-  adviceSource: 'llm' | 'deterministic';
 }
 
 export interface WorkerProcess {
@@ -1750,174 +1733,6 @@ export class WorkerManager {
     };
   }
 
-  private async requestRecoveryAdvisorGuidance(input: {
-    request: WorkerMessageRequest;
-    worker: WorkerProcess;
-    target: ResolvedDelegatedTargetMetadata;
-    taskContract: DelegatedResultEnvelope['taskContract'];
-    verification: VerificationDecision;
-    jobSnapshots: DelegatedJobSnapshot[];
-    requestId: string;
-    taskRunId: string;
-    effectiveIntentDecision?: IntentGatewayDecision;
-    dispatchBase: DelegatedWorkerDispatchBase;
-  }): Promise<RecoveryAdvisorGraphResult | null> {
-    const advisorRequest: RecoveryAdvisorRequest = buildRecoveryAdvisorRequest({
-      originalRequest: input.request.message.content,
-      taskContract: input.taskContract,
-      verification: input.verification,
-      jobSnapshots: input.jobSnapshots,
-    });
-
-    this.observability.intentRoutingTrace?.record({
-      stage: 'recovery_advisor_started',
-      requestId: input.requestId,
-      messageId: input.request.message.id,
-      userId: input.request.userId,
-      channel: input.request.message.channel,
-      agentId: input.target.agentId,
-      contentPreview: input.request.message.content,
-      details: {
-        ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
-        ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
-        taskExecutionId: input.taskRunId,
-        unsatisfiedStepIds: input.verification.unsatisfiedStepIds,
-        missingEvidenceKinds: input.verification.missingEvidenceKinds,
-      },
-    });
-
-    const advisorResult = await this.dispatchToWorker(input.worker, {
-      ...input.dispatchBase,
-      recoveryAdvisor: advisorRequest,
-    });
-    const proposal = readRecoveryAdvisorProposal(advisorResult.metadata);
-    let advice = validateRecoveryAdvisorProposal(proposal, advisorRequest);
-    let adviceSource: 'llm' | 'deterministic' = 'llm';
-    if (!advice) {
-      advice = buildDeterministicRecoveryAdvice(advisorRequest);
-      adviceSource = 'deterministic';
-    }
-    if (!advice) {
-      this.observability.intentRoutingTrace?.record({
-        stage: 'recovery_advisor_rejected',
-        requestId: input.requestId,
-        messageId: input.request.message.id,
-        userId: input.request.userId,
-        channel: input.request.message.channel,
-        agentId: input.target.agentId,
-        contentPreview: input.request.message.content,
-        details: {
-          ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
-          ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
-          taskExecutionId: input.taskRunId,
-          reason: 'advisor_proposal_invalid_or_empty',
-        },
-      });
-      return null;
-    }
-
-    const rootExecutionId = input.request.delegation?.rootExecutionId ?? input.taskRunId;
-    const parentExecutionId = input.request.delegation?.executionId;
-    const now = this.observability.now ?? Date.now;
-    const recoveryContext = buildRecoveryAdvisorGraphContext({
-      graphId: `execution-graph:${input.taskRunId}:recovery`,
-      executionId: input.taskRunId,
-      rootExecutionId,
-      ...(parentExecutionId ? { parentExecutionId } : {}),
-      requestId: input.requestId,
-      runId: input.requestId,
-      channel: input.request.message.channel,
-      agentId: input.target.agentId,
-      userId: input.request.userId,
-      ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
-      failedNodeId: `node:${input.taskRunId}:delegated_worker`,
-      recoveryNodeId: `node:${input.taskRunId}:recover`,
-    });
-    const recovery = runRecoveryAdvisorGraph({
-      context: recoveryContext,
-      intent: input.effectiveIntentDecision,
-      securityContext: {
-        agentId: input.target.agentId,
-        userId: input.request.userId,
-        channel: input.request.message.channel,
-        ...(input.request.message.surfaceId ? { surfaceId: input.request.message.surfaceId } : {}),
-        ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
-      },
-      trigger: {
-        type: 'event',
-        source: 'recovery_advisor',
-        sourceId: input.requestId,
-      },
-      failureReason: input.verification.reasons[0],
-      now,
-      candidate: buildGraphRecoveryProposalCandidateFromAdvice(advice, recoveryContext.failedNodeId),
-      persistence: {
-        createGraph: (graphInput) => {
-          this.observability.executionGraphStore?.createGraph(graphInput);
-        },
-        ingestEvent: (event) => {
-          this.observability.runTimeline?.ingestExecutionGraphEvent(event);
-        },
-        appendEvent: (event) => {
-          this.observability.executionGraphStore?.appendEvent(event);
-        },
-        writeArtifact: (artifact) => {
-          this.observability.executionGraphStore?.writeArtifact(artifact);
-        },
-      },
-    });
-    if (recovery.status !== 'proposed') {
-      this.observability.intentRoutingTrace?.record({
-        stage: 'recovery_advisor_rejected',
-        requestId: input.requestId,
-        messageId: input.request.message.id,
-        userId: input.request.userId,
-        channel: input.request.message.channel,
-        agentId: input.target.agentId,
-        contentPreview: input.request.message.content,
-        details: {
-          ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
-          ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
-          taskExecutionId: input.taskRunId,
-          reason: recovery.rejectionReason ?? 'graph_recovery_candidate_rejected',
-        },
-      });
-      return null;
-    }
-
-    this.observability.intentRoutingTrace?.record({
-      stage: 'recovery_advisor_completed',
-      requestId: input.requestId,
-      messageId: input.request.message.id,
-      userId: input.request.userId,
-      channel: input.request.message.channel,
-      agentId: input.target.agentId,
-      contentPreview: input.request.message.content,
-      details: {
-        ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
-        ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
-        taskExecutionId: input.taskRunId,
-        adviceSource,
-        proposalArtifactId: recovery.proposalArtifactId,
-        recoveryActionKinds: recovery.proposalArtifact.content.actions.map((action) => action.kind),
-        actionCount: advice.actions.length,
-        actions: advice.actions.map((action) => ({
-          stepId: action.stepId,
-          strategy: action.strategy,
-          ...(action.toolName ? { toolName: action.toolName } : {}),
-        })),
-      },
-    });
-
-    return {
-      graphId: recoveryContext.graphId,
-      proposalArtifactId: recovery.proposalArtifactId,
-      patch: recovery.patch,
-      events: recovery.events,
-      adviceSource,
-    };
-  }
-
   private startDelegatedWorkerGraph(input: {
     request: WorkerMessageRequest;
     target: ResolvedDelegatedTargetMetadata;
@@ -2463,17 +2278,24 @@ export class WorkerManager {
         }
       }
       if (insufficiency) {
-        const recoveryProposal = await this.requestRecoveryAdvisorGuidance({
-          request: effectiveInput,
-          worker,
-          target: delegatedTarget,
+        const recoveryProposal = await runRecoveryAdvisorInvocation({
+          originalRequest: effectiveInput.message.content,
           taskContract: effectiveTaskContract,
           verification: verifiedResult.decision,
           jobSnapshots,
           requestId,
+          messageId: effectiveInput.message.id,
+          userId: effectiveInput.userId,
+          channel: effectiveInput.message.channel,
+          ...(effectiveInput.message.surfaceId ? { surfaceId: effectiveInput.message.surfaceId } : {}),
+          agentId: delegatedTarget.agentId,
           taskRunId: delegatedTaskRunId,
-          effectiveIntentDecision: effectiveIntentDecision ?? undefined,
-          dispatchBase: {
+          ...(effectiveInput.delegation?.executionId ? { parentExecutionId: effectiveInput.delegation.executionId } : {}),
+          ...(effectiveInput.delegation?.rootExecutionId ? { rootExecutionId: effectiveInput.delegation.rootExecutionId } : {}),
+          ...(effectiveInput.delegation?.codeSessionId ? { codeSessionId: effectiveInput.delegation.codeSessionId } : {}),
+          intent: effectiveIntentDecision ?? undefined,
+          now: this.observability.now ?? Date.now,
+          dispatchAdvisor: (advisorRequest) => this.dispatchToWorker(worker, {
             ...baseDispatchParams,
             message: effectiveInput.message,
             systemPrompt: effectiveInput.systemPrompt,
@@ -2482,10 +2304,29 @@ export class WorkerManager {
             activeSkills: effectiveInput.activeSkills ?? [],
             toolContext: effectiveInput.toolContext ?? '',
             runtimeNotices: effectiveInput.runtimeNotices ?? [],
+            additionalSections: baseDispatchParams.additionalSections,
             executionProfile: effectiveExecutionProfile,
             continuity: effectiveInput.continuity,
             pendingAction: effectiveInput.pendingAction,
             pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
+            recoveryAdvisor: advisorRequest,
+          }),
+          trace: (entry) => {
+            this.observability.intentRoutingTrace?.record(entry);
+          },
+          persistence: {
+            createGraph: (graphInput) => {
+              this.observability.executionGraphStore?.createGraph(graphInput);
+            },
+            ingestEvent: (event) => {
+              this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+            },
+            appendEvent: (event) => {
+              this.observability.executionGraphStore?.appendEvent(event);
+            },
+            writeArtifact: (artifact) => {
+              this.observability.executionGraphStore?.writeArtifact(artifact);
+            },
           },
         });
         if (recoveryProposal) {
@@ -2501,12 +2342,7 @@ export class WorkerManager {
             content: result.content,
             metadata: {
               ...(result.metadata ?? {}),
-              executionGraphRecovery: {
-                graphId: recoveryProposal.graphId,
-                proposalArtifactId: recoveryProposal.proposalArtifactId,
-                adviceSource: recoveryProposal.adviceSource,
-                actionKinds: recoveryProposal.patch.operations.map((operation) => operation.kind),
-              },
+              ...recoveryProposal.metadata,
             },
           };
         }
