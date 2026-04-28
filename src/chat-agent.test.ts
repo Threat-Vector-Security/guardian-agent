@@ -21,11 +21,11 @@ import { tryDirectGoogleWorkspaceRead } from './runtime/chat-agent/direct-mailbo
 import {
   tryDirectPersonalAssistantRead,
   tryDirectPersonalAssistantWrite,
-  type DirectPersonalAssistantDeps,
 } from './runtime/chat-agent/direct-personal-assistant.js';
 import {
   buildDirectAutomationDeps,
   buildDirectMailboxDeps,
+  buildDirectPersonalAssistantDeps,
   type DirectRuntimeDepsInput,
 } from './runtime/chat-agent/direct-runtime-deps.js';
 import { PendingActionStore, type PendingActionRecord } from './runtime/pending-actions.js';
@@ -48,17 +48,44 @@ function createDirectRuntimeDeps(
     setPendingApprovalActionForRequest: vi.fn(() => ({ action: null })),
     setChatContinuationGraphPendingApprovalActionForRequest: vi.fn(() => ({ action: null })),
     buildPendingApprovalBlockedResponse: vi.fn((_result, fallbackContent) => ({ content: fallbackContent })),
+    buildImmediateResponseMetadata: vi.fn(() => undefined),
     ...overrides,
   };
 }
 
-function directPersonalAssistantDepsForAgent(agent: any): DirectPersonalAssistantDeps {
-  return {
-    tools: agent.tools,
+function directPersonalAssistantDepsForAgent(agent: any) {
+  return buildDirectPersonalAssistantDeps(createDirectRuntimeDeps(agent.tools, {
+    agentId: agent.id,
     secondBrainService: agent.secondBrainService,
-    buildClarificationResponse: (input) => agent.buildDirectSecondBrainClarificationResponse(input),
-    executeMutation: (input) => agent.executeDirectSecondBrainMutation(input),
-  };
+    setApprovalFollowUp: (approvalId, copy) => agent.setApprovalFollowUp(approvalId, copy),
+    getPendingApprovals: (userKey, surfaceId, nowMs) => agent.getPendingApprovals(userKey, surfaceId, nowMs),
+    formatPendingApprovalPrompt: (ids, summaries) => agent.formatPendingApprovalPrompt(ids, summaries),
+    parsePendingActionUserKey: (userKey) => agent.parsePendingActionUserKey(userKey),
+    setClarificationPendingAction: (userId, channel, surfaceId, action, nowMs) => agent.setClarificationPendingAction(
+      userId,
+      channel,
+      surfaceId,
+      action,
+      nowMs,
+    ),
+    setPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => agent.setPendingApprovalActionForRequest(
+      userKey,
+      surfaceId,
+      action,
+      nowMs,
+    ),
+    buildPendingApprovalBlockedResponse: (result, fallbackContent) => agent.buildPendingApprovalBlockedResponse(
+      result,
+      fallbackContent,
+    ),
+    buildImmediateResponseMetadata: (_pendingApprovalIds, userId, channel, surfaceId, options) => agent.buildImmediateResponseMetadata(
+      [],
+      userId,
+      channel,
+      surfaceId,
+      options,
+    ),
+  }));
 }
 
 function tryAgentDirectSecondBrainRead(

@@ -7,7 +7,6 @@ import {
   type ChatDirectCodingRouteDeps,
 } from './direct-route-handlers.js';
 import type { DirectCodingBackendDeps } from './direct-coding-backend.js';
-import type { DirectPersonalAssistantDeps } from './direct-personal-assistant.js';
 import type { DirectRuntimeDepsInput } from './direct-runtime-deps.js';
 
 const originalMessage: UserMessage = {
@@ -28,11 +27,15 @@ const ctx = {
   checkAction: vi.fn(),
 } as unknown as AgentContext;
 
-function runtimeDeps(tools: DirectRuntimeDepsInput['tools']): DirectRuntimeDepsInput {
+function runtimeDeps(
+  tools: DirectRuntimeDepsInput['tools'],
+  overrides: Partial<DirectRuntimeDepsInput> = {},
+): DirectRuntimeDepsInput {
   return {
     agentId: 'chat',
     tools,
     conversationService: { getHistoryForContext: vi.fn(() => []) },
+    buildImmediateResponseMetadata: vi.fn(() => undefined),
     setApprovalFollowUp: vi.fn(),
     getPendingApprovals: vi.fn(() => null),
     formatPendingApprovalPrompt: vi.fn(() => 'approve'),
@@ -41,17 +44,6 @@ function runtimeDeps(tools: DirectRuntimeDepsInput['tools']): DirectRuntimeDepsI
     setPendingApprovalActionForRequest: vi.fn(() => ({ action: null })),
     setChatContinuationGraphPendingApprovalActionForRequest: vi.fn(() => ({ action: null })),
     buildPendingApprovalBlockedResponse: vi.fn(() => ({ content: 'blocked' })),
-  };
-}
-
-function personalAssistantDeps(
-  overrides: Partial<DirectPersonalAssistantDeps> = {},
-): DirectPersonalAssistantDeps {
-  return {
-    tools: { isEnabled: vi.fn(() => false) },
-    secondBrainService: null,
-    buildClarificationResponse: vi.fn(() => ({ content: 'clarify' })),
-    executeMutation: vi.fn(async () => ({ content: 'mutated' })),
     ...overrides,
   };
 }
@@ -122,7 +114,6 @@ describe('chat direct route handlers', () => {
     const handlers = buildChatDirectRouteHandlers({
       agentId: 'chat',
       tools,
-      runtimeDeps: runtimeDeps(tools),
       message: originalMessage,
       routedMessage,
       ctx,
@@ -150,7 +141,7 @@ describe('chat direct route handlers', () => {
       sanitizeToolResultForLlm: vi.fn(),
       chatWithFallback: vi.fn(),
       executeStoredFilesystemSave: vi.fn(),
-      personalAssistantDeps: personalAssistantDeps({
+      runtimeDeps: runtimeDeps(tools, {
         secondBrainService: {
           getOverview,
         } as never,
@@ -219,7 +210,6 @@ describe('chat direct route handlers', () => {
       chatWithFallback: vi.fn(),
       executeStoredFilesystemSave: vi.fn(),
       codingRoutes: codingRoutes(tools),
-      personalAssistantDeps: personalAssistantDeps(),
     });
 
     const result = await handlers.coding_backend?.({
@@ -304,7 +294,6 @@ describe('chat direct route handlers', () => {
           executeDirectCodeSessionTool,
         },
       }),
-      personalAssistantDeps: personalAssistantDeps(),
     });
 
     const result = await handlers.coding_session_control?.({
@@ -366,7 +355,6 @@ describe('chat direct route handlers', () => {
       chatWithFallback: vi.fn(),
       executeStoredFilesystemSave: vi.fn(),
       codingRoutes: codingRoutes(tools),
-      personalAssistantDeps: personalAssistantDeps(),
     });
 
     const result = await handlers.provider_read?.({
@@ -417,7 +405,6 @@ describe('chat direct route handlers', () => {
       chatWithFallback: vi.fn(),
       executeStoredFilesystemSave: vi.fn(),
       codingRoutes: codingRoutes(tools),
-      personalAssistantDeps: personalAssistantDeps(),
     });
 
     const result = await handlers.memory_write?.({
@@ -490,7 +477,6 @@ describe('chat direct route handlers', () => {
       chatWithFallback: vi.fn(),
       executeStoredFilesystemSave: vi.fn(),
       codingRoutes: codingRoutes(tools),
-      personalAssistantDeps: personalAssistantDeps(),
     });
 
     const result = await handlers.memory_write?.({
@@ -543,7 +529,6 @@ describe('chat direct route handlers', () => {
       chatWithFallback: vi.fn(),
       executeStoredFilesystemSave: vi.fn(),
       codingRoutes: codingRoutes(tools),
-      personalAssistantDeps: personalAssistantDeps(),
     });
 
     const result = await handlers.memory_read?.({
@@ -591,7 +576,6 @@ describe('chat direct route handlers', () => {
       chatWithFallback: vi.fn(),
       executeStoredFilesystemSave,
       codingRoutes: codingRoutes(tools),
-      personalAssistantDeps: personalAssistantDeps(),
     });
 
     const result = await handlers.filesystem?.({
