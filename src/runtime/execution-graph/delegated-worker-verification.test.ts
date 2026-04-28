@@ -7,6 +7,7 @@ import {
   isDelegatedWorkerBudgetExhausted,
   isDelegatedJobInFlight,
   reconcileDelegatedEnvelopeWithJobSnapshots,
+  runDelegatedEvidenceDrainExtension,
   shouldExtendDelegatedEvidenceDrain,
   verifyDelegatedWorkerResult,
   type DelegatedJobSnapshot,
@@ -166,6 +167,69 @@ describe('delegated worker verification graph policy', () => {
 
     expect(isDelegatedWorkerBudgetExhausted('max_wall_clock')).toBe(true);
     expect(isDelegatedWorkerBudgetExhausted('provider_error')).toBe(false);
+  });
+
+  it('runs extended evidence drain through broker-safe polling callbacks', async () => {
+    const taskContract = delegatedTaskContract();
+    const metadata = buildDelegatedExecutionMetadata(buildDelegatedSyntheticEnvelope({
+      taskContract,
+      runStatus: 'incomplete',
+      stopReason: 'end_turn',
+      operatorSummary: 'Delegated evidence is still draining.',
+    }));
+    const traces: Array<{ stage: string; details: Record<string, unknown> }> = [];
+    let observedDeadlineMs = 0;
+
+    const result = await runDelegatedEvidenceDrainExtension({
+      requestId: 'req-drain',
+      taskRunId: 'task-drain',
+      metadata,
+      intentDecision: undefined,
+      executionProfile: undefined,
+      taskContract,
+      decision: {
+        decision: 'insufficient',
+        reasons: ['Read evidence is still running.'],
+        retryable: true,
+        missingEvidenceKinds: ['repo_evidence'],
+        unsatisfiedStepIds: ['read', 'answer'],
+      },
+      jobSnapshots: [{ id: 'job-running', toolName: 'fs_read', status: 'running' }],
+      drainPendingJobs: async (deadlineMs) => {
+        observedDeadlineMs = deadlineMs;
+        return {
+          snapshots: [{
+            id: 'job-drained',
+            toolName: 'fs_read',
+            status: 'completed',
+            argsPreview: '{"path":"src/runtime/execution-graph/delegated-worker-verification.ts"}',
+            resultPreview: 'verifyDelegatedWorkerResult',
+          }],
+          waitedMs: 125,
+          inFlightRemaining: 0,
+        };
+      },
+      trace: (event) => traces.push(event),
+    });
+
+    expect(observedDeadlineMs).toBe(60_000);
+    expect(traces).toEqual([]);
+    expect(result?.jobSnapshots).toHaveLength(1);
+    expect(result?.verifiedResult.envelope.evidenceReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        receiptId: 'job:job-drained',
+        toolName: 'fs_read',
+        status: 'succeeded',
+      }),
+    ]));
+    expect(result?.verifiedResult.envelope.stepReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stepId: 'read',
+        status: 'satisfied',
+      }),
+    ]));
+    expect(result?.verifiedResult.decision.missingEvidenceKinds ?? []).not.toContain('repo_evidence');
+    expect(result?.insufficiency?.unsatisfiedSteps.some((step) => step.stepId === 'read')).not.toBe(true);
   });
 });
 
