@@ -13,6 +13,9 @@ export interface BrokerClientOptions {
 
 type NotificationHandler = (notification: JsonRpcNotification) => void;
 
+const DEFAULT_BROKER_REQUEST_TIMEOUT_MS = 30_000;
+const BROKER_TOOL_CALL_REQUEST_TIMEOUT_MS = 120_000;
+
 export function toBrokerTransportChatOptions(options?: ChatOptions): Omit<ChatOptions, 'signal'> | undefined {
   if (!options) return undefined;
   const { signal: _signal, ...transportOptions } = options;
@@ -41,7 +44,7 @@ export class BrokerClient {
     this.inputStream = options.inputStream;
     this.outputStream = options.outputStream;
     this.capabilityToken = options.capabilityToken;
-    this.requestTimeoutMs = Math.max(1_000, options.requestTimeoutMs ?? 30_000);
+    this.requestTimeoutMs = Math.max(1_000, options.requestTimeoutMs ?? DEFAULT_BROKER_REQUEST_TIMEOUT_MS);
 
     this.inputStream.setEncoding?.('utf8');
     this.inputStream.on('data', (chunk: string | Buffer) => {
@@ -114,7 +117,7 @@ export class BrokerClient {
       activeSkills: request.activeSkills,
       codeContext: request.codeContext,
       toolContextMode: request.toolContextMode,
-    });
+    }, BROKER_TOOL_CALL_REQUEST_TIMEOUT_MS);
     return result;
   }
 

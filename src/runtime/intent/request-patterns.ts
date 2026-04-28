@@ -19,6 +19,7 @@ const RAW_SECRET_TARGET_PATTERN = /\b(?:api\s*keys?|bearer\s*tokens?|telegram\s*
 const RAW_SECRET_QUALIFIER_PATTERN = /\b(?:raw|actual|full|unredacted|plain\s*text|plaintext|values?)\b/;
 const RAW_SECRET_PROTECTED_SOURCE_PATTERN = /(?:^|[\\/\s.])\.guardianagent\b|\bguardianagent\b.{0,80}\b(?:config|configuration|credential|credentials|secrets?)\b|\b(?:config|configuration|credential|credentials?)\s+files?\b/;
 const RAW_SECRET_REDACTION_REQUEST_PATTERN = /\b(?:redacted|redact|masked|mask|sanitize|sanitized|without\s+(?:printing|revealing|showing|displaying)\s+(?:raw\s+)?(?:secrets?|credentials?|tokens?|api\s*keys?))\b/;
+const NEGATED_RAW_SECRET_DISCLOSURE_CLAUSE_PATTERN = /\b(?:(?:do\s+not|don't|never)\s+(?:expose|include|print|show|reveal|display|dump|extract|exfiltrate|leak|return|give|read|open|cat|list)|without\s+(?:exposing|including|printing|revealing|showing|displaying|dumping|extracting|exfiltrating|leaking|returning|giving|reading|opening|listing))\b[^.!?\n]{0,180}\b(?:raw\s+)?(?:api\s*keys?|bearer\s*tokens?|telegram\s*(?:bot\s*)?tokens?|provider\s+credentials?|credential\s+values?|credentials?|secrets?|secret\s+store|access\s+tokens?|refresh\s+tokens?)\b[^.!?\n]*/g;
 
 export function looksLikeContextDependentPromptSelectionTurn(request: string): boolean {
   const normalized = request.trim().toLowerCase();
@@ -67,10 +68,15 @@ export function looksLikeSelfContainedDirectAnswerTurn(request: string | undefin
 export function isRawCredentialDisclosureRequest(request: string | undefined): boolean {
   const normalized = normalizeIntentGatewayRepairText(request);
   if (!normalized || RAW_SECRET_REDACTION_REQUEST_PATTERN.test(normalized)) return false;
-  if (!RAW_SECRET_DISCLOSURE_VERB_PATTERN.test(normalized)) return false;
-  if (!RAW_SECRET_TARGET_PATTERN.test(normalized)) return false;
-  return RAW_SECRET_QUALIFIER_PATTERN.test(normalized)
-    || RAW_SECRET_PROTECTED_SOURCE_PATTERN.test(normalized);
+  const positiveCandidate = normalized
+    .replace(NEGATED_RAW_SECRET_DISCLOSURE_CLAUSE_PATTERN, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!positiveCandidate) return false;
+  if (!RAW_SECRET_DISCLOSURE_VERB_PATTERN.test(positiveCandidate)) return false;
+  if (!RAW_SECRET_TARGET_PATTERN.test(positiveCandidate)) return false;
+  return RAW_SECRET_QUALIFIER_PATTERN.test(positiveCandidate)
+    || RAW_SECRET_PROTECTED_SOURCE_PATTERN.test(positiveCandidate);
 }
 
 export function isExplicitComplexPlanningRequest(content: string | undefined): boolean {

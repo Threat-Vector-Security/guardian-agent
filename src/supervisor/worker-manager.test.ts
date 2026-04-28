@@ -3124,6 +3124,214 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
+  it('waits for in-flight delegated evidence jobs before failing a missing non-answer step', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    let manager: { shutdown: () => void } | undefined;
+    try {
+      workerMessageHandler = (params) => {
+        if (params.groundedSynthesis) {
+          return {
+            content: [
+              '- Automation: success, 38 listed.',
+              '- Repo: success, src/runtime/chat-agent/live-tool-loop-controller.ts.',
+            ].join('\n'),
+            metadata: {
+              workerExecution: {
+                lifecycle: 'completed',
+                source: 'tool_loop',
+                completionReason: 'model_response',
+                responseQuality: 'final',
+                terminationReason: 'clean_exit',
+                toolCallCount: 0,
+                toolResultCount: 0,
+                successfulToolResultCount: 0,
+              },
+            },
+          };
+        }
+        return {
+          content: 'I started the status sweep, but the repo search is still finishing.',
+          metadata: {
+            skipTestDelegatedEnvelope: true,
+            workerExecution: {
+              lifecycle: 'completed',
+              source: 'tool_loop',
+              completionReason: 'empty_response_fallback',
+              responseQuality: 'final',
+              terminationReason: 'clean_exit',
+              roundCount: 4,
+              toolCallCount: 2,
+              toolResultCount: 1,
+              successfulToolResultCount: 1,
+            },
+          },
+        };
+      };
+
+      const listJobs = vi.fn(() => {
+        const searchCompleted = Date.now() >= 10_000;
+        return [
+          {
+            id: 'job-automation-list',
+            toolName: 'automation_list',
+            status: 'succeeded',
+            requestId: 'm-inflight-evidence',
+            argsPreview: '{}',
+            resultPreview: '{"count":38}',
+            createdAt: 1,
+            startedAt: 2,
+            completedAt: 3,
+          },
+          {
+            id: 'job-code-symbol-search',
+            toolName: 'code_symbol_search',
+            status: searchCompleted ? 'succeeded' : 'running',
+            requestId: 'm-inflight-evidence',
+            argsPreview: '{"query":"runLiveToolLoopController","path":"S:\\\\Development\\\\GuardianAgent"}',
+            resultPreview: searchCompleted
+              ? '{"matches":[{"path":"S:\\\\Development\\\\GuardianAgent\\\\src\\\\runtime\\\\chat-agent\\\\live-tool-loop-controller.ts","relativePath":"src/runtime/chat-agent/live-tool-loop-controller.ts"}]}'
+              : undefined,
+            createdAt: 4,
+            startedAt: 5,
+            ...(searchCompleted ? { completedAt: 10_000 } : {}),
+          },
+        ];
+      });
+      const intentRoutingTrace = { record: vi.fn() };
+      const runTimeline = { ingestDelegatedWorkerProgress: vi.fn() };
+      manager = new WorkerManager(
+        {
+          listAlwaysLoadedDefinitions: () => [],
+          listJobs,
+        } as never,
+        {
+          getFallbackProviderConfig: () => undefined,
+          getConfigSnapshot: () => createExecutionProfileTestConfig(),
+          auditLog: { record: vi.fn() },
+          registry: {
+            get: (agentId: string) => agentId === 'local'
+              ? {
+                  agent: { name: 'Guardian Agent' },
+                  definition: {
+                    orchestration: {
+                      role: 'coordinator',
+                      label: 'Guardian Coordinator',
+                    },
+                  },
+                }
+              : undefined,
+          },
+        } as never,
+        {
+          workerEntryPoint: 'src/worker/worker-entry.ts',
+          workerMaxMemoryMb: 2048,
+          workerIdleTimeoutMs: 300_000,
+          workerShutdownGracePeriodMs: 10,
+          capabilityTokenTtlMs: 600_000,
+          capabilityTokenMaxToolCalls: 0,
+        } as never,
+        undefined,
+        {
+          intentRoutingTrace,
+          runTimeline,
+          now: () => Date.now(),
+        },
+      );
+
+      const resultPromise = manager.handleMessage({
+        sessionId: 'tester:web',
+        agentId: 'local',
+        userId: 'tester',
+        grantedCapabilities: [],
+        message: {
+          id: 'm-inflight-evidence',
+          userId: 'tester',
+          channel: 'web',
+          content: 'List automations, search this repo for where runLiveToolLoopController is defined, and return a short answer.',
+          metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+            mode: 'primary',
+            available: true,
+            model: 'test-model',
+            latencyMs: 1,
+            decision: {
+              route: 'general_assistant',
+              confidence: 'high',
+              operation: 'run',
+              summary: 'Read automations, search the repo, and answer.',
+              turnRelation: 'new_request',
+              resolution: 'ready',
+              missingFields: [],
+              executionClass: 'tool_orchestration',
+              preferredTier: 'external',
+              requiresRepoGrounding: false,
+              requiresToolSynthesis: true,
+              requireExactFileReferences: false,
+              expectedContextPressure: 'medium',
+              preferredAnswerPath: 'tool_loop',
+              plannedSteps: [
+                { kind: 'read', summary: 'List saved automations.', expectedToolCategories: ['automation_list'], required: true },
+                { kind: 'search', summary: 'Search this repo for where runLiveToolLoopController is defined.', expectedToolCategories: ['code_symbol_search'], required: true },
+                { kind: 'answer', summary: 'Return the final answer.', required: true, dependsOn: ['step_1', 'step_2'] },
+              ],
+              entities: {},
+            },
+          }),
+          timestamp: Date.now(),
+        },
+        systemPrompt: 'system',
+        history: [],
+        knowledgeBases: [],
+        activeSkills: [],
+        additionalSections: [],
+        toolContext: '',
+        runtimeNotices: [],
+        executionProfile: {
+          id: 'managed_cloud_tool',
+          providerName: 'ollama-cloud-tools',
+          providerType: 'ollama_cloud',
+          providerModel: 'glm-4.7',
+          providerLocality: 'external',
+          providerTier: 'managed_cloud',
+          requestedTier: 'external',
+          preferredAnswerPath: 'tool_loop',
+          expectedContextPressure: 'medium',
+          contextBudget: 32_000,
+          toolContextMode: 'tight',
+          maxAdditionalSections: 1,
+          maxRuntimeNotices: 2,
+          fallbackProviderOrder: ['ollama-cloud-tools'],
+          reason: 'test',
+          routingMode: 'auto',
+          selectionSource: 'delegated_role',
+        },
+        delegation: {
+          requestId: 'm-inflight-evidence',
+          executionId: 'exec-inflight-evidence',
+          rootExecutionId: 'exec-inflight-evidence',
+          originChannel: 'web',
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(70_000);
+      const result = await resultPromise;
+
+      expect(result.content).toContain('src/runtime/chat-agent/live-tool-loop-controller.ts');
+      expect(result.content).not.toContain('Delegated work failed.');
+      expect(listJobs.mock.calls.length).toBeGreaterThan(2);
+      expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual(expect.arrayContaining([
+        'delegated_job_wait_expired',
+        'delegated_worker_retrying',
+        'delegated_worker_completed',
+      ]));
+    } finally {
+      manager?.shutdown();
+      vi.useRealTimers();
+    }
+  });
+
   it('retries insufficient exact-file delegated repo inspections with an escalated frontier profile', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
