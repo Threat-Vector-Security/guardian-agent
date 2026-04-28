@@ -253,11 +253,12 @@ describe('createDashboardRuntimeCallbacks', () => {
     expect(dispatchDashboardMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
       agentId: 'prepared-agent',
       msg: { content: 'prepared message', userId: 'prepared-user', channel: 'web' },
-      options: {
+      options: expect.objectContaining({
         priority: 'high',
         requestType: 'chat',
         requestId: 'req-1',
-      },
+        abortSignal: expect.any(AbortSignal),
+      }),
     }));
     expect(sseEvents).toEqual([
       {
@@ -476,9 +477,13 @@ describe('createDashboardRuntimeCallbacks', () => {
 
   it('supports canceling an active stream dispatch and suppresses late done events', async () => {
     let resolveDispatch: ((value: { content: string; metadata?: Record<string, unknown> }) => void) | null = null;
-    const dispatchDashboardMessage = vi.fn(() => new Promise<{ content: string; metadata?: Record<string, unknown> }>((resolve) => {
-      resolveDispatch = resolve;
-    }));
+    let observedAbortSignal: AbortSignal | undefined;
+    const dispatchDashboardMessage = vi.fn((input: { options?: { abortSignal?: AbortSignal } }) => {
+      observedAbortSignal = input.options?.abortSignal;
+      return new Promise<{ content: string; metadata?: Record<string, unknown> }>((resolve) => {
+        resolveDispatch = resolve;
+      });
+    });
     const options = createHarness({
       dispatchDashboardMessage,
     });
@@ -492,6 +497,7 @@ describe('createDashboardRuntimeCallbacks', () => {
     );
 
     await Promise.resolve();
+    expect(observedAbortSignal).toBeDefined();
 
     await expect(callbacks.onStreamCancel?.({
       requestId: 'req-1',
@@ -505,6 +511,8 @@ describe('createDashboardRuntimeCallbacks', () => {
       runId: 'req-1',
       errorCode: 'REQUEST_CANCELED',
     });
+    expect(observedAbortSignal?.aborted).toBe(true);
+    expect((observedAbortSignal as { reason?: Error } | undefined)?.reason?.message).toBe('Request canceled by operator.');
 
     resolveDispatch?.({ content: 'late reply', metadata: { step: 'stream' } });
 
@@ -527,6 +535,78 @@ describe('createDashboardRuntimeCallbacks', () => {
           requestId: 'req-1',
           runId: 'req-1',
           error: 'Request canceled by operator.',
+          errorCode: 'REQUEST_CANCELED',
+        },
+      },
+    ]);
+  });
+
+  it('does not dispatch prepared runtime work after a stream is canceled during preparation', async () => {
+    const prepared = {
+      requestId: 'prepared-1',
+      decision: { agentId: 'prepared-agent', confidence: 'high', reason: 'prepared' },
+      gateway: null,
+      routedMessage: {
+        content: 'prepared message',
+        userId: 'prepared-user',
+        channel: 'web',
+      },
+    };
+    let resolvePrepare: ((value: typeof prepared) => void) | undefined;
+    const prepareIncomingDispatch = vi.fn(() => new Promise<typeof prepared>((resolve) => {
+      resolvePrepare = resolve;
+    }));
+    const dispatchDashboardMessage = vi.fn(async () => ({ content: 'late dispatch' }));
+    const options = createHarness({
+      dispatchDashboardMessage,
+      prepareIncomingDispatch,
+    });
+    const callbacks = createDashboardRuntimeCallbacks(options);
+    const sseEvents: Array<{ type: string; data: unknown }> = [];
+
+    const streamPromise = callbacks.onStreamDispatch?.(
+      undefined,
+      { content: 'stream this', userId: 'web-user', channel: 'web' },
+      (event) => sseEvents.push({ type: event.type, data: event.data }),
+    );
+
+    await Promise.resolve();
+
+    await expect(callbacks.onStreamCancel?.({
+      requestId: 'req-1',
+      userId: 'web-user',
+      channel: 'web',
+      reason: 'stop during prepare',
+    })).resolves.toEqual({
+      success: true,
+      canceled: true,
+      message: 'stop during prepare',
+      requestId: 'req-1',
+      runId: 'req-1',
+      errorCode: 'REQUEST_CANCELED',
+    });
+
+    resolvePrepare?.(prepared);
+
+    await expect(streamPromise).resolves.toEqual({
+      requestId: 'req-1',
+      runId: 'req-1',
+      content: '',
+      error: 'stop during prepare',
+      errorCode: 'REQUEST_CANCELED',
+    });
+    expect(dispatchDashboardMessage).not.toHaveBeenCalled();
+    expect(sseEvents).toEqual([
+      {
+        type: 'chat.thinking',
+        data: { requestId: 'req-1', runId: 'req-1' },
+      },
+      {
+        type: 'chat.error',
+        data: {
+          requestId: 'req-1',
+          runId: 'req-1',
+          error: 'stop during prepare',
           errorCode: 'REQUEST_CANCELED',
         },
       },

@@ -252,6 +252,7 @@ export function createDashboardRuntimeCallbacks(
       const channel = msg.channel?.trim() || 'web';
       const channelUserId = msg.userId?.trim() || `${channel}-user`;
       const canonicalUserId = options.identity.resolveCanonicalUserId(channel, channelUserId);
+      const abortController = new AbortController();
       const active: ActiveStreamDispatch = {
         requestId,
         channel,
@@ -260,6 +261,7 @@ export function createDashboardRuntimeCallbacks(
         emitSSE,
         canceled: false,
         cancelMessage: DEFAULT_CANCEL_MESSAGE,
+        abortController,
       };
       activeStreamDispatches.set(requestId, active);
       emitSSE({
@@ -274,6 +276,9 @@ export function createDashboardRuntimeCallbacks(
         const prepared = explicitAgentId
           ? await prepareExplicitAgentDispatch(options.prepareIncomingDispatch, msg)
           : await options.prepareIncomingDispatch(configuredWebDefaultAgentId, msg);
+        if (active.canceled) {
+          return buildCanceledResult(requestId, active.cancelMessage);
+        }
         const resolvedAgentId = explicitAgentId
           || prepared.decision?.agentId
           || configuredWebDefaultAgentId

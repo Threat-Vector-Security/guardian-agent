@@ -1069,11 +1069,17 @@ describe('Runtime', () => {
 
   describe('Fix #9: Resource limit enforcement', () => {
     it('should enforce budget timeout on slow agent', async () => {
+      let observedAbortSignal: AbortSignal | undefined;
+      let observedAbortEvent = false;
       class SlowAgent extends BaseAgent {
         constructor() {
           super('slow', 'SlowAgent', { handleMessages: true });
         }
-        async onMessage(): Promise<AgentResponse> {
+        async onMessage(message: UserMessage): Promise<AgentResponse> {
+          observedAbortSignal = message.abortSignal;
+          message.abortSignal?.addEventListener('abort', () => {
+            observedAbortEvent = true;
+          });
           // Simulate slow work (500ms)
           await new Promise(r => setTimeout(r, 500));
           return { content: 'done' };
@@ -1089,6 +1095,9 @@ describe('Runtime', () => {
       await expect(runtime.dispatchMessage('slow', {
         id: '1', userId: 'u', channel: 'cli', content: 'test', timestamp: Date.now(),
       })).rejects.toThrow('exceeded budget timeout');
+
+      expect(observedAbortSignal?.aborted).toBe(true);
+      expect(observedAbortEvent).toBe(true);
     });
 
     it('should enforce token rate limit', async () => {
