@@ -519,7 +519,7 @@ function scanWebhookAntiPatterns(relativePath: string, content: string, context:
   const normalizedPath = relativePath.replace(/\\/g, '/').toLowerCase();
   const mentionsWebhook = normalizedPath.includes('webhook') || /\bwebhooks?\b/i.test(content);
   if (!mentionsWebhook) return;
-  const consumesBody = /\b(?:req\.body|request\.json\s*\(|request\.text\s*\(|await\s+.*\.json\s*\(|rawBody|bodyParser)\b/i.test(content);
+  const consumesBody = /\b(?:req\.body|request\.json\s*\(|request\.text\s*\(|await\s+.*\.json\s*\(|rawBody|bodyParser)/i.test(content);
   if (!consumesBody) return;
   const verifiesSignature = /\b(?:constructEvent|x-hub-signature|x-signature|stripe-signature|svix-signature|webhook-signature|createHmac|timingSafeEqual|verifyWebhook|verifySignature|signature)\b/i.test(content);
   if (verifiesSignature) return;

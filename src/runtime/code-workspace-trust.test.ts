@@ -74,6 +74,36 @@ describe('code-workspace-trust', () => {
     expect(assessment.summary).toMatch(/high-risk/i);
   });
 
+  it('flags SaaS credential, authorization, storage, and webhook anti-patterns', () => {
+    const workspaceRoot = createWorkspace('saas-anti-patterns', {
+      'src/components/Login.tsx': [
+        'import { createClient } from "@supabase/supabase-js";',
+        'export const client = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY);',
+        'export const fallback = process.env.STRIPE_SECRET_KEY || "sk_test_change_me";',
+      ].join('\n'),
+      'supabase/migrations/001_policy.sql': [
+        'create policy "any signed in user can read" on public.accounts',
+        'for select using (true);',
+        'insert into storage.buckets (id, name, public) values (\'avatars\', \'avatars\', true);',
+      ].join('\n'),
+      'src/api/webhook.ts': [
+        'export async function POST(request: Request) {',
+        '  const event = await request.json();',
+        '  return Response.json({ ok: true, event });',
+        '}',
+      ].join('\n'),
+    });
+
+    const assessment = assessCodeWorkspaceTrustSync(workspaceRoot);
+    expect(assessment.state).toBe('blocked');
+    expect(assessment.findings.some((finding) => finding.kind === 'public_env_secret')).toBe(true);
+    expect(assessment.findings.some((finding) => finding.kind === 'privileged_client_secret')).toBe(true);
+    expect(assessment.findings.some((finding) => finding.kind === 'hardcoded_fallback_secret')).toBe(true);
+    expect(assessment.findings.some((finding) => finding.kind === 'permissive_rls_policy')).toBe(true);
+    expect(assessment.findings.some((finding) => finding.kind === 'public_storage_bucket')).toBe(true);
+    expect(assessment.findings.some((finding) => finding.kind === 'unsigned_webhook_handler')).toBe(true);
+  });
+
   it('treats inline Node bootstrap helpers as caution findings instead of blocking indicators', () => {
     const workspaceRoot = createWorkspace('node-inline-caution', {
       'scripts/start-dev.sh': [

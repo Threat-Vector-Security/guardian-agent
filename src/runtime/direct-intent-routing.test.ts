@@ -329,6 +329,47 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
+  it('defers multi-domain search plans instead of dispatching only direct web search', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({
+        route: 'search_task',
+        operation: 'search',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Search the web for the page title.',
+            expectedToolCategories: ['web_search', 'browser'],
+            required: true,
+          },
+          {
+            kind: 'search',
+            summary: 'Search the repo for the implementation.',
+            expectedToolCategories: ['repo_inspect'],
+            required: true,
+            dependsOn: ['step_1'],
+          },
+          {
+            kind: 'read',
+            summary: 'Search memory for the marker.',
+            expectedToolCategories: ['memory'],
+            required: true,
+            dependsOn: ['step_2'],
+          },
+          {
+            kind: 'answer',
+            summary: 'Return a three-source comparison.',
+            required: true,
+            dependsOn: ['step_1', 'step_2', 'step_3'],
+          },
+        ],
+      }),
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual([]);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
   it('keeps browser-only action plans on the direct browser candidate', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({

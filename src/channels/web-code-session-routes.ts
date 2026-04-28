@@ -279,8 +279,7 @@ export async function handleWebCodeSessionRoutes(
       return true;
     }
     const sessionId = decodeURIComponent(codeSessionResetMatch[1]);
-    const body = await readBody(req, context.maxBodyBytes);
-    const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string };
+    await readBody(req, context.maxBodyBytes);
     const result = dashboard.onCodeSessionResetConversation({
       sessionId,
       userId: WEB_CODE_USER_ID,

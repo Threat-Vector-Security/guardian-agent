@@ -38,6 +38,15 @@ const BROWSER_READ_TOOL_NAMES = new Set([
   'browser_extract',
   'browser_state',
 ]);
+const MEMORY_READ_TOOL_NAMES = new Set([
+  'memory_recall',
+  'memory_search',
+]);
+const AUTOMATION_WRITE_TOOL_NAMES = new Set([
+  'automation_delete',
+  'automation_save',
+  'automation_set_enabled',
+]);
 
 export interface ToolStepMatchInput {
   hintStepId?: string;
@@ -206,7 +215,15 @@ function isActionToolCategory(value: string): boolean {
     || value === 'web_search'
     || value === 'web_fetch'
     || value === 'browser'
-    || value.startsWith('browser_');
+    || value.startsWith('browser_')
+    || value === 'memory'
+    || value === 'memory_search'
+    || value === 'memory_recall'
+    || value === 'memory_save'
+    || value === 'automation'
+    || value === 'automation_list'
+    || value.startsWith('second_brain_')
+    || value === 'second_brain';
 }
 
 function ensureExactFileReferenceReadStep(
@@ -385,7 +402,7 @@ export function matchPlannedStepForTool(input: ToolStepMatchInput): string | und
       return { step, index, score: Number.NEGATIVE_INFINITY };
     }
     if (step.kind === toolKind) score += 8;
-    if (step.expectedToolCategories?.some((value) => expectedToolCategoryMatchesTool(value, input.toolName, toolKind))) {
+    if (step.expectedToolCategories?.some((value) => expectedToolCategoryMatchesTool(value, input.toolName, toolKind, step.kind))) {
       score += 6;
     }
     const summaryRefs = extractNormalizedRefs(step.summary);
@@ -699,7 +716,7 @@ function inferExpectedToolCategories(
     case 'read':
       return inferReadToolCategories(contract);
     case 'write':
-      return inferWriteToolCategories(step.summary);
+      return inferWriteToolCategories(step.summary, contract);
     case 'memory_save':
       return ['memory_save'];
     case 'tool_call':
@@ -714,6 +731,15 @@ function inferSearchToolCategories(
     route?: string;
   },
 ): string[] {
+  if (contract.route === 'memory_task') {
+    return ['memory_search', 'memory_recall'];
+  }
+  if (contract.route === 'automation_control') {
+    return ['automation_list'];
+  }
+  if (contract.route === 'personal_assistant_task') {
+    return ['second_brain'];
+  }
   if (contract.route === 'browser_task' || contract.route === 'search_task') {
     return ['web_search', 'fs_search', 'code_symbol_search'];
   }
@@ -725,6 +751,15 @@ function inferReadToolCategories(
     route?: string;
   },
 ): string[] {
+  if (contract.route === 'memory_task') {
+    return ['memory_search', 'memory_recall'];
+  }
+  if (contract.route === 'automation_control') {
+    return ['automation_list'];
+  }
+  if (contract.route === 'personal_assistant_task') {
+    return ['second_brain'];
+  }
   if (contract.route === 'browser_task' || contract.route === 'search_task') {
     return ['web_fetch', 'fs_read', 'fs_list'];
   }
@@ -743,7 +778,24 @@ function inferToolCallCategories(
   return [];
 }
 
-function inferWriteToolCategories(summary: string | undefined): string[] {
+function inferWriteToolCategories(
+  summary: string | undefined,
+  contract: {
+    route?: string;
+  },
+): string[] {
+  if (contract.route === 'memory_task') {
+    return ['memory_save'];
+  }
+  if (contract.route === 'automation_authoring' || contract.route === 'automation_control') {
+    return ['automation'];
+  }
+  if (contract.route === 'personal_assistant_task') {
+    return ['second_brain'];
+  }
+  if (contract.route === 'complex_planning_task' || contract.route === 'general_assistant') {
+    return ['write'];
+  }
   const normalized = summary?.trim().toLowerCase() ?? '';
   if (/\b(delete|remove|unlink)\b/.test(normalized)) {
     return ['fs_delete'];
@@ -772,17 +824,35 @@ function inferStepKindFromToolName(toolName: string): PlannedStepKind {
     || toolName === 'fs_list'
     || toolName === 'web_fetch'
     || BROWSER_READ_TOOL_NAMES.has(toolName)
-    || toolName === 'memory_recall'
-    || toolName === 'memory_search'
+    || MEMORY_READ_TOOL_NAMES.has(toolName)
     || toolName === 'automation_list'
     || SECOND_BRAIN_READ_TOOL_NAMES.has(toolName)
   ) {
     return 'read';
   }
-  if (toolName === 'fs_write' || toolName === 'fs_mkdir' || toolName === 'fs_delete' || toolName === 'fs_move' || toolName === 'fs_copy') {
+  if (
+    toolName === 'fs_write'
+    || toolName === 'fs_mkdir'
+    || toolName === 'fs_delete'
+    || toolName === 'fs_move'
+    || toolName === 'fs_copy'
+    || isSecondBrainWriteToolName(toolName)
+    || AUTOMATION_WRITE_TOOL_NAMES.has(toolName)
+  ) {
     return 'write';
   }
   return 'tool_call';
+}
+
+function isSecondBrainWriteToolName(toolName: string): boolean {
+  if (!toolName.startsWith('second_brain_')) {
+    return false;
+  }
+  return toolName.endsWith('_upsert')
+    || toolName.endsWith('_update')
+    || toolName.endsWith('_delete')
+    || toolName === 'second_brain_routine_create'
+    || toolName === 'second_brain_generate_brief';
 }
 
 function toolNameSatisfiesStep(
@@ -796,7 +866,7 @@ function toolNameSatisfiesStep(
       : step.kind === inferredToolKind;
   }
   return step.expectedToolCategories.some((value) => (
-    expectedToolCategoryMatchesTool(value, toolName, inferredToolKind)
+    expectedToolCategoryMatchesTool(value, toolName, inferredToolKind, step.kind)
   ));
 }
 
@@ -804,14 +874,24 @@ function expectedToolCategoryMatchesTool(
   value: string,
   toolName: string,
   inferredToolKind: PlannedStepKind,
+  stepKind: PlannedStepKind,
 ): boolean {
-  return value === toolName
-    || value === inferredToolKind
-    || (value === 'repo_inspect' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
-    || (value === 'repo_inspection' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
-    || (value === 'second_brain' && toolName.startsWith('second_brain_'))
-    || (value === 'browser' && toolName.startsWith('browser_'))
-    || (value === 'automation' && toolName.startsWith('automation_'));
+  const normalized = value.trim();
+  return normalized === toolName
+    || normalized === inferredToolKind
+    || (normalized === 'repo' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
+    || (normalized === 'repository' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
+    || (normalized === 'repo_inspect' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
+    || (normalized === 'repo_inspection' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
+    || (normalized === 'second_brain' && toolName.startsWith('second_brain_'))
+    || (normalized === 'browser' && (toolName.startsWith('browser_') || toolName.startsWith('web_')))
+    || (normalized === 'web' && (toolName.startsWith('web_') || toolName.startsWith('browser_')))
+    || (normalized === 'memory' && (
+      stepKind === 'memory_save'
+        ? toolName === 'memory_save'
+        : MEMORY_READ_TOOL_NAMES.has(toolName)
+    ))
+    || (normalized === 'automation' && toolName.startsWith('automation_'));
 }
 
 function receiptSatisfiesStep(step: PlannedStep, receipt: EvidenceReceipt): boolean {

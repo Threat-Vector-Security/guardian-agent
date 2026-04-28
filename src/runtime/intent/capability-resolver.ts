@@ -151,6 +151,22 @@ function shouldDeferDirectCapabilityCandidates(decision: IntentGatewayDecision):
     return nonAnswerSteps.length > 0 && answerSteps.length > 0;
   }
 
+  if (decision.route === 'search_task') {
+    const nonAnswerSteps = requiredSteps.filter((step) => step.kind !== 'answer');
+    const answerSteps = requiredSteps.filter((step) => step.kind === 'answer');
+    if (answerSteps.length <= 0) {
+      return false;
+    }
+    if (nonAnswerSteps.length > 1) {
+      return true;
+    }
+    return nonAnswerSteps.some((step) => {
+      const categories = expectedCategoriesForStep(step).map((category) => category.trim()).filter(Boolean);
+      return categories.length > 0
+        && categories.some((category) => !isWebSearchDirectCategory(category));
+    });
+  }
+
   return false;
 }
 
@@ -175,6 +191,18 @@ function isAutomationDirectCategory(category: string): boolean {
   if (normalized === 'automation' || normalized === 'scheduled_email_automation') return true;
   if (normalized.startsWith('automation_')) return true;
   return getBuiltinToolCategory(normalized) === 'automation';
+}
+
+function isWebSearchDirectCategory(category: string): boolean {
+  const normalized = category.trim();
+  if (!normalized) return true;
+  return normalized === 'search'
+    || normalized === 'read'
+    || normalized === 'web'
+    || normalized === 'browser'
+    || normalized === 'web_search'
+    || normalized === 'web_fetch'
+    || normalized.startsWith('browser_');
 }
 
 function isReadOnlyAutomationControlOperation(operation: IntentGatewayDecision['operation']): boolean {

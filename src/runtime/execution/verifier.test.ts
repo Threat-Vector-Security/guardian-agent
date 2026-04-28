@@ -360,6 +360,56 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('rejects completed envelopes whose final answer exposes raw pseudo tool-call markup', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'personal_assistant_task',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Save a memory marker and create a local calendar appointment.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'memory_save', summary: 'Save the marker to memory.', expectedToolCategories: ['memory_save'], required: true },
+        { kind: 'write', summary: 'Create the local calendar appointment.', expectedToolCategories: ['second_brain_calendar_upsert'], required: true, dependsOn: ['step_1'] },
+        { kind: 'answer', summary: 'Confirm both actions.', required: true, dependsOn: ['step_1', 'step_2'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = '[TOOL_CALL]\n{"name":"second_brain_calendar_upsert","arguments":{"title":"Take Benny to the vet"}}\n[/TOOL_CALL]';
+    const stepReceipts: StepReceipt[] = taskContract.plan.steps.map((step, index) => ({
+      stepId: step.stepId,
+      status: 'satisfied',
+      evidenceReceiptIds: [`receipt-${index + 1}`],
+      summary: step.kind === 'answer' ? finalAnswer : step.summary,
+      startedAt: index + 1,
+      endedAt: index + 1,
+    }));
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        stepReceipts,
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['step_3'],
+    });
+  });
+
   it('adds a required answer step when repo-grounded gateway plans omit synthesis', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'coding_task',
