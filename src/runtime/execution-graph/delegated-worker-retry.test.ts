@@ -8,9 +8,12 @@ import type {
 import type { IntentGatewayDecision, IntentGatewayRecord } from '../intent-gateway.js';
 import {
   appendDelegatedRetrySection,
+  buildDelegatedGroundedAnswerEnvelope,
+  buildDelegatedGroundedAnswerSynthesisMessages,
   buildDelegatedRetryableFailure,
   buildDelegatedRetryDetail,
   buildDelegatedRetryIntentGatewayRecord,
+  extractDelegatedEvidenceRefs,
   formatDelegatedStepIds,
   isDelegatedAnswerSynthesisRetry,
   isDelegatedToolEvidenceRetry,
@@ -144,6 +147,99 @@ describe('delegated worker retry graph policy', () => {
     expect(failure?.unsatisfiedSteps).toEqual([]);
     expect(isDelegatedAnswerSynthesisRetry(failure!)).toBe(true);
     expect(shouldRetryDelegatedAnswerSynthesisOnSameProfile(failure!, executionProfile())).toBe(true);
+  });
+
+  it('owns grounded answer synthesis prompts and envelope repair outside WorkerManager', () => {
+    const envelope = delegatedEnvelope({
+      taskContract: taskContract({
+        steps: [
+          { stepId: 'read', kind: 'read', summary: 'Read implementation files.' },
+          { stepId: 'answer', kind: 'answer', summary: 'Answer from evidence.' },
+        ],
+      }),
+      stepReceipts: [{
+        stepId: 'read',
+        status: 'satisfied',
+        evidenceReceiptIds: ['receipt-read'],
+        summary: 'Read implementation files.',
+        startedAt: 1,
+        endedAt: 2,
+      }],
+      evidenceReceipts: [{
+        receiptId: 'receipt-read',
+        sourceType: 'tool_call',
+        toolName: 'fs_read',
+        status: 'succeeded',
+        refs: ['S:\\Development\\GuardianAgent\\src\\runtime\\execution-graph\\node-recovery.ts'],
+        summary: 'Read node recovery.',
+        startedAt: 1,
+        endedAt: 2,
+      }],
+    });
+    const failure = buildDelegatedRetryableFailure({
+      decision: 'insufficient',
+      reasons: ['Evidence was collected but the final answer was missing.'],
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['answer'],
+    }, envelope);
+
+    const messages = buildDelegatedGroundedAnswerSynthesisMessages({
+      originalRequest: 'Where is recovery defined?',
+      history: [{ role: 'user', content: 'Please inspect the repo.' }],
+      intentDecision: gatewayDecision(),
+      envelope,
+      verification: failure!.decision,
+      insufficiency: failure!,
+      jobSnapshots: [{
+        id: 'job-1',
+        toolName: 'fs_read',
+        status: 'succeeded',
+        argsPreview: '{"path":"src/runtime/execution-graph/node-recovery.ts"}',
+        resultPreview: 'export function runRecoveryAdvisorGraph',
+      }],
+    });
+
+    expect(messages[0]?.content).toContain('No tools are available');
+    expect(messages[1]?.content).toContain('Where is recovery defined?');
+    expect(messages[1]?.content).toContain('src/runtime/execution-graph/node-recovery.ts');
+    expect(messages[1]?.content).toContain('Delegated job snapshots');
+
+    const repaired = buildDelegatedGroundedAnswerEnvelope({
+      sourceEnvelope: envelope,
+      finalAnswer: 'Defined in src/runtime/execution-graph/node-recovery.ts.',
+      taskRunId: 'task-1',
+      timestamp: 10,
+    });
+
+    expect(repaired.runStatus).toBe('completed');
+    expect(repaired.finalUserAnswer).toBe('Defined in src/runtime/execution-graph/node-recovery.ts.');
+    expect(repaired.evidenceReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        receiptId: 'answer:task-1:grounded-synthesis',
+        sourceType: 'model_answer',
+        refs: ['src/runtime/execution-graph/node-recovery.ts'],
+      }),
+    ]));
+    expect(repaired.claims).toEqual([expect.objectContaining({
+      kind: 'answer',
+      evidenceReceiptIds: ['answer:task-1:grounded-synthesis'],
+    })]);
+    expect(repaired.events).toEqual([expect.objectContaining({
+      eventId: 'answer-synthesis:task-1',
+      type: 'claim_emitted',
+    })]);
+  });
+
+  it('extracts bounded delegated evidence refs for retry and synthesis ownership', () => {
+    expect(extractDelegatedEvidenceRefs(
+      'Read S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts and docs\\plans\\DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md',
+      '{"path":"web/public/js/chat-panel.js"}',
+    )).toEqual([
+      'src/supervisor/worker-manager.ts',
+      'docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md',
+      'web/public/js/chat-panel.js',
+    ]);
   });
 
   it('uses a same-profile corrective pass for managed-cloud answer-only failures before stronger escalation', () => {
