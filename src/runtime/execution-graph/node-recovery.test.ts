@@ -8,11 +8,13 @@ import {
   buildRecoveryAdvisorGraphInput,
   buildRecoveryAdvisorLifecycleEvent,
   executeRecoveryProposalNode,
+  runRecoveryAdvisorInvocation,
   runRecoveryAdvisorGraph,
   type RecoveryNodeExecutionContext,
 } from './node-recovery.js';
 import type { ExecutionGraphEvent } from './graph-events.js';
 import type { ExecutionNode } from './types.js';
+import type { DelegatedResultEnvelope, VerificationDecision } from '../execution/types.js';
 
 describe('execution graph recovery node', () => {
   it('builds the recovery advisor graph shell outside WorkerManager ownership', () => {
@@ -252,6 +254,178 @@ describe('execution graph recovery node', () => {
     expect(result.proposalArtifactId).toBe(result.proposalArtifact.artifactId);
   });
 
+  it('owns advisor dispatch, validation, trace, and graph proposal through a broker callback', async () => {
+    const storedEvents: ExecutionGraphEvent[] = [];
+    const timelineEvents: ExecutionGraphEvent[] = [];
+    const artifacts: unknown[] = [];
+    const traces: unknown[] = [];
+    const dispatchedRequests: unknown[] = [];
+
+    const result = await runRecoveryAdvisorInvocation({
+      originalRequest: 'Search then write a summary.',
+      taskContract: taskContract(),
+      verification: verification(),
+      jobSnapshots: [{
+        toolName: 'fs_search',
+        status: 'succeeded',
+        argsPreview: '{"query":"planned_steps"}',
+        resultPreview: 'src/runtime/execution/task-plan.ts',
+      }],
+      requestId: 'request-1',
+      messageId: 'message-1',
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'surface-1',
+      agentId: 'agent-1',
+      taskRunId: 'task-run-1',
+      parentExecutionId: 'parent-exec-1',
+      rootExecutionId: 'root-exec-1',
+      codeSessionId: 'code-1',
+      intent: {
+        route: 'filesystem_task',
+        confidence: 'high',
+        operation: 'create',
+        summary: 'Search then write a summary.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        entities: {},
+      },
+      now: (() => {
+        let timestamp = 20_000;
+        return () => {
+          timestamp += 10;
+          return timestamp;
+        };
+      })(),
+      dispatchAdvisor: async (request) => {
+        dispatchedRequests.push(request);
+        return {
+          metadata: {
+            recoveryAdvisor: {
+              proposal: {
+                decision: 'retry',
+                reason: 'The write step has no filesystem mutation receipt.',
+                actions: [{
+                  stepId: 'step_2',
+                  strategy: 'complete_missing_write',
+                  toolName: 'fs_write',
+                }],
+              },
+            },
+          },
+        };
+      },
+      trace: (entry) => {
+        traces.push(entry);
+      },
+      persistence: {
+        appendEvent: (event) => {
+          storedEvents.push(event);
+        },
+        ingestEvent: (event) => {
+          timelineEvents.push(event);
+        },
+        writeArtifact: (artifact) => {
+          artifacts.push(artifact);
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      graphId: 'execution-graph:task-run-1:recovery',
+      proposalArtifactId: 'execution-graph:task-run-1:recovery:node:task-run-1:recover:recovery-proposal',
+      adviceSource: 'llm',
+      metadata: {
+        executionGraphRecovery: {
+          adviceSource: 'llm',
+          actionKinds: ['retry_node'],
+        },
+      },
+    });
+    expect(dispatchedRequests).toHaveLength(1);
+    expect(dispatchedRequests[0]).toMatchObject({
+      originalRequest: 'Search then write a summary.',
+      jobSnapshots: [{
+        toolName: 'fs_search',
+        status: 'succeeded',
+      }],
+      verification: {
+        unsatisfiedStepIds: ['step_2'],
+      },
+    });
+    expect(storedEvents.map((event) => event.kind)).toEqual([
+      'graph_started',
+      'node_started',
+      'artifact_created',
+      'recovery_proposed',
+      'node_completed',
+      'graph_completed',
+    ]);
+    expect(timelineEvents.map((event) => event.eventId)).toEqual(storedEvents.map((event) => event.eventId));
+    expect(artifacts).toHaveLength(1);
+    expect(traces).toEqual([
+      expect.objectContaining({
+        stage: 'recovery_advisor_started',
+        requestId: 'request-1',
+        messageId: 'message-1',
+        agentId: 'agent-1',
+        details: expect.objectContaining({
+          executionId: 'parent-exec-1',
+          rootExecutionId: 'root-exec-1',
+          taskExecutionId: 'task-run-1',
+          unsatisfiedStepIds: ['step_2'],
+        }),
+      }),
+      expect.objectContaining({
+        stage: 'recovery_advisor_completed',
+        details: expect.objectContaining({
+          adviceSource: 'llm',
+          proposalArtifactId: 'execution-graph:task-run-1:recovery:node:task-run-1:recover:recovery-proposal',
+          recoveryActionKinds: ['retry_node'],
+          actionCount: 1,
+        }),
+      }),
+    ]);
+  });
+
+  it('falls back to deterministic advisor guidance inside recovery graph ownership', async () => {
+    const traces: unknown[] = [];
+    const result = await runRecoveryAdvisorInvocation({
+      originalRequest: 'Search then write a summary.',
+      taskContract: taskContract(),
+      verification: verification(),
+      requestId: 'request-1',
+      taskRunId: 'task-run-1',
+      dispatchAdvisor: async () => ({
+        metadata: {
+          recoveryAdvisor: {
+            proposal: {
+              decision: 'give_up',
+              reason: 'No retry.',
+            },
+          },
+        },
+      }),
+      trace: (entry) => {
+        traces.push(entry);
+      },
+    });
+
+    expect(result?.adviceSource).toBe('deterministic');
+    expect(result?.metadata.executionGraphRecovery.actionKinds).toEqual(['retry_node']);
+    expect(traces).toEqual([
+      expect.objectContaining({ stage: 'recovery_advisor_started' }),
+      expect.objectContaining({
+        stage: 'recovery_advisor_completed',
+        details: expect.objectContaining({
+          adviceSource: 'deterministic',
+        }),
+      }),
+    ]);
+  });
+
   it('rejects unsafe or overbroad recovery actions without creating a proposal', () => {
     const failedNode = buildNode('mutate-1', 'mutate');
     const graph = {
@@ -438,5 +612,48 @@ function baseContext(): RecoveryNodeExecutionContext {
         return timestamp;
       };
     })(),
+  };
+}
+
+function taskContract(): DelegatedResultEnvelope['taskContract'] {
+  return {
+    kind: 'filesystem_mutation',
+    route: 'filesystem_task',
+    operation: 'create',
+    requiresEvidence: true,
+    allowsAnswerFirst: false,
+    requireExactFileReferences: false,
+    summary: 'Search then write a summary file.',
+    plan: {
+      planId: 'plan:filesystem_task:create:2',
+      allowAdditionalSteps: false,
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'search',
+          summary: 'Search src/runtime for planned_steps.',
+          required: true,
+          expectedToolCategories: ['fs_search'],
+        },
+        {
+          stepId: 'step_2',
+          kind: 'write',
+          summary: 'Write the summary to tmp/manual-web/planned-steps-summary.txt.',
+          required: true,
+          dependsOn: ['step_1'],
+          expectedToolCategories: ['fs_write'],
+        },
+      ],
+    },
+  };
+}
+
+function verification(): VerificationDecision {
+  return {
+    decision: 'insufficient',
+    reasons: ['Failed to satisfy step_2.'],
+    retryable: true,
+    missingEvidenceKinds: ['write'],
+    unsatisfiedStepIds: ['step_2'],
   };
 }

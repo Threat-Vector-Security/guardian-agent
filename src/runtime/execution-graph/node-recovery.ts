@@ -1,4 +1,17 @@
 import {
+  buildDeterministicRecoveryAdvice,
+  buildGraphRecoveryProposalCandidateFromAdvice,
+  buildRecoveryAdvisorRequest,
+  readRecoveryAdvisorProposal,
+  validateRecoveryAdvisorProposal,
+  type RecoveryAdvisorRequest,
+  type RecoveryAdvisorRequestJobSnapshotInput,
+} from '../execution/recovery-advisor.js';
+import type {
+  DelegatedResultEnvelope,
+  VerificationDecision,
+} from '../execution/types.js';
+import {
   artifactRefFromArtifact,
   buildRecoveryProposalArtifact,
   type ExecutionArtifact,
@@ -168,6 +181,60 @@ export interface RunRecoveryAdvisorGraphInput extends BuildRecoveryAdvisorGraphI
   persistence?: RecoveryAdvisorGraphPersistence;
 }
 
+export type RecoveryAdvisorInvocationTraceStage =
+  | 'recovery_advisor_started'
+  | 'recovery_advisor_rejected'
+  | 'recovery_advisor_completed';
+
+export interface RecoveryAdvisorInvocationTraceEntry {
+  stage: RecoveryAdvisorInvocationTraceStage;
+  requestId: string;
+  messageId?: string;
+  userId?: string;
+  channel?: string;
+  agentId?: string;
+  contentPreview: string;
+  details: Record<string, unknown>;
+}
+
+export interface RunRecoveryAdvisorInvocationInput {
+  originalRequest: string;
+  taskContract: DelegatedResultEnvelope['taskContract'];
+  verification: VerificationDecision;
+  jobSnapshots?: RecoveryAdvisorRequestJobSnapshotInput[];
+  requestId: string;
+  messageId?: string;
+  userId?: string;
+  channel?: string;
+  surfaceId?: string;
+  agentId?: string;
+  taskRunId: string;
+  parentExecutionId?: string;
+  rootExecutionId?: string;
+  codeSessionId?: string;
+  intent?: CreateExecutionGraphInput['intent'];
+  now?: () => number;
+  dispatchAdvisor: (request: RecoveryAdvisorRequest) => Promise<{ metadata?: Record<string, unknown> }>;
+  persistence?: RecoveryAdvisorGraphPersistence;
+  trace?: (entry: RecoveryAdvisorInvocationTraceEntry) => void;
+}
+
+export interface RecoveryAdvisorInvocationResult {
+  graphId: string;
+  proposalArtifactId: string;
+  patch: RecoveryGraphPatch;
+  events: ExecutionGraphEvent[];
+  adviceSource: 'llm' | 'deterministic';
+  metadata: {
+    executionGraphRecovery: {
+      graphId: string;
+      proposalArtifactId: string;
+      adviceSource: 'llm' | 'deterministic';
+      actionKinds: RecoveryGraphPatchOperation['kind'][];
+    };
+  };
+}
+
 export type RunRecoveryAdvisorGraphResult =
   | {
       status: 'proposed';
@@ -317,6 +384,131 @@ export function buildRecoveryAdvisorLifecycleEvent(
     ...(context.codeSessionId ? { codeSessionId: context.codeSessionId } : {}),
     payload: input.payload,
   });
+}
+
+export async function runRecoveryAdvisorInvocation(
+  input: RunRecoveryAdvisorInvocationInput,
+): Promise<RecoveryAdvisorInvocationResult | null> {
+  const advisorRequest = buildRecoveryAdvisorRequest({
+    originalRequest: input.originalRequest,
+    taskContract: input.taskContract,
+    verification: input.verification,
+    jobSnapshots: input.jobSnapshots,
+  });
+  const commonTraceDetails = {
+    ...(input.parentExecutionId ? { executionId: input.parentExecutionId } : {}),
+    ...(input.rootExecutionId ? { rootExecutionId: input.rootExecutionId } : {}),
+    taskExecutionId: input.taskRunId,
+  };
+  const recordTrace = (
+    stage: RecoveryAdvisorInvocationTraceStage,
+    details: Record<string, unknown>,
+  ): void => {
+    input.trace?.({
+      stage,
+      requestId: input.requestId,
+      ...(input.messageId ? { messageId: input.messageId } : {}),
+      ...(input.userId ? { userId: input.userId } : {}),
+      ...(input.channel ? { channel: input.channel } : {}),
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      contentPreview: input.originalRequest,
+      details: {
+        ...commonTraceDetails,
+        ...details,
+      },
+    });
+  };
+
+  recordTrace('recovery_advisor_started', {
+    unsatisfiedStepIds: input.verification.unsatisfiedStepIds,
+    missingEvidenceKinds: input.verification.missingEvidenceKinds,
+  });
+
+  const advisorResult = await input.dispatchAdvisor(advisorRequest);
+  const proposal = readRecoveryAdvisorProposal(advisorResult.metadata);
+  let advice = validateRecoveryAdvisorProposal(proposal, advisorRequest);
+  let adviceSource: RecoveryAdvisorInvocationResult['adviceSource'] = 'llm';
+  if (!advice) {
+    advice = buildDeterministicRecoveryAdvice(advisorRequest);
+    adviceSource = 'deterministic';
+  }
+  if (!advice) {
+    recordTrace('recovery_advisor_rejected', {
+      reason: 'advisor_proposal_invalid_or_empty',
+    });
+    return null;
+  }
+
+  const rootExecutionId = input.rootExecutionId ?? input.taskRunId;
+  const recoveryContext = buildRecoveryAdvisorGraphContext({
+    graphId: `execution-graph:${input.taskRunId}:recovery`,
+    executionId: input.taskRunId,
+    rootExecutionId,
+    ...(input.parentExecutionId ? { parentExecutionId: input.parentExecutionId } : {}),
+    requestId: input.requestId,
+    runId: input.requestId,
+    ...(input.channel ? { channel: input.channel } : {}),
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+    ...(input.userId ? { userId: input.userId } : {}),
+    ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
+    failedNodeId: `node:${input.taskRunId}:delegated_worker`,
+    recoveryNodeId: `node:${input.taskRunId}:recover`,
+  });
+  const recovery = runRecoveryAdvisorGraph({
+    context: recoveryContext,
+    intent: input.intent,
+    securityContext: {
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.userId ? { userId: input.userId } : {}),
+      ...(input.channel ? { channel: input.channel } : {}),
+      ...(input.surfaceId ? { surfaceId: input.surfaceId } : {}),
+      ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
+    },
+    trigger: {
+      type: 'event',
+      source: 'recovery_advisor',
+      sourceId: input.requestId,
+    },
+    failureReason: input.verification.reasons[0],
+    now: input.now,
+    candidate: buildGraphRecoveryProposalCandidateFromAdvice(advice, recoveryContext.failedNodeId),
+    persistence: input.persistence,
+  });
+  if (recovery.status !== 'proposed') {
+    recordTrace('recovery_advisor_rejected', {
+      reason: recovery.rejectionReason ?? 'graph_recovery_candidate_rejected',
+    });
+    return null;
+  }
+
+  const actionKinds = recovery.patch.operations.map((operation) => operation.kind);
+  recordTrace('recovery_advisor_completed', {
+    adviceSource,
+    proposalArtifactId: recovery.proposalArtifactId,
+    recoveryActionKinds: recovery.proposalArtifact.content.actions.map((action) => action.kind),
+    actionCount: advice.actions.length,
+    actions: advice.actions.map((action) => ({
+      stepId: action.stepId,
+      strategy: action.strategy,
+      ...(action.toolName ? { toolName: action.toolName } : {}),
+    })),
+  });
+
+  return {
+    graphId: recoveryContext.graphId,
+    proposalArtifactId: recovery.proposalArtifactId,
+    patch: recovery.patch,
+    events: recovery.events,
+    adviceSource,
+    metadata: {
+      executionGraphRecovery: {
+        graphId: recoveryContext.graphId,
+        proposalArtifactId: recovery.proposalArtifactId,
+        adviceSource,
+        actionKinds,
+      },
+    },
+  };
 }
 
 export function runRecoveryAdvisorGraph(
