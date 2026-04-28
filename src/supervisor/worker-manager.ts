@@ -86,7 +86,7 @@ import {
 import {
   finalizeDelegatedWorkerVerification,
   isDelegatedJobInFlight,
-  runDelegatedEvidenceDrainExtension,
+  runDelegatedWorkerVerificationCycle,
   verifyDelegatedWorkerResult,
   type DelegatedJobSnapshot,
 } from '../runtime/execution-graph/delegated-worker-verification.js';
@@ -1931,18 +1931,21 @@ export class WorkerManager {
           reason: `${firstDrain.inFlightRemaining} delegated job(s) remained in flight after ${firstDrain.waitedMs}ms drain`,
         });
       }
-      let jobSnapshots = firstDrain.snapshots;
-      let verifiedResult = verifyDelegatedWorkerResult({
+      let verificationCycle = await runDelegatedWorkerVerificationCycle({
+        requestId,
+        taskRunId: delegatedTaskRunId,
         metadata: result.metadata,
         intentDecision: effectiveIntentDecision ?? undefined,
         executionProfile: effectiveExecutionProfile,
         taskContract: effectiveTaskContract,
-        jobSnapshots,
+        jobSnapshots: firstDrain.snapshots,
+        drainPendingJobs: (deadlineMs) => awaitPendingDelegatedJobs(this.tools, requestId, deadlineMs),
+        trace: (event) => this.recordDelegatedWorkerTrace(event.stage, input, delegatedTarget, event.details),
       });
-      let insufficiency = buildDelegatedRetryableFailure(verifiedResult.decision, verifiedResult.envelope);
-      if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
-        effectiveTaskContract = verifiedResult.envelope.taskContract;
-      }
+      let jobSnapshots = verificationCycle.jobSnapshots;
+      let verifiedResult = verificationCycle.verifiedResult;
+      let insufficiency = verificationCycle.insufficiency;
+      effectiveTaskContract = verificationCycle.taskContract;
       type AnswerSynthesisFallback = {
         verifiedResult: typeof verifiedResult;
         insufficiency: DelegatedResultSufficiencyFailure;
@@ -1953,26 +1956,6 @@ export class WorkerManager {
           ? { verifiedResult, insufficiency, jobSnapshots }
           : null
       );
-      const extendedFirstDrain = await runDelegatedEvidenceDrainExtension({
-        requestId,
-        taskRunId: delegatedTaskRunId,
-        metadata: result.metadata,
-        intentDecision: effectiveIntentDecision ?? undefined,
-        executionProfile: effectiveExecutionProfile,
-        taskContract: effectiveTaskContract,
-        decision: verifiedResult.decision,
-        jobSnapshots,
-        drainPendingJobs: (deadlineMs) => awaitPendingDelegatedJobs(this.tools, requestId, deadlineMs),
-        trace: (event) => this.recordDelegatedWorkerTrace(event.stage, input, delegatedTarget, event.details),
-      });
-      if (extendedFirstDrain) {
-        jobSnapshots = extendedFirstDrain.jobSnapshots;
-        verifiedResult = extendedFirstDrain.verifiedResult;
-        if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
-          effectiveTaskContract = verifiedResult.envelope.taskContract;
-        }
-        insufficiency = extendedFirstDrain.insufficiency;
-      }
       let answerSynthesisFallback = buildAnswerSynthesisFallback();
       if (insufficiency) {
         const retryProfile = shouldUseSameProfileDelegatedRetry(insufficiency, effectiveExecutionProfile)
@@ -2064,39 +2047,22 @@ export class WorkerManager {
               reason: `${retryDrain.inFlightRemaining} delegated job(s) remained in flight after ${retryDrain.waitedMs}ms drain (retry)`,
             });
           }
-          jobSnapshots = retryDrain.snapshots;
-          verifiedResult = verifyDelegatedWorkerResult({
-            metadata: result.metadata,
-            intentDecision: effectiveIntentDecision ?? undefined,
-            executionProfile: effectiveExecutionProfile,
-            taskContract: effectiveTaskContract,
-            jobSnapshots,
-          });
-          if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
-            effectiveTaskContract = verifiedResult.envelope.taskContract;
-          }
-          insufficiency = buildDelegatedRetryableFailure(verifiedResult.decision, verifiedResult.envelope);
-          const extendedRetryDrain = await runDelegatedEvidenceDrainExtension({
+          verificationCycle = await runDelegatedWorkerVerificationCycle({
             requestId,
             taskRunId: delegatedTaskRunId,
             metadata: result.metadata,
             intentDecision: effectiveIntentDecision ?? undefined,
             executionProfile: effectiveExecutionProfile,
             taskContract: effectiveTaskContract,
-            decision: verifiedResult.decision,
-            jobSnapshots,
+            jobSnapshots: retryDrain.snapshots,
             attemptLabel: 'retry',
             drainPendingJobs: (deadlineMs) => awaitPendingDelegatedJobs(this.tools, requestId, deadlineMs),
             trace: (event) => this.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
           });
-          if (extendedRetryDrain) {
-            jobSnapshots = extendedRetryDrain.jobSnapshots;
-            verifiedResult = extendedRetryDrain.verifiedResult;
-            if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
-              effectiveTaskContract = verifiedResult.envelope.taskContract;
-            }
-            insufficiency = extendedRetryDrain.insufficiency;
-          }
+          jobSnapshots = verificationCycle.jobSnapshots;
+          verifiedResult = verificationCycle.verifiedResult;
+          insufficiency = verificationCycle.insufficiency;
+          effectiveTaskContract = verificationCycle.taskContract;
           answerSynthesisFallback = buildAnswerSynthesisFallback();
         }
       }
