@@ -86,13 +86,17 @@ import {
   resolveDelegatedWorkerLifecycle,
 } from '../runtime/execution-graph/delegated-worker-handoff.js';
 import {
+  isDelegatedJobInFlight,
+  verifyDelegatedWorkerResult,
+  type DelegatedJobSnapshot,
+} from '../runtime/execution-graph/delegated-worker-verification.js';
+import {
   appendDelegatedRetrySection,
   buildDelegatedGroundedAnswerEnvelope,
   buildDelegatedGroundedAnswerSynthesisMessages,
   buildDelegatedRetryableFailure,
   buildDelegatedRetryDetail,
   buildDelegatedRetryIntentGatewayRecord,
-  extractDelegatedEvidenceRefs,
   isDelegatedAnswerSynthesisRetry,
   isDelegatedToolEvidenceRetry,
   shouldAdoptDelegatedTaskContract,
@@ -133,20 +137,9 @@ import {
 import { readWorkerExecutionMetadata } from '../runtime/worker-execution-metadata.js';
 import {
   buildDelegatedExecutionMetadata,
-  buildDelegatedSyntheticEnvelope,
-  readDelegatedResultEnvelope,
   readExecutionEvents,
 } from '../runtime/execution/metadata.js';
-import {
-  buildStepReceipts,
-  collectMissingEvidenceKinds,
-  computeWorkerRunStatus,
-  matchPlannedStepForTool,
-} from '../runtime/execution/task-plan.js';
-import {
-  buildDelegatedTaskContract,
-  verifyDelegatedResult,
-} from '../runtime/execution/verifier.js';
+import { buildDelegatedTaskContract } from '../runtime/execution/verifier.js';
 import {
   buildDeterministicRecoveryAdvice,
   buildGraphRecoveryProposalCandidateFromAdvice,
@@ -269,18 +262,6 @@ interface ResolvedDelegatedTargetMetadata {
   agentId: string;
   agentName?: string;
   orchestration?: OrchestrationRoleDescriptor;
-}
-
-interface DelegatedJobSnapshot {
-  id: string;
-  toolName: string;
-  status: string;
-  createdAt?: number;
-  startedAt?: number;
-  completedAt?: number;
-  argsPreview?: string;
-  resultPreview?: string;
-  error?: string;
 }
 
 interface DelegatedWorkerDispatchBase {
@@ -4596,220 +4577,6 @@ function uniqueStrings(values: string[]): string[] {
   return unique;
 }
 
-function verifyDelegatedWorkerResult(input: {
-  metadata: Record<string, unknown> | undefined;
-  intentDecision: IntentGatewayDecision | undefined;
-  executionProfile: SelectedExecutionProfile | undefined;
-  taskContract: DelegatedResultEnvelope['taskContract'];
-  jobSnapshots: DelegatedJobSnapshot[];
-}): {
-  envelope: DelegatedResultEnvelope;
-  decision: VerificationDecision;
-} {
-  const envelope = readDelegatedResultEnvelope(input.metadata);
-  if (envelope) {
-    const reconciledEnvelope = reconcileDelegatedEnvelopeWithJobSnapshots(envelope, input.jobSnapshots);
-    return {
-      envelope: reconciledEnvelope,
-      decision: verifyDelegatedResult({
-        envelope: reconciledEnvelope,
-        gatewayDecision: input.intentDecision,
-        executionProfile: input.executionProfile,
-      }),
-    };
-  }
-  {
-    const workerExecution = readWorkerExecutionMetadata(input.metadata);
-    const partialEnvelope = buildSyntheticDelegatedEnvelopeFromJobs({
-      taskContract: input.taskContract,
-      jobSnapshots: input.jobSnapshots,
-      workerExecution,
-    });
-    if (partialEnvelope) {
-      return {
-        envelope: partialEnvelope,
-        decision: verifyDelegatedResult({
-          envelope: partialEnvelope,
-          gatewayDecision: input.intentDecision,
-          executionProfile: input.executionProfile,
-        }),
-      };
-    }
-    const missingReason = describeMissingDelegatedEnvelope(workerExecution);
-    const stepReceipts = buildStepReceipts({
-      plannedTask: input.taskContract.plan,
-      evidenceReceipts: [],
-      interruptions: [],
-    });
-    return {
-      envelope: buildDelegatedSyntheticEnvelope({
-        taskContract: input.taskContract,
-        runStatus: 'failed',
-        stopReason: 'error',
-        operatorSummary: missingReason,
-        stepReceipts,
-      }),
-      decision: {
-        decision: 'contradicted',
-        reasons: [missingReason],
-        retryable: false,
-        requiredNextAction: 'Inspect the delegated worker failure details before retrying.',
-        missingEvidenceKinds: [
-          'delegated_result_envelope',
-          ...collectMissingEvidenceKinds(input.taskContract.plan, stepReceipts),
-        ],
-        unsatisfiedStepIds: input.taskContract.plan.steps
-          .filter((step) => step.required !== false)
-          .map((step) => step.stepId),
-      },
-    };
-  }
-}
-
-function reconcileDelegatedEnvelopeWithJobSnapshots(
-  envelope: DelegatedResultEnvelope,
-  jobSnapshots: DelegatedJobSnapshot[],
-): DelegatedResultEnvelope {
-  if (jobSnapshots.length === 0) {
-    return envelope;
-  }
-  const synthesized = synthesizeDelegatedEvidenceReceiptsFromJobs(envelope.taskContract, jobSnapshots);
-  if (synthesized.evidenceReceipts.length === 0) {
-    return envelope;
-  }
-
-  const evidenceReceipts = [...envelope.evidenceReceipts];
-  const evidenceReceiptIds = new Set(evidenceReceipts.map((receipt) => receipt.receiptId));
-  const toolReceiptStepIds = new Map<string, string>();
-  for (const stepReceipt of envelope.stepReceipts) {
-    for (const receiptId of stepReceipt.evidenceReceiptIds) {
-      toolReceiptStepIds.set(receiptId, stepReceipt.stepId);
-    }
-  }
-  for (const [receiptId, stepId] of synthesized.toolReceiptStepIds) {
-    toolReceiptStepIds.set(receiptId, stepId);
-  }
-  for (const receipt of synthesized.evidenceReceipts) {
-    if (evidenceReceiptIds.has(receipt.receiptId)) {
-      continue;
-    }
-    evidenceReceipts.push(receipt);
-    evidenceReceiptIds.add(receipt.receiptId);
-  }
-
-  const stepReceipts = buildStepReceipts({
-    plannedTask: envelope.taskContract.plan,
-    evidenceReceipts,
-    toolReceiptStepIds,
-    interruptions: envelope.interruptions,
-  });
-  const runStatus = computeWorkerRunStatus(
-    envelope.taskContract.plan,
-    stepReceipts,
-    envelope.interruptions,
-    envelope.stopReason,
-  );
-  return {
-    ...envelope,
-    runStatus,
-    stepReceipts,
-    evidenceReceipts,
-  };
-}
-
-function buildSyntheticDelegatedEnvelopeFromJobs(input: {
-  taskContract: DelegatedResultEnvelope['taskContract'];
-  jobSnapshots: DelegatedJobSnapshot[];
-  workerExecution: ReturnType<typeof readWorkerExecutionMetadata>;
-}): DelegatedResultEnvelope | null {
-  const hasInFlightJobs = input.jobSnapshots.some((snapshot) => isDelegatedJobInFlight(snapshot.status));
-  const hasToolActivity = (input.workerExecution?.toolCallCount ?? 0) > 0
-    || (input.workerExecution?.toolResultCount ?? 0) > 0
-    || (input.workerExecution?.roundCount ?? 0) > 0
-    || input.jobSnapshots.length > 0;
-  const terminationReason = input.workerExecution?.terminationReason;
-  const budgetExhausted = terminationReason === 'max_rounds'
-    || terminationReason === 'max_wall_clock'
-    || terminationReason === 'watchdog_kill';
-  if (!budgetExhausted && !hasInFlightJobs && !hasToolActivity) {
-    return null;
-  }
-  const synthesized = synthesizeDelegatedEvidenceReceiptsFromJobs(input.taskContract, input.jobSnapshots);
-  const stopReason = budgetExhausted ? 'max_rounds' : 'end_turn';
-  const runStatus = computeWorkerRunStatus(
-    input.taskContract.plan,
-    synthesized.stepReceipts,
-    [],
-    stopReason,
-  );
-  return buildDelegatedSyntheticEnvelope({
-    taskContract: input.taskContract,
-    runStatus,
-    stopReason,
-    operatorSummary: budgetExhausted
-      ? 'Delegated worker exhausted its step budget before returning a typed result envelope.'
-      : 'Delegated worker stopped after partial progress before returning a typed result envelope.',
-    evidenceReceipts: synthesized.evidenceReceipts,
-    stepReceipts: synthesized.stepReceipts,
-  });
-}
-
-function synthesizeDelegatedEvidenceReceiptsFromJobs(
-  taskContract: DelegatedResultEnvelope['taskContract'],
-  jobSnapshots: DelegatedJobSnapshot[],
-): {
-  evidenceReceipts: DelegatedResultEnvelope['evidenceReceipts'];
-  stepReceipts: DelegatedResultEnvelope['stepReceipts'];
-  toolReceiptStepIds: Map<string, string>;
-} {
-  const evidenceReceipts: DelegatedResultEnvelope['evidenceReceipts'] = [];
-  const toolReceiptStepIds = new Map<string, string>();
-  const previouslyMatchedStepIds = new Set<string>();
-  const sortedSnapshots = [...jobSnapshots].sort((left, right) => (
-    (left.startedAt ?? left.createdAt ?? 0) - (right.startedAt ?? right.createdAt ?? 0)
-  ));
-  for (const snapshot of sortedSnapshots) {
-    const receiptStatus = mapDelegatedJobSnapshotToEvidenceStatus(snapshot.status);
-    if (!receiptStatus) continue;
-    const args = parseDelegatedJobArgsPreview(snapshot.argsPreview);
-    const matchedStepId = matchPlannedStepForTool({
-      toolName: snapshot.toolName,
-      args,
-      plannedTask: taskContract.plan,
-      previouslyMatchedStepIds,
-    });
-    if (matchedStepId) {
-      previouslyMatchedStepIds.add(matchedStepId);
-    }
-    const receiptId = `job:${snapshot.id}`;
-    if (matchedStepId) {
-      toolReceiptStepIds.set(receiptId, matchedStepId);
-    }
-    evidenceReceipts.push({
-      receiptId,
-      sourceType: 'tool_call',
-      toolName: snapshot.toolName,
-      status: receiptStatus,
-      refs: extractDelegatedEvidenceRefs(snapshot.argsPreview, snapshot.resultPreview),
-      summary: snapshot.error?.trim()
-        || snapshot.resultPreview?.trim()
-        || `${snapshot.toolName} ${snapshot.status}.`,
-      startedAt: snapshot.startedAt ?? snapshot.createdAt ?? 0,
-      endedAt: snapshot.completedAt ?? snapshot.startedAt ?? snapshot.createdAt ?? 0,
-    });
-  }
-  return {
-    evidenceReceipts,
-    toolReceiptStepIds,
-    stepReceipts: buildStepReceipts({
-      plannedTask: taskContract.plan,
-      evidenceReceipts,
-      toolReceiptStepIds,
-      interruptions: [],
-    }),
-  };
-}
-
 const DELEGATED_JOB_DRAIN_DEADLINE_MS = 2500;
 const DELEGATED_EVIDENCE_DRAIN_DEADLINE_MS = 60_000;
 const DELEGATED_JOB_DRAIN_POLL_MS = 50;
@@ -4928,66 +4695,6 @@ function listDelegatedRequestJobSnapshots(
       resultPreview: job.resultPreview,
       error: job.error,
     }));
-}
-
-function describeMissingDelegatedEnvelope(
-  workerExecution: ReturnType<typeof readWorkerExecutionMetadata>,
-): string {
-  switch (workerExecution?.terminationReason) {
-    case 'disconnect':
-      return 'Delegated worker disconnected before returning a typed result envelope.';
-    case 'provider_error':
-      return 'Delegated worker hit a provider error before returning a typed result envelope.';
-    case 'max_rounds':
-    case 'max_wall_clock':
-    case 'watchdog_kill':
-      return 'Delegated worker stopped before returning a typed result envelope.';
-    default:
-      return 'Delegated worker did not return a typed result envelope.';
-  }
-}
-
-function isDelegatedJobInFlight(status: string | undefined): boolean {
-  const normalized = status?.trim().toLowerCase();
-  return normalized === 'queued'
-    || normalized === 'running'
-    || normalized === 'pending'
-    || normalized === 'starting';
-}
-
-function mapDelegatedJobSnapshotToEvidenceStatus(
-  status: string | undefined,
-): DelegatedResultEnvelope['evidenceReceipts'][number]['status'] | null {
-  switch (status?.trim().toLowerCase()) {
-    case 'succeeded':
-    case 'completed':
-      return 'succeeded';
-    case 'failed':
-    case 'error':
-    case 'canceled':
-    case 'cancelled':
-      return 'failed';
-    case 'pending_approval':
-      return 'pending_approval';
-    case 'blocked':
-      return 'blocked';
-    default:
-      return null;
-  }
-}
-
-function parseDelegatedJobArgsPreview(argsPreview: string | undefined): Record<string, unknown> {
-  if (typeof argsPreview !== 'string' || !argsPreview.trim()) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(argsPreview) as unknown;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
-  } catch {
-    return {};
-  }
 }
 
 function attachDelegatedVerificationDecision(
