@@ -82,7 +82,7 @@ Second Brain (`#/`) is the default web home.
 ### Power User Capabilities
 
 - `Performance` (`#/performance`) for workstation health, editable profiles, live processes, and reviewed cleanup. See [Performance Management Spec](docs/design/PERFORMANCE-MANAGEMENT-DESIGN.md).
-- `Code` (`#/code`) for repo-scoped coding sessions with chat, Monaco editor, diffing, approvals, and terminals. See [Coding Workspace Spec](docs/design/CODING-WORKSPACE-DESIGN.md).
+- `Code` (`#/code`) for repo-scoped coding sessions with chat, Monaco editor, diffing, approvals, trust review, session-bound terminals, and workspace-scoped execution. See [Coding Workspace Spec](docs/design/CODING-WORKSPACE-DESIGN.md).
 - `Automations` (`#/automations`) for saved and scheduled Guardian workflows and assistant tasks. See [Automation Framework Spec](docs/design/AUTOMATION-FRAMEWORK-DESIGN.md).
 - `Security`, `Network`, and `Cloud` for alerts, posture, diagnostics, and infrastructure oversight. Start with [WebUI Design](docs/design/WEBUI-DESIGN.md) and [SECURITY.md](SECURITY.md).
 - `Configuration` and `Reference Guide` for setup, integrations, policy, and operator guidance.
@@ -90,7 +90,7 @@ Second Brain (`#/`) is the default web home.
 ### Shared Assistant
 
 - Web, CLI, and Telegram all use the same guarded assistant model
-- Local, managed-cloud, and frontier LLM providers are supported, including Ollama, Ollama Cloud, Anthropic, OpenAI, and others
+- Local, managed-cloud, and frontier LLM providers are supported, including Ollama, Ollama Cloud, OpenRouter, NVIDIA Cloud, Anthropic, OpenAI, and other OpenAI-compatible providers
 - Built-in tools, integrations, memory, and automations stay behind approval and policy controls
 - More detail: [WebUI Design](docs/design/WEBUI-DESIGN.md), [Tools Control Plane Design](docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
 
@@ -101,7 +101,7 @@ Second Brain screenshots are shown above in Product Overview. The gallery below 
 <details>
   <summary>Open the full application gallery</summary>
 
-  <p><em>Security, Network, Cloud, Automations, Configuration, Coding Assistant, and Reference Guide.</em></p>
+  <p><em>Security, Network, Cloud, Automations, Configuration, Coding Workspace, and Reference Guide.</em></p>
 
   <table>
     <tr>
@@ -146,10 +146,10 @@ Second Brain screenshots are shown above in Product Overview. The gallery below 
       </td>
       <td align="center" width="50%">
         <a href="docs/images/Coding-assistant-gruvbox.png">
-          <img src="docs/images/Coding-assistant-gruvbox.png" alt="GuardianAgent coding assistant view" width="100%"/>
+          <img src="docs/images/Coding-assistant-gruvbox.png" alt="GuardianAgent coding workspace view" width="100%"/>
         </a>
         <br/>
-        <strong>Coding Assistant</strong>
+        <strong>Coding Workspace</strong>
       </td>
     </tr>
     <tr>
@@ -192,7 +192,7 @@ Second Brain screenshots are shown above in Product Overview. The gallery below 
 - `npm run check` — run TypeScript checking without emitting output
 - `npm test` — run the Vitest suite
 - `node scripts/test-code-ui-smoke.mjs` — run the web/code UI smoke harness
-- `node scripts/test-coding-assistant.mjs` — run the coding assistant smoke harness
+- `node scripts/test-coding-assistant.mjs` — run the coding workspace smoke harness
 
 ## Security at a Glance
 
@@ -208,7 +208,7 @@ GuardianAgent enforces security at the Runtime level — agents cannot bypass it
 
 The built-in chat/planner loop runs in a **brokered worker process** with no network access. Tools, approvals, trust metadata, and LLM API calls are mediated through broker RPC.
 
-Install-like public package-manager actions are also routed through a dedicated managed path. Guardian uses `package_install` to stage the requested top-level package artifacts, review them before execution, and surface caution or blocked findings in the unified security workflow instead of treating package installs as ordinary shell commands.
+Install-like public package-manager actions are also routed through a dedicated managed path. Guardian uses `package_install` to stage the requested top-level package artifacts, review them before execution, resolve the install working directory through the active workspace or configured allowed paths, and surface caution or blocked findings in the unified security workflow instead of treating package installs as ordinary shell commands.
 
 For the full security architecture, threat model, and configuration details, see [SECURITY.md](SECURITY.md).
 
@@ -219,7 +219,7 @@ For the full security architecture, threat model, and configuration details, see
 ### Requirements
 
 - **Node.js 20** or newer
-- A local, managed-cloud, or frontier **LLM provider** (Ollama, Ollama Cloud, Anthropic, OpenAI, etc.)
+- A local, managed-cloud, or frontier **LLM provider** (Ollama, Ollama Cloud, OpenRouter, NVIDIA Cloud, Anthropic, OpenAI, etc.)
 
 SQLite-backed persistence and monitoring are enabled when the Node build includes `node:sqlite`. Otherwise, assistant memory and analytics run in-memory automatically.
 
@@ -244,13 +244,13 @@ These scripts handle dependency installation, build, startup, and the initial co
 After startup:
 
 1. **Open the web UI** and go to the **Configuration Center** (`#/config`, usually `http://localhost:3000`)
-2. **Add your LLM provider** — select Ollama for local models, or add an API key for Anthropic/OpenAI/etc.
+2. **Add your LLM provider** — select Ollama for local models, or add an API key for Ollama Cloud, OpenRouter, NVIDIA Cloud, Anthropic, OpenAI, or another supported external provider.
 3. **Open Second Brain** at `#/` to confirm the default daily-home surface is live and the assistant is ready for task, note, calendar, and people workflows.
 4. **Connect Google Workspace or Microsoft 365 if needed** — use `Cloud > Connections` when you want provider-backed calendar and contacts synced into Second Brain.
 5. **Review tool policy** — defaults to `on-request` / `approve_each` for the main assistant, with a read-only shell allowlist. Mutating tools still require approval, and public package-manager installs should go through the managed `package_install` path instead of `shell_safe`.
 6. **Enable optional channels** — Telegram bot setup is in `Configuration > Integration System > Telegram Channel`
 7. **Set web auth** — web access defaults to bearer-protected mode; configure it in `Configuration > Integration System > Web Authentication` or with CLI `/auth ...`
-8. **Open the Coding Assistant if needed** — go to `#/code` for a project-scoped coding workspace with its own session history, terminals, approvals, and verification surfaces
+8. **Open the Coding Workspace if needed** — go to `#/code` for a project-scoped coding workspace with its own session history, trust review, terminals, approvals, and verification surfaces
 
 Most configuration is done through the **web UI** or **CLI commands** (`/config`, `/providers`, `/auth`, `/tools`). Manual `config.yaml` editing is optional and intended for advanced use.
 
@@ -268,14 +268,14 @@ GuardianAgent is accessible through three channels:
 - Chat with the built-in AI assistant
 - Use Second Brain as the default daily home for tasks, notes, people, routines, and calendar-aware planning
 - Use Performance, Security, Network, Cloud, and Automations as dedicated operator surfaces instead of burying everything in chat
-- Use the Coding Assistant for repository-scoped work with editor, diffing, approvals, checks, and terminals
+- Use the Coding Workspace for repository-scoped work with editor, diffing, approvals, checks, trust review, and session-bound terminals
 - Run guarded tools, integrations, search, and automation workflows across the same assistant
 
 **Approvals and safety:** Actions may run automatically, wait for approval, or be denied depending on policy, trust level, and tool risk. For the detailed behavior, see [SECURITY.md](SECURITY.md) and [Tools Control Plane Design](docs/design/TOOLS-CONTROL-PLANE-DESIGN.md).
 
-### Coding Assistant
+### Coding Workspace
 
-The web `Code` page is a dedicated repo-scoped workspace with its own session context, editor, diffing, approvals, checks, and terminals.
+The web `Code` page is a dedicated repo-scoped workspace backed by server-owned code sessions. It has its own session context, editor, diffing, approvals, checks, trust review, and session-bound terminals.
 
 Implementation detail and current limitations are documented in [docs/design/CODING-WORKSPACE-DESIGN.md](docs/design/CODING-WORKSPACE-DESIGN.md).
 
@@ -302,12 +302,14 @@ See [INSTALLATION.md](INSTALLATION.md) for the full list of Windows packaging op
 
 ## LLM Providers
 
-GuardianAgent supports 10 built-in provider families across local, managed-cloud, and frontier tiers:
+GuardianAgent supports 12 built-in provider families across local, managed-cloud, and frontier tiers:
 
 | Provider | Type | Notes |
 |----------|------|-------|
 | **Ollama** | Local | Runs models locally through the native Ollama path |
 | **Ollama Cloud** | Managed cloud | Ollama-native remote tier between local and frontier providers |
+| **OpenRouter** | Managed cloud | OpenAI-compatible model gateway for many hosted models |
+| **NVIDIA Cloud** | Managed cloud | OpenAI-compatible NVIDIA-hosted inference endpoint |
 | **Anthropic** | Frontier hosted | Claude models with prompt caching |
 | **OpenAI** | Frontier hosted | GPT models |
 | **Groq** | Frontier hosted | Fast OpenAI-compatible inference |
@@ -327,7 +329,7 @@ When both local and external providers are configured, tools automatically route
 
 Single-provider setups work without configuration. Smart routing can be toggled off in Configuration > Tools. Per-tool and per-category overrides are available via the LLM column dropdowns.
 
-Inside the external tier, `Configuration > AI Providers` controls whether Guardian prefers managed-cloud Ollama Cloud or frontier-hosted profiles, and the Model Auto Selection Policy can bind named Ollama Cloud profiles to general, direct, tool-loop, and coding roles.
+Inside the external tier, `Configuration > AI Providers` controls whether Guardian prefers managed-cloud profiles such as Ollama Cloud, OpenRouter, or NVIDIA Cloud, or frontier-hosted profiles. The Model Auto Selection Policy can bind named managed-cloud profiles to general, direct, tool-loop, and coding roles.
 
 **Quality-based fallback:** When the local model produces a degraded response (empty, refusal, or boilerplate), the system automatically retries through the fallback chain.
 
@@ -360,7 +362,7 @@ For detailed configuration documentation:
 - [WebUI Design](docs/design/WEBUI-DESIGN.md) for page ownership and product-surface design
 - [Second Brain As-Built Design](docs/design/SECOND-BRAIN-AS-BUILT.md) for the daily-home experience
 - [Performance Management Spec](docs/design/PERFORMANCE-MANAGEMENT-DESIGN.md) for workstation operations
-- [Coding Workspace Spec](docs/design/CODING-WORKSPACE-DESIGN.md) for the repo-scoped IDE surface
+- [Coding Workspace Spec](docs/design/CODING-WORKSPACE-DESIGN.md) for the repo-scoped coding surface
 - [Automation Framework Spec](docs/design/AUTOMATION-FRAMEWORK-DESIGN.md) for saved and scheduled automation behavior
 - [Configuration Center Spec](docs/design/CONFIG-CENTER-DESIGN.md) for setup, integrations, and policy controls
 - [docs/](docs/) for the full architecture, specs, guides, proposals, and research set
