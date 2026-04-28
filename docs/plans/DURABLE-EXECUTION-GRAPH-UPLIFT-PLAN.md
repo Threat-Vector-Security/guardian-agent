@@ -134,6 +134,28 @@ Remaining risks and cleanup:
 - Natural-language second-brain title normalization still produced an awkward denied-smoke title (`Named Denied Smoke Appointment`) in one path; fix that in second-brain mutation normalization if it recurs in user-facing flows.
 - Continue to prefer Ollama Cloud for managed-cloud app/API sweeps until OpenRouter account/profile drift is the specific target under test.
 
+### 2026-04-28 Complex Orchestration Alignment Review
+
+The complex-request pass should not narrow normal Guardian usage to make difficult prompts easier. The durable-graph uplift remains aligned with leading orchestration systems when simple requests keep their fast/direct path and complex requests are promoted into explicit graph/workflow state only after the Intent Gateway produces a structured multi-step shape.
+
+External references reviewed:
+
+- [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/human-in-the-loop), [persistence](https://docs.langchain.com/oss/javascript/langgraph/persistence), and [subgraphs](https://docs.langchain.com/oss/python/langgraph/use-subgraphs) support the same target shape: checkpointed graph state, resumable human-in-the-loop interrupts, and subgraphs for decomposed multi-agent or multi-domain work.
+- [Temporal workflow definitions](https://docs.temporal.io/workflow-definition), [activities](https://docs.temporal.io/activities), and [TypeScript message passing](https://docs.temporal.io/develop/typescript/message-passing) reinforce a deterministic orchestration layer that records progress, delegates side effects to idempotent activities, and resumes or controls running work through typed messages.
+- [OpenAI Agents orchestration](https://openai.github.io/openai-agents-python/multi_agent/), [guardrails](https://openai.github.io/openai-agents-python/guardrails/), and [results](https://openai.github.io/openai-agents-python/results/) reinforce bounded specialist delegation, final-output surfaces distinct from tool/progress items, and generic input/output/tool guardrails instead of prompt-specific patches.
+- [AutoGen teams](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/teams.html) reinforce explicit multi-agent runs with observable message streams and termination conditions, which maps to Guardian's need to distinguish intermediate progress from completed answers.
+
+Alignment decisions:
+
+- Preserve the direct/simple path for trivial requests. Do not add broad restrictions, keyword gates, or forced decomposition just because complex prompts can fail.
+- Treat cross-domain read requests as first-class graph runs: one or more `explore_readonly` nodes across browser, repo, memory, or second-brain domains; typed evidence artifacts; and a final `synthesize` answer step. No mutation should be introduced by this pattern.
+- Treat cross-domain mutation requests as graph transaction plans: one typed mutation node per operation, explicit approval/interrupt metadata per side effect, idempotency/verification receipts per mutation, and shared clarification/split behavior if the graph cannot safely represent the full request.
+- Normalize read-before-write requests to `explore_readonly -> synthesize/write_spec -> mutate -> verify`. A plan that collapses those requests into repeated `write` steps is a gateway/planned-step repair bug, not a reason to restrict user wording.
+- Keep final response validation generic. Raw pseudo tool calls, progress-only responses, and evidence dumps that omit the requested synthesis cannot satisfy a terminal answer step regardless of route or channel.
+- Keep tool receipt matching deterministic and semantic. Receipts such as `memory_search` should satisfy memory-oriented planned steps without adding route-specific transcript heuristics.
+- Long-running or delegated graph work must survive HTTP client timeouts through durable job/graph state. A client timeout should leave an inspectable running, completed, failed, or interrupted graph state, not an unknown outcome.
+- Recovery should remain bounded and graph-owned: retry, fallback, or repair a failed node when the graph has enough typed context; otherwise interrupt/clarify rather than asking an unbounded model loop to compensate.
+
 Checkpoint after the delegated-worker and recovery graph ownership cleanup:
 
 - `src/runtime/execution-graph/delegated-worker-node.ts` now owns delegated-worker graph creation input, running metadata, terminal verification artifacts, interruption/completion events, failure events, and status mapping. `WorkerManager` supplies request context, persists artifacts/events, and publishes timeline updates, but no longer hand-builds delegated-worker lifecycle metadata or terminal graph events.
