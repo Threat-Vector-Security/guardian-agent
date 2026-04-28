@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -231,6 +231,115 @@ describe('IntentRoutingTraceLog', () => {
           agentName: 'Workspace Implementer',
           lifecycle: 'completed',
         },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts sensitive values and raw payloads before persisting trace entries', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'guardian-intent-trace-'));
+    try {
+      const trace = new IntentRoutingTraceLog({
+        directory: dir,
+        maxFileSizeBytes: 10_000,
+      });
+      await trace.init();
+      trace.record({
+        stage: 'delegated_tool_call_completed',
+        requestId: 'req-sensitive',
+        userId: 'user-1',
+        channel: 'web',
+        contentPreview: 'Authorization: Bearer abcdefghijklmnop token=plain-secret',
+        details: {
+          route: 'complex_planning_task',
+          providerName: 'ollama-cloud-tools',
+          apiToken: 'raw-token-value',
+          nested: {
+            result: {
+              messages: [
+                {
+                  from: 'person@example.com',
+                  body: 'token=raw-message-secret',
+                },
+              ],
+            },
+            password: 'raw-password-value',
+          },
+          rawOutput: {
+            stdout: 'apiKey=raw-output-secret',
+          },
+        },
+      });
+      await trace.flush();
+
+      const status = trace.getStatus();
+      const persisted = await readFile(status.filePath, 'utf-8');
+      expect(persisted).not.toContain('abcdefghijklmnop');
+      expect(persisted).not.toContain('plain-secret');
+      expect(persisted).not.toContain('raw-token-value');
+      expect(persisted).not.toContain('raw-message-secret');
+      expect(persisted).not.toContain('raw-password-value');
+      expect(persisted).not.toContain('raw-output-secret');
+
+      const tail = await trace.readTail(1);
+      expect(tail[0]?.contentPreview).toBe('Authorization: Bearer [REDACTED] token=[REDACTED]');
+      expect(tail[0]?.details).toMatchObject({
+        route: 'complex_planning_task',
+        providerName: 'ollama-cloud-tools',
+        apiToken: '[REDACTED]',
+        nested: {
+          result: {
+            redacted: true,
+            reason: 'trace_payload_redacted',
+            valueType: 'object',
+          },
+          password: '[REDACTED]',
+        },
+        rawOutput: {
+          redacted: true,
+          reason: 'trace_payload_redacted',
+          valueType: 'object',
+        },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('sanitizes legacy raw trace rows when reading them back', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'guardian-intent-trace-'));
+    try {
+      const trace = new IntentRoutingTraceLog({
+        directory: dir,
+        maxFileSizeBytes: 10_000,
+      });
+      await trace.init();
+      const status = trace.getStatus();
+      await writeFile(status.filePath, `${JSON.stringify({
+        id: 'route-legacy',
+        timestamp: Date.now(),
+        stage: 'delegated_tool_call_completed',
+        requestId: 'req-legacy',
+        contentPreview: 'Bearer legacyBearerToken1234567890',
+        details: {
+          output: {
+            body: 'secret=legacy-secret-value',
+          },
+          credential: 'legacy-credential-value',
+        },
+      })}\n`);
+
+      const entries = await trace.listRecent({ requestId: 'req-legacy' });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.contentPreview).toBe('Bearer [REDACTED]');
+      expect(entries[0]?.details).toMatchObject({
+        output: {
+          redacted: true,
+          reason: 'trace_payload_redacted',
+          valueType: 'object',
+        },
+        credential: '[REDACTED]',
       });
     } finally {
       await rm(dir, { recursive: true, force: true });

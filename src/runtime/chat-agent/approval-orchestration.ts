@@ -24,9 +24,33 @@ function isGenericSuccessfulToolCompletionMessage(message: string): boolean {
     || /^Approved and executed(?: \([^)]+\))?\.$/.test(normalized);
 }
 
+function buildApprovalContinuationResult(
+  targetIds: string[],
+  results: Map<string, ToolApprovalDecisionResult>,
+): ToolApprovalDecisionResult | undefined {
+  if (targetIds.length === 0) return undefined;
+  if (targetIds.length === 1) return results.get(targetIds[0]);
+  const resolved = targetIds
+    .map((id) => results.get(id))
+    .filter((result): result is ToolApprovalDecisionResult => !!result);
+  if (resolved.length !== targetIds.length) return undefined;
+  const success = resolved.every((result) => result.success);
+  const approved = resolved.every((result) => result.approved);
+  const executionSucceeded = resolved.every((result) => result.executionSucceeded !== false);
+  return {
+    success,
+    approved,
+    executionSucceeded,
+    message: success && approved
+      ? `Approved and executed ${resolved.length} approvals.`
+      : `Processed ${resolved.length} approvals with one or more failures.`,
+  };
+}
+
 export async function continuePendingActionAfterApproval(input: {
   pendingAction: PendingActionRecord | null;
   approvalId: string;
+  approvalIds?: string[];
   decision: 'approved' | 'denied';
   approvalResult?: ToolApprovalDecisionResult;
   stateAgentId: string;
@@ -53,8 +77,11 @@ export async function continuePendingActionAfterApproval(input: {
 }): Promise<ApprovalOrchestrationResponse | null> {
   if (!input.pendingAction || input.decision !== 'approved') return null;
   if (input.pendingAction.scope.agentId !== input.stateAgentId) return null;
+  const resolvedApprovalIds = (input.approvalIds?.length ? input.approvalIds : [input.approvalId])
+    .map((id) => id.trim())
+    .filter(Boolean);
   const remainingApprovalIds = (input.pendingAction.blocker.approvalIds ?? [])
-    .filter((id) => id !== input.approvalId.trim());
+    .filter((id) => !resolvedApprovalIds.includes(id));
   if (remainingApprovalIds.length > 0) return null;
   const resume = input.pendingAction.resume;
   if (!resume) return null;
@@ -346,12 +373,11 @@ export async function handleApprovalMessage(input: {
   }
 
   if (decision === 'approved' && pendingAction?.resume) {
-    const approvalResult = targetIds.length === 1
-      ? approvalDecisionResults.get(targetIds[0])
-      : undefined;
+    const approvalResult = buildApprovalContinuationResult(targetIds, approvalDecisionResults);
     const resumedResponse = await continuePendingActionAfterApproval({
       pendingAction,
       approvalId: targetIds[0],
+      approvalIds: targetIds,
       decision,
       approvalResult,
       stateAgentId: pendingAction.scope.agentId,
@@ -373,9 +399,7 @@ export async function handleApprovalMessage(input: {
   }
 
   if (decision === 'approved' && pendingAction) {
-    const approvalResult = targetIds.length === 1
-      ? approvalDecisionResults.get(targetIds[0])
-      : undefined;
+    const approvalResult = buildApprovalContinuationResult(targetIds, approvalDecisionResults);
     const approvalResultResponse = input.formatResolvedApprovalResultResponse(pendingAction, approvalResult);
     if (approvalResultResponse) {
       input.completePendingAction(pendingAction.id);
