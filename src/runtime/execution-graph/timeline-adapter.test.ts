@@ -77,6 +77,33 @@ describe('execution graph timeline adapter', () => {
     expect(approval?.items[0]?.detail).not.toContain('raw prompt');
   });
 
+  it('redacts sensitive strings from graph event timeline details', () => {
+    const completed = projectExecutionGraphEventToTimeline(createExecutionGraphEvent({
+      eventId: 'event-tool-completed-redaction',
+      graphId: 'graph-redaction',
+      executionId: 'exec-redaction',
+      rootExecutionId: 'exec-redaction',
+      requestId: 'req-redaction',
+      runId: 'req-redaction',
+      nodeId: 'node-redaction',
+      nodeKind: 'explore_readonly',
+      kind: 'tool_call_completed',
+      timestamp: 210,
+      sequence: 6,
+      producer: 'brokered_worker',
+      payload: {
+        toolName: 'web_fetch',
+        resultStatus: 'succeeded',
+        resultPreview: 'Fetched with Authorization: Bearer graphtoken1234567890 and apiKey=sk-graph_123456789012345.',
+      },
+    }));
+
+    expect(completed?.items[0]?.detail).toContain('Authorization: Bearer [REDACTED]');
+    expect(completed?.items[0]?.detail).toContain('apiKey=[REDACTED]');
+    expect(completed?.items[0]?.detail).not.toContain('graphtoken1234567890');
+    expect(completed?.items[0]?.detail).not.toContain('sk-graph_123456789012345');
+  });
+
   it('projects clarification graph interrupts as blocked timeline notes', () => {
     const clarification = projectExecutionGraphEventToTimeline(createExecutionGraphEvent({
       eventId: 'event-clarification',
