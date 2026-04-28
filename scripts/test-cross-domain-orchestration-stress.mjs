@@ -13,6 +13,8 @@ const stressHarnessPaths = {
   appPort: 0,
 };
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const STRESS_CASES = [
   {
     id: 'orchestrated-general',
@@ -1705,7 +1707,7 @@ async function waitForHealth(baseUrl) {
     } catch {
       // Retry until ready.
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await sleep(500);
   }
   throw new Error('GuardianAgent did not become healthy within 90 seconds.');
 }
@@ -1715,9 +1717,57 @@ async function waitFor(predicate, timeoutMs, message) {
   while (Date.now() < deadline) {
     const result = await predicate();
     if (result) return result;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await sleep(100);
   }
   throw new Error(message);
+}
+
+async function waitForProcessExit(childProcess, timeoutMs = 5_000) {
+  if (!childProcess || childProcess.exitCode !== null || childProcess.signalCode !== null) {
+    return;
+  }
+  await Promise.race([
+    new Promise((resolve) => childProcess.once('exit', resolve)),
+    sleep(timeoutMs),
+  ]);
+  if (childProcess.exitCode !== null || childProcess.signalCode !== null) {
+    return;
+  }
+  childProcess.kill('SIGKILL');
+  await Promise.race([
+    new Promise((resolve) => childProcess.once('exit', resolve)),
+    sleep(timeoutMs),
+  ]);
+}
+
+async function closeLogStream(logStream) {
+  if (!logStream) {
+    return;
+  }
+  await new Promise((resolve) => logStream.end(resolve));
+}
+
+function isRetryableRemoveError(error) {
+  return error
+    && typeof error === 'object'
+    && ['EBUSY', 'ENOTEMPTY', 'EPERM'].includes(error.code);
+}
+
+async function removeTempDirWithRetries(dir) {
+  let lastError;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableRemoveError(error)) {
+        throw error;
+      }
+      await sleep(100 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
 
 function extractLatestUser(messages) {
@@ -1785,7 +1835,7 @@ async function assertDelegatedToolCalls(tracePath, beforeCount, testCaseId, prov
     if (expectedTools.every((toolName) => terminalToolNames.has(toolName))) {
       break;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await sleep(100);
   }
   const terminalToolNames = new Set(
     completedEntries
@@ -2292,16 +2342,15 @@ guardian:
 
     console.log('PASS cross-domain orchestration stress harness');
   } finally {
-    if (appProcess && !appProcess.killed) {
+    if (appProcess && appProcess.exitCode === null && appProcess.signalCode === null) {
       appProcess.kill('SIGTERM');
     }
-    if (logStream) {
-      logStream.end();
-    }
+    await waitForProcessExit(appProcess);
+    await closeLogStream(logStream);
     await provider.close().catch(() => {});
     await cloud.close().catch(() => {});
     if (!keepTmp) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      await removeTempDirWithRetries(tmpDir);
     } else {
       console.log(`Kept temp directory: ${tmpDir}`);
     }

@@ -99,7 +99,11 @@ export async function confirmIntentGatewayDecisionIfNeeded(
     }, {
       mode: 'confirmation',
     });
-    if (parsed.available && needsConcreteToolPlanConfirmationRetry(confirmation, parsed.decision)) {
+    if (parsed.available && needsConcreteToolPlanConfirmationRetry(
+      confirmation,
+      parsed.decision,
+      parsed.rawStructuredDecision,
+    )) {
       const retryResponse = await chat(buildIntentGatewayConfirmationRetryMessages(input, record, confirmation, response), {
         maxTokens: 640,
         temperature: 0,
@@ -138,9 +142,13 @@ export async function confirmIntentGatewayDecisionIfNeeded(
 function needsConcreteToolPlanConfirmationRetry(
   confirmation: { reason: string },
   decision: IntentGatewayDecision,
+  rawStructuredDecision?: Record<string, unknown>,
 ): boolean {
   if (!confirmation.reason.split(',').map((reason) => reason.trim()).includes('tool_plan_coverage_check')) {
     return false;
+  }
+  if (rawStructuredDecisionHasGenericRequiredEvidencePlan(rawStructuredDecision)) {
+    return true;
   }
   const requiredEvidenceSteps = (decision.plannedSteps ?? [])
     .filter((step) => step.required !== false && step.kind !== 'answer');
@@ -148,6 +156,55 @@ function needsConcreteToolPlanConfirmationRetry(
     return true;
   }
   return requiredEvidenceSteps.some((step) => !hasConcreteToolEvidenceCategory(step.expectedToolCategories));
+}
+
+function rawStructuredDecisionHasGenericRequiredEvidencePlan(
+  rawStructuredDecision: Record<string, unknown> | undefined,
+): boolean {
+  const rawPlannedSteps = rawStructuredDecisionPlannedSteps(rawStructuredDecision);
+  if (!rawPlannedSteps) {
+    return false;
+  }
+  const requiredEvidenceSteps = rawPlannedSteps.filter((step) => {
+    if (!step || typeof step !== 'object' || Array.isArray(step)) {
+      return false;
+    }
+    const rawStep = step as Record<string, unknown>;
+    if (rawStep.required === false) {
+      return false;
+    }
+    const kind = typeof rawStep.kind === 'string' ? rawStep.kind.trim() : '';
+    return kind !== 'answer';
+  });
+  if (requiredEvidenceSteps.length === 0) {
+    return true;
+  }
+  return requiredEvidenceSteps.some((step) => {
+    const rawStep = step as Record<string, unknown>;
+    return !hasConcreteToolEvidenceCategory(rawExpectedToolCategories(rawStep));
+  });
+}
+
+function rawStructuredDecisionPlannedSteps(
+  rawStructuredDecision: Record<string, unknown> | undefined,
+): unknown[] | null {
+  if (!rawStructuredDecision) {
+    return null;
+  }
+  const snakeCaseSteps = rawStructuredDecision.planned_steps;
+  if (Array.isArray(snakeCaseSteps)) {
+    return snakeCaseSteps;
+  }
+  const camelCaseSteps = rawStructuredDecision.plannedSteps;
+  return Array.isArray(camelCaseSteps) ? camelCaseSteps : null;
+}
+
+function rawExpectedToolCategories(rawStep: Record<string, unknown>): string[] | undefined {
+  const rawCategories = rawStep.expectedToolCategories ?? rawStep.expected_tool_categories;
+  if (!Array.isArray(rawCategories)) {
+    return undefined;
+  }
+  return rawCategories.filter((category): category is string => typeof category === 'string');
 }
 
 function deriveIntentGatewayConfirmationRequest(

@@ -1093,6 +1093,12 @@ function inferWorkspaceFindingAlertSemantics(
     case 'encoded_exec':
     case 'inline_exec':
     case 'native_av_detection':
+    case 'privileged_client_secret':
+    case 'public_env_secret':
+    case 'hardcoded_fallback_secret':
+    case 'permissive_rls_policy':
+    case 'public_storage_bucket':
+    case 'unsigned_webhook_handler':
       return 'incident_candidate';
     default:
       return 'posture_only';

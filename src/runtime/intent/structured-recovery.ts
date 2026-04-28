@@ -586,7 +586,7 @@ function synthesizeIntentGatewayPlannedSteps(input: {
         summary,
         required: true,
         ...(index > 0 ? { dependsOn: [`step_${index}`] } : {}),
-        ...buildSynthesizedExpectedToolCategories(kind),
+        ...buildSynthesizedExpectedToolCategories(kind, summary),
       };
     });
   }
@@ -641,6 +641,16 @@ function shouldPreferSynthesizedPlannedSteps(
   }
   const synthesizedRequired = synthesizedSteps.filter((step) => step.required !== false);
   const parsedRequired = parsedSteps.filter((step) => step.required !== false);
+  const synthesizedEvidenceSteps = synthesizedRequired.filter((step) => step.kind !== 'answer');
+  const parsedEvidenceSteps = parsedRequired.filter((step) => step.kind !== 'answer');
+  const parsedHasAnswer = parsedRequired.some((step) => step.kind === 'answer');
+  if (
+    parsedHasAnswer
+    && synthesizedEvidenceSteps.length >= 2
+    && synthesizedEvidenceSteps.length > parsedEvidenceSteps.length
+  ) {
+    return true;
+  }
   if (hasExplicitToolBackedAnswerPlan(parsedRequired)) {
     return false;
   }
@@ -677,6 +687,8 @@ function normalizePlannedStepsForDecision(
   if (
     !isAutomationCatalogReadDecision(decision)
     && !isPersonalAssistantReadDecision(decision)
+    && !isMemoryReadDecision(decision)
+    && !isWebReadDecision(decision)
     && !isToolBackedReadAnswerDecision(decision)
   ) {
     return steps;
@@ -691,6 +703,29 @@ function normalizePlannedStepsForDecision(
       return {
         ...rest,
         kind: 'answer' as const,
+      };
+    }
+    if (
+      isMemoryReadDecision(decision)
+      && (step.kind === 'search' || step.kind === 'read')
+      && hasOnlyGenericReadCategories(step.expectedToolCategories)
+    ) {
+      return {
+        ...step,
+        kind: 'read' as const,
+        expectedToolCategories: ['memory_search', 'memory_recall'],
+      };
+    }
+    if (
+      isWebReadDecision(decision)
+      && (step.kind === 'search' || step.kind === 'read')
+      && hasOnlyGenericReadCategories(step.expectedToolCategories)
+    ) {
+      return {
+        ...step,
+        expectedToolCategories: step.kind === 'search'
+          ? ['web_search', 'browser']
+          : ['web_fetch', 'browser'],
       };
     }
     if (
@@ -746,6 +781,32 @@ function isPersonalAssistantReadDecision(decision: {
     );
 }
 
+function isMemoryReadDecision(decision: {
+  route: IntentGatewayDecision['route'];
+  operation: IntentGatewayDecision['operation'];
+}): boolean {
+  return decision.route === 'memory_task'
+    && (
+      decision.operation === 'read'
+      || decision.operation === 'inspect'
+      || decision.operation === 'search'
+      || decision.operation === 'navigate'
+    );
+}
+
+function isWebReadDecision(decision: {
+  route: IntentGatewayDecision['route'];
+  operation: IntentGatewayDecision['operation'];
+}): boolean {
+  return (decision.route === 'browser_task' || decision.route === 'search_task')
+    && (
+      decision.operation === 'read'
+      || decision.operation === 'inspect'
+      || decision.operation === 'search'
+      || decision.operation === 'navigate'
+    );
+}
+
 function isToolBackedReadAnswerDecision(decision: {
   route: IntentGatewayDecision['route'];
   operation: IntentGatewayDecision['operation'];
@@ -788,13 +849,19 @@ function requiresToolBackedAnswerPlan(
 
 function supportsToolBackedAnswerPlan(route: IntentGatewayDecision['route']): boolean {
   return route === 'automation_control'
+    || route === 'browser_task'
     || route === 'personal_assistant_task'
-    || route === 'general_assistant';
+    || route === 'general_assistant'
+    || route === 'memory_task'
+    || route === 'search_task';
 }
 
 function isToolBackedEvidenceCategory(category: string): boolean {
   const normalized = category.trim();
   return isAutomationToolCategory(normalized)
+    || isMemoryToolCategory(normalized)
+    || isRepoEvidenceCategory(normalized)
+    || isWebEvidenceCategory(normalized)
     || normalized === 'second_brain'
     || normalized.startsWith('second_brain_');
 }
@@ -804,6 +871,35 @@ function isAutomationToolCategory(category: string): boolean {
   return normalized === 'automation'
     || normalized === 'scheduled_email_automation'
     || normalized.startsWith('automation_');
+}
+
+function isMemoryToolCategory(category: string): boolean {
+  const normalized = category.trim();
+  return normalized === 'memory'
+    || normalized === 'memory_search'
+    || normalized === 'memory_recall'
+    || normalized === 'memory_save';
+}
+
+function isRepoEvidenceCategory(category: string): boolean {
+  const normalized = category.trim();
+  return normalized === 'repo'
+    || normalized === 'repository'
+    || normalized === 'repo_inspect'
+    || normalized === 'repo_inspection'
+    || normalized === 'fs_search'
+    || normalized === 'code_symbol_search'
+    || normalized === 'fs_read'
+    || normalized === 'fs_list';
+}
+
+function isWebEvidenceCategory(category: string): boolean {
+  const normalized = category.trim();
+  return normalized === 'web'
+    || normalized === 'browser'
+    || normalized === 'web_search'
+    || normalized === 'web_fetch'
+    || normalized.startsWith('browser_');
 }
 
 function inferSecondBrainReadToolCategories(
@@ -901,10 +997,11 @@ export function splitSequentialRequestClauses(sourceContent: string): string[] {
   const normalized = sourceContent
     .replace(/\r\n/g, '\n')
     .replace(/\b(?:then|next|after that|finally)\b[:,]?\s+/gi, '\n')
+    .replace(/,\s+(?=(?:and\s+)?(?:search|find|look\s*up|browse|grep|scan|trace|locate|read|open|inspect|review|check|create|write|remember|save\s+to\s+memory)\b)/gi, '\n')
     .replace(/\n+/g, '\n');
   const rawClauses = normalized
     .split(/(?<=[.!?])\s+(?=[A-Z0-9"'])|\n+/)
-    .map((value) => collapseIntentGatewayWhitespace(value))
+    .map((value) => collapseIntentGatewayWhitespace(value).replace(/^(?:and|then)\s+/i, ''))
     .filter(Boolean);
   if (rawClauses.length < 2) return [];
 
@@ -937,16 +1034,25 @@ function inferSynthesizedPlannedStepKind(
   operation: IntentGatewayDecision['operation'],
 ): IntentGatewayPlannedStep['kind'] {
   const normalized = summary.toLowerCase();
-  if (/\b(?:write|create|update|edit|patch|modify|append|delete|remove|touch|save (?:a |the )?(?:file|summary|report|note))\b/.test(normalized)) {
-    return 'write';
-  }
   if (/\b(?:remember|save to memory|store in memory|save (?:a |the )?(?:global |project )?memory)\b/.test(normalized)) {
     return 'memory_save';
   }
-  if (/\b(?:search|find|grep|scan|trace|locate)\b/.test(normalized)) {
+  const searchIndex = firstPatternIndex(normalized, /\b(?:search|find|grep|scan|trace|locate)\b/);
+  const readIndex = firstPatternIndex(normalized, /\b(?:read|open|inspect|review|check|look at)\b/);
+  const writeIndex = firstPatternIndex(normalized, /\b(?:write|create|update|edit|patch|modify|append|delete|remove|touch|save (?:a |the )?(?:file|summary|report|note))\b/);
+  const firstEvidenceIndex = [searchIndex, readIndex]
+    .filter((index) => index >= 0)
+    .sort((left, right) => left - right)[0] ?? -1;
+  if (firstEvidenceIndex >= 0 && (writeIndex < 0 || firstEvidenceIndex < writeIndex)) {
+    return searchIndex >= 0 && (readIndex < 0 || searchIndex <= readIndex) ? 'search' : 'read';
+  }
+  if (writeIndex >= 0) {
+    return 'write';
+  }
+  if (searchIndex >= 0) {
     return 'search';
   }
-  if (/\b(?:read|open|inspect|review|check|look at)\b/.test(normalized)) {
+  if (readIndex >= 0) {
     return 'read';
   }
   if (/\b(?:tell me|report|answer|explain|summari[sz]e|return)\b/.test(normalized)) {
@@ -961,9 +1067,19 @@ function inferSynthesizedPlannedStepKind(
   return 'answer';
 }
 
+function firstPatternIndex(value: string, pattern: RegExp): number {
+  const match = pattern.exec(value);
+  return match?.index ?? -1;
+}
+
 function buildSynthesizedExpectedToolCategories(
   kind: IntentGatewayPlannedStep['kind'],
+  summary?: string,
 ): Partial<IntentGatewayPlannedStep> {
+  const evidenceCategories = inferSynthesizedEvidenceToolCategories(kind, summary);
+  if (evidenceCategories.length > 0) {
+    return { expectedToolCategories: evidenceCategories };
+  }
   switch (kind) {
     case 'write':
       return { expectedToolCategories: ['write'] };
@@ -976,4 +1092,35 @@ function buildSynthesizedExpectedToolCategories(
     default:
       return {};
   }
+}
+
+function inferSynthesizedEvidenceToolCategories(
+  kind: IntentGatewayPlannedStep['kind'],
+  summary: string | undefined,
+): string[] {
+  if (kind !== 'search' && kind !== 'read') {
+    return [];
+  }
+  const normalized = summary?.trim().toLowerCase() ?? '';
+  if (!normalized) {
+    return [];
+  }
+  if (/\b(?:memory|remembered|saved marker)\b/i.test(normalized)) {
+    return ['memory'];
+  }
+  if (/\b(?:repo|repository|workspace|codebase|source code|local code)\b/i.test(normalized)) {
+    return ['repo_inspect'];
+  }
+  if (/\bhttps?:\/\/|\b(?:web|internet|online|website|page title)\b/i.test(normalized)) {
+    return kind === 'search'
+      ? ['web_search', 'browser']
+      : ['web_fetch', 'browser'];
+  }
+  if (/\b(?:automation|automations|workflow|workflows|routine|routines)\b/i.test(normalized)) {
+    return ['automation_list'];
+  }
+  if (/\b(?:second brain|calendar|appointment|reminder|task list|notes?|contacts?|library)\b/i.test(normalized)) {
+    return ['second_brain'];
+  }
+  return [];
 }

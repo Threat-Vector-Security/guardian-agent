@@ -4476,6 +4476,34 @@ describe('ToolExecutor', () => {
     expect((result.output as any).status).toBe('installed');
   });
 
+  it('rejects package_install cwd outside the allowed workspace paths', async () => {
+    const root = createExecutorRoot();
+    const outside = createExecutorRoot();
+    const packageInstallTrust = {
+      runManagedInstall: vi.fn(),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: [],
+      allowedDomains: [],
+      packageInstallTrust: packageInstallTrust as any,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'package_install',
+      args: { command: 'npm install lodash', cwd: outside },
+      origin: 'cli',
+      bypassApprovals: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(packageInstallTrust.runManagedInstall).not.toHaveBeenCalled();
+    expect(String(result.error || result.message || '')).toMatch(/allowed|outside|workspace/i);
+  });
+
   it('uses codeContext workspace roots instead of the global allowedPaths list', async () => {
     const globalRoot = createExecutorRoot();
     const codeRoot = createExecutorRoot();

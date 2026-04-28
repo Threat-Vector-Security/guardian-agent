@@ -17,7 +17,10 @@ import type {
   StepReceipt,
   VerificationDecision,
 } from './types.js';
-import { looksLikeOngoingWorkResponse } from '../../util/assistant-response-shape.js';
+import {
+  looksLikeOngoingWorkResponse,
+  looksLikeRawToolMarkup,
+} from '../../util/assistant-response-shape.js';
 
 export function buildDelegatedTaskContract(
   decision: IntentGatewayDecision | null | undefined,
@@ -167,7 +170,7 @@ function verifyFinalAnswerIsTerminal(
   envelope: DelegatedResultEnvelope,
 ): VerificationDecision | null {
   const finalAnswer = envelope.finalUserAnswer?.trim();
-  if (!finalAnswer || !looksLikeOngoingWorkResponse(finalAnswer)) {
+  if (!finalAnswer) {
     return null;
   }
   const hasRequiredEvidenceStep = envelope.taskContract.plan.steps.some(
@@ -177,6 +180,19 @@ function verifyFinalAnswerIsTerminal(
     return null;
   }
   const answerStepIds = findAnswerStepIds(envelope.taskContract.plan);
+  if (looksLikeRawToolMarkup(finalAnswer)) {
+    return {
+      decision: 'insufficient',
+      reasons: ['Delegated worker returned raw pseudo tool-call markup instead of a terminal user-facing answer.'],
+      retryable: true,
+      requiredNextAction: 'Complete the delegated task through real tool calls and return the final answer, not raw tool markup.',
+      missingEvidenceKinds: ['answer'],
+      ...(answerStepIds.length > 0 ? { unsatisfiedStepIds: answerStepIds } : {}),
+    };
+  }
+  if (!looksLikeOngoingWorkResponse(finalAnswer)) {
+    return null;
+  }
   return {
     decision: 'insufficient',
     reasons: ['Delegated worker returned an in-progress status message instead of a terminal user-facing answer.'],

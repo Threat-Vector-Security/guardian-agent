@@ -166,6 +166,96 @@ describe('task plan receipt accounting', () => {
     expect(computeWorkerRunStatus(plannedTask, stepReceipts, [], 'end_turn')).toBe('completed');
   });
 
+  it('maps memory evidence categories to memory search receipts', () => {
+    const plannedTask: PlannedTask = {
+      planId: 'plan:memory_task:search:2',
+      allowAdditionalSteps: false,
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'read',
+          summary: 'Search memory for the requested marker.',
+          expectedToolCategories: ['memory'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'answer',
+          summary: 'Answer with the matching marker.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    };
+    const memoryReceipt: EvidenceReceipt = {
+      receiptId: 'receipt-memory-1',
+      sourceType: 'tool_call',
+      toolName: 'memory_search',
+      status: 'succeeded',
+      refs: ['memory:marker'],
+      summary: 'Found the marker in memory.',
+      startedAt: 1,
+      endedAt: 2,
+    };
+    const answerReceipt: EvidenceReceipt = {
+      receiptId: 'answer:1',
+      sourceType: 'model_answer',
+      status: 'succeeded',
+      refs: ['memory:marker'],
+      summary: 'SMOKE-MEM-42801',
+      startedAt: 3,
+      endedAt: 3,
+    };
+
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'memory_search',
+      args: { query: 'SMOKE-MEM-42801' },
+    })).toBe('step_1');
+
+    const stepReceipts = buildStepReceipts({
+      plannedTask,
+      evidenceReceipts: [memoryReceipt, answerReceipt],
+      toolReceiptStepIds: new Map([[memoryReceipt.receiptId, 'step_1']]),
+      finalAnswerReceiptId: answerReceipt.receiptId,
+    });
+
+    expect(stepReceipts).toMatchObject([
+      { stepId: 'step_1', status: 'satisfied', evidenceReceiptIds: ['receipt-memory-1'] },
+      { stepId: 'step_2', status: 'satisfied', evidenceReceiptIds: ['answer:1'] },
+    ]);
+    expect(computeWorkerRunStatus(plannedTask, stepReceipts, [], 'end_turn')).toBe('completed');
+  });
+
+  it('allows semantic write steps to be satisfied by Second Brain mutation tools', () => {
+    const plannedTask: PlannedTask = {
+      planId: 'plan:complex_planning_task:run:2',
+      allowAdditionalSteps: false,
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'write',
+          summary: 'Create a local Second Brain calendar appointment.',
+          expectedToolCategories: ['write'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'answer',
+          summary: 'Confirm the appointment was created.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    };
+
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'second_brain_calendar_upsert',
+      args: { title: 'Take Benny to the vet' },
+    })).toBe('step_1');
+  });
+
   it('uses model answer receipts to satisfy answer-category planned steps', () => {
     const plannedTask: PlannedTask = {
       planId: 'plan:general_assistant:read:1',

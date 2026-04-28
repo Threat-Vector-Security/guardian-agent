@@ -156,6 +156,34 @@ Alignment decisions:
 - Long-running or delegated graph work must survive HTTP client timeouts through durable job/graph state. A client timeout should leave an inspectable running, completed, failed, or interrupted graph state, not an unknown outcome.
 - Recovery should remain bounded and graph-owned: retry, fallback, or repair a failed node when the graph has enough typed context; otherwise interrupt/clarify rather than asking an unbounded model loop to compensate.
 
+Checkpoint after the multi-domain evidence planning uplift:
+
+- Structured recovery now repairs repeated natural-language evidence clauses into separate planned steps when a route-only classifier collapses web, repo, memory, automation, or second-brain reads into one generic search/read step. This is post-gateway plan repair, not pre-gateway keyword routing.
+- Task-plan category matching now treats semantic domains as first-class evidence: `memory` maps to memory search/recall receipts, `repo_inspect` maps to repo/file inspection receipts, web/browser aliases stay web-only, and second-brain/automation read/write tools satisfy their owning planned-step categories.
+- Direct search dispatch now defers multi-domain search/read plans instead of running a single direct `web_search` candidate when the plan also requires repo, memory, automation, or second-brain evidence.
+- Delegated read-only evidence profiles include web, browser, repo, memory, automation-list, and second-brain read categories so mixed evidence requests do not become write-capable just because they span domains.
+- Confirmation-pass retry checks the raw classifier plan before structured recovery normalizes it, so generic `search/read` confirmation output is retried when a tool-plan coverage check needs concrete domain steps.
+- Terminal-answer verification now rejects raw pseudo tool-call markup as an insufficient final answer for evidence-required runs.
+- Actual app live proof used request id `complex-readonly-uplift-42801-r2` through `/api/message` after `scripts/start-dev-windows.ps1 -StartOnly`. The route classified as `search_task`, the repaired plan was `web_search/browser -> repo_inspect -> memory -> answer`, direct candidates were empty, and the delegated graph produced successful `web_search`, `fs_search`, `memory_search`, and answer receipts. The graph verifier returned `satisfied`; the delegated retry path also ran once after the first worker answer left required steps unsatisfied, then reconciled and completed.
+- Broad cross-domain harness proof passed with `node scripts/test-cross-domain-orchestration-stress.mjs`. The harness now waits for the isolated app process and log stream before removing temporary SQLite files on Windows, preventing a successful run from failing during cleanup.
+
+Verification added or rerun for this checkpoint:
+
+- `npx vitest run src/runtime/intent/confirmation-pass.test.ts src/runtime/intent/structured-recovery.test.ts src/runtime/direct-intent-routing.test.ts src/runtime/execution/task-plan.test.ts src/runtime/execution/verifier.test.ts src/runtime/execution-profiles.test.ts`
+- `npm run check`
+- `npm run build`
+- `npm test` (312 files, 3359 tests)
+- `GET http://localhost:3000/api/status`
+- `GET http://localhost:3000/api/providers`
+- `GET http://localhost:3000/api/routing/trace?requestId=complex-readonly-uplift-42801-r2&limit=50`
+- `node scripts/test-cross-domain-orchestration-stress.mjs`
+
+Remaining risks after this checkpoint:
+
+- Real-app multi-domain mutation sweeps should still be expanded beyond the harness, especially mixed second-brain, automation, browser, repo, and external-provider requests that require multiple approvals.
+- Delegated retry/fallback is working for the proven mixed read request, but terminal retry/recovery ownership still has overlap between graph node runners and worker-manager/tool-loop paths. Continue deleting those overlapping owners as graph-native replacements land.
+- The live mixed read used Ollama Cloud for managed-cloud selection and fell back during delegated retry; keep provider/profile verification focused in runtime provider orchestration and response-source metadata rather than adding request-specific routing exceptions.
+
 Checkpoint after the delegated-worker and recovery graph ownership cleanup:
 
 - `src/runtime/execution-graph/delegated-worker-node.ts` now owns delegated-worker graph creation input, running metadata, terminal verification artifacts, interruption/completion events, failure events, and status mapping. `WorkerManager` supplies request context, persists artifacts/events, and publishes timeline updates, but no longer hand-builds delegated-worker lifecycle metadata or terminal graph events.

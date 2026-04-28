@@ -570,6 +570,162 @@ describe('normalizeIntentGatewayDecision', () => {
     });
   });
 
+  it('routes memory search plus answer plans through tool-backed synthesis', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'memory_task',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Search memory for a marker and answer with it.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Search memory for the requested marker.',
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return the marker if found.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Search memory for SMOKE-MEM-42801 and reply with only the marker if you find it.',
+    });
+
+    expect(decision.plannedSteps).toEqual([
+      expect.objectContaining({
+        kind: 'read',
+        expectedToolCategories: ['memory_search', 'memory_recall'],
+      }),
+      expect.objectContaining({
+        kind: 'answer',
+        dependsOn: ['step_1'],
+      }),
+    ]);
+    expect(decision.executionClass).toBe('tool_orchestration');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
+  it('repairs collapsed comma-separated web, repo, and memory search plans', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'search_task',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Search web, repo, and memory for specified items and return bullet points.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Search the combined source set.',
+          expectedToolCategories: ['web_search', 'browser'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return three short bullets with what each source found.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Search the web for the title of https://example.com, search this repo for runLiveToolLoopController, and search memory for SMOKE-MEM-42801. Return three short bullets with what each source found. Do not edit anything.',
+    });
+
+    expect(decision.plannedSteps).toEqual([
+      expect.objectContaining({
+        kind: 'search',
+        expectedToolCategories: ['web_search', 'browser'],
+      }),
+      expect.objectContaining({
+        kind: 'search',
+        expectedToolCategories: ['repo_inspect'],
+        dependsOn: ['step_1'],
+      }),
+      expect.objectContaining({
+        kind: 'search',
+        expectedToolCategories: ['memory'],
+        dependsOn: ['step_2'],
+      }),
+      expect.objectContaining({
+        kind: 'answer',
+        dependsOn: ['step_3'],
+      }),
+    ]);
+  });
+
+  it('treats mixed web, repo, and memory evidence as a tool-backed general answer plan', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Search web, repo, and memory evidence before answering.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Search the web evidence.',
+          expectedToolCategories: ['web_search'],
+          required: true,
+        },
+        {
+          kind: 'search',
+          summary: 'Search local repo evidence.',
+          expectedToolCategories: ['repo_inspect'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+        {
+          kind: 'read',
+          summary: 'Search memory evidence.',
+          expectedToolCategories: ['memory'],
+          required: true,
+          dependsOn: ['step_2'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Synthesize the comparison.',
+          required: true,
+          dependsOn: ['step_1', 'step_2', 'step_3'],
+        },
+      ],
+    }, {
+      sourceContent: 'Search the web, this repo, and memory for the marker, then compare what each source can prove.',
+    });
+
+    expect(decision.plannedSteps?.map((step) => step.kind)).toEqual(['search', 'search', 'read', 'answer']);
+    expect(decision.executionClass).toBe('tool_orchestration');
+    expect(decision.preferredTier).toBe('external');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
   it('routes automation evidence plus answer plans through tool-backed synthesis even when the classifier says direct', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'automation_control',

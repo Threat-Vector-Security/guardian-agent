@@ -1,8 +1,14 @@
+const RAW_TOOL_MARKUP_PATTERN = /<\/?tool_results?\b|<\/?tool_calls?\b|<\/?tool_call\b|\[\s*\/?\s*tool_results?\s*\]|\[\s*\/?\s*tool_calls?\s*\]|\[\s*\/?\s*tool_call\s*\]/i;
+
+export function looksLikeRawToolMarkup(content: string | undefined): boolean {
+  if (!content?.trim()) return false;
+  return RAW_TOOL_MARKUP_PATTERN.test(content);
+}
+
 export function lacksUsableAssistantContent(content: string | undefined): boolean {
   if (!content?.trim()) return true;
   const trimmed = content.trim();
   const lower = trimmed.toLowerCase();
-  const rawToolMarkupPattern = /<\/?tool_result\b|<\/?tool_calls?\b|<\/?tool_call\b/i;
   const degradedPatterns = [
     'i could not generate',
     'i cannot generate',
@@ -14,7 +20,7 @@ export function lacksUsableAssistantContent(content: string | undefined): boolea
     'as an ai, i cannot',
   ];
   if (degradedPatterns.some((pattern) => lower.includes(pattern))) return true;
-  if (rawToolMarkupPattern.test(trimmed)) return true;
+  if (looksLikeRawToolMarkup(trimmed)) return true;
 
   if (trimmed.length < 200 && /^\{[\s\S]*\}$/.test(trimmed)) {
     try {

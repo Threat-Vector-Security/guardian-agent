@@ -3267,6 +3267,38 @@ describe('WebChannel', () => {
     expect(body.error).toContain('disabled by security policy');
   });
 
+  it('requires a code session for manual code terminals', async () => {
+    web = new WebChannel({ port: 18990, authToken: TEST_TOKEN });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const res = await fetch('http://localhost:18990/api/code/terminals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ cwd: process.cwd() }),
+    });
+    const body = await res.json() as { error: string };
+
+    expect(res.status).toBe(400);
+    expect(body.error).toContain('Code session is required');
+  });
+
+  it('requires a code session for code workspace file reads', async () => {
+    web = new WebChannel({ port: 18991, authToken: TEST_TOKEN });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const res = await fetch('http://localhost:18991/api/code/fs/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ path: 'package.json' }),
+    });
+    const body = await res.json() as { error: string };
+
+    expect(res.status).toBe(400);
+    expect(body.error).toContain('Code session is required');
+  });
+
   it('requires a privileged ticket for sensitive memory config updates', async () => {
     const updates: unknown[] = [];
     web = new WebChannel({
@@ -4343,7 +4375,7 @@ describe('WebChannel', () => {
       web = new WebChannel({ port: 18974, authToken: TEST_TOKEN, dashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18974/api/code/sessions?userId=web-user&channel=web&surfaceId=web-guardian-chat', {
+      const res = await fetch('http://localhost:18974/api/code/sessions?userId=other-user&channel=telegram&surfaceId=web-guardian-chat', {
         headers: authHeaders,
       });
 
