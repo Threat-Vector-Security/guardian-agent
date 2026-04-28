@@ -16,14 +16,12 @@ import {
 import type { DirectIntentDispatchResult } from './direct-intent-dispatch.js';
 import { tryDirectGoogleWorkspaceRead, tryDirectGoogleWorkspaceWrite } from './direct-mailbox-runtime.js';
 import { tryDirectMemoryRead, tryDirectMemorySave } from './direct-memory.js';
-import {
-  tryDirectPersonalAssistant,
-  type DirectPersonalAssistantDeps,
-} from './direct-personal-assistant.js';
+import { tryDirectPersonalAssistant } from './direct-personal-assistant.js';
 import { tryDirectProviderRead } from './direct-provider-read.js';
 import {
   buildDirectAutomationDeps,
   buildDirectMailboxDeps,
+  buildDirectPersonalAssistantDeps,
   buildDirectScheduledEmailAutomationDeps,
   type DirectRuntimeDepsInput,
 } from './direct-runtime-deps.js';
@@ -77,7 +75,6 @@ export interface BuildChatDirectRouteHandlersInput {
   executeStoredFilesystemSave: (
     input: StoredFilesystemSaveInput,
   ) => Promise<DirectIntentDispatchResult>;
-  personalAssistantDeps: DirectPersonalAssistantDeps;
   codingRoutes: ChatDirectCodingRouteDeps;
 }
 
@@ -117,6 +114,7 @@ export function buildChatDirectRouteHandlers(input: BuildChatDirectRouteHandlers
   const mailboxDeps = buildDirectMailboxDeps(input.runtimeDeps);
   const automationDeps = buildDirectAutomationDeps(input.runtimeDeps);
   const scheduledEmailAutomationDeps = buildDirectScheduledEmailAutomationDeps(input.runtimeDeps);
+  const personalAssistantDeps = buildDirectPersonalAssistantDeps(input.runtimeDeps);
 
   return {
     personal_assistant: () => tryDirectPersonalAssistant({
@@ -125,7 +123,7 @@ export function buildChatDirectRouteHandlers(input: BuildChatDirectRouteHandlers
       userKey: input.userKey,
       decision: input.decision ?? undefined,
       continuityThread: input.continuityThread,
-    }, input.personalAssistantDeps),
+    }, personalAssistantDeps),
     provider_read: () => tryDirectProviderRead({
       agentId: input.agentId,
       tools: input.tools,

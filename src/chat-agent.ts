@@ -141,22 +141,16 @@ import {
   tryDirectRecentToolReport as tryDirectRecentToolReportHelper,
 } from './runtime/chat-agent/recent-tool-report.js';
 import {
-  buildDirectSecondBrainClarificationResponse as buildDirectSecondBrainClarificationResponseHelper,
-  buildDirectSecondBrainMutationSuccessResponse as buildDirectSecondBrainMutationSuccessResponseHelper,
-  executeDirectSecondBrainMutation as executeDirectSecondBrainMutationHelper,
   readSecondBrainMutationApprovalDescriptor,
-  type DirectSecondBrainMutationAction,
-  type DirectSecondBrainMutationItemType,
-  type DirectSecondBrainMutationToolName,
 } from './runtime/chat-agent/direct-second-brain-mutation.js';
 import {
+  buildDirectSecondBrainSuccessResponse,
   type DirectRuntimeDepsInput,
 } from './runtime/chat-agent/direct-runtime-deps.js';
 import {
   buildStoredAutomationAuthoringInput,
   executeStoredAutomationAuthoring as executeStoredAutomationAuthoringHelper,
 } from './runtime/chat-agent/automation-authoring-resume.js';
-import type { DirectPersonalAssistantDeps } from './runtime/chat-agent/direct-personal-assistant.js';
 import {
   buildAssembledSystemPrompt as buildAssembledSystemPromptHelper,
   buildCodeSessionSystemContext as buildCodeSessionSystemContextHelper,
@@ -269,10 +263,7 @@ import {
 } from './runtime/chat-agent/provider-fallback.js';
 import {
   buildDirectHandlerResponseSource,
-  buildSecondBrainFocusMetadata,
-  buildSecondBrainFocusRemovalMetadata,
   readSecondBrainFocusContinuationState,
-  type SecondBrainFocusContinuationPayload,
 } from './runtime/chat-agent/direct-intent-helpers.js';
 
 export interface ChatAgentClassDeps {
@@ -1785,6 +1776,7 @@ interface DegradedDirectIntentResponseInput {
     const directRuntimeDeps: DirectRuntimeDepsInput = {
       agentId: this.id,
       tools: this.tools,
+      secondBrainService: this.secondBrainService,
       conversationService: this.conversationService,
       setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
       getPendingApprovals: (nextUserKey, surfaceId, nowMs) => this.getPendingApprovals(nextUserKey, surfaceId, nowMs),
@@ -1809,6 +1801,13 @@ interface DegradedDirectIntentResponseInput {
       buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
         result,
         fallbackContent,
+      ),
+      buildImmediateResponseMetadata: (_pendingApprovalIds, userId, channel, surfaceId, options) => this.buildImmediateResponseMetadata(
+        [] as ResolvedSkill[],
+        userId,
+        channel,
+        surfaceId,
+        options,
       ),
     };
     const continuityThreadForDirectState = continuityThreadForContext
@@ -1842,7 +1841,6 @@ interface DegradedDirectIntentResponseInput {
         providerOrder,
       ),
       executeStoredFilesystemSave: (input) => this.executeStoredFilesystemSave(input),
-      personalAssistantDeps: this.buildDirectPersonalAssistantDeps(),
       codingRoutes: this.buildDirectCodingRouteDeps(),
     });
     const directIntentResponse = await runDirectRouteOrchestration({
@@ -2334,117 +2332,6 @@ interface DegradedDirectIntentResponseInput {
       channel: message.channel,
       surfaceId: message.surfaceId,
       userId: message.userId,
-    });
-  }
-
-  private buildDirectPersonalAssistantDeps(): DirectPersonalAssistantDeps {
-    return {
-      tools: this.tools,
-      secondBrainService: this.secondBrainService,
-      buildClarificationResponse: (input) => this.buildDirectSecondBrainClarificationResponse(input),
-      executeMutation: (input) => this.executeDirectSecondBrainMutation(input),
-    };
-  }
-
-  private buildDirectSecondBrainMutationSuccessResponse(
-    descriptor: {
-      itemType: DirectSecondBrainMutationItemType;
-      action: DirectSecondBrainMutationAction;
-      fallbackId?: string;
-      fallbackLabel?: string;
-    },
-    output: unknown,
-    focusState: SecondBrainFocusContinuationPayload | null | undefined,
-  ): { content: string; metadata?: Record<string, unknown> } {
-    return buildDirectSecondBrainMutationSuccessResponseHelper({
-      descriptor,
-      output,
-      focusState,
-      buildFocusMetadata: (existingState, itemType, items, options) => buildSecondBrainFocusMetadata(
-        existingState,
-        itemType,
-        items,
-        options,
-      ),
-      buildFocusRemovalMetadata: (existingState, itemType) => buildSecondBrainFocusRemovalMetadata(
-        existingState,
-        itemType,
-      ),
-    });
-  }
-
-  private buildDirectSecondBrainClarificationResponse(input: {
-    message: UserMessage;
-    decision: IntentGatewayDecision;
-    prompt: string;
-    field?: string;
-    missingFields?: string[];
-    entities?: Record<string, unknown>;
-  }): { content: string; metadata?: Record<string, unknown> } {
-    return buildDirectSecondBrainClarificationResponseHelper({
-      ...input,
-      toPendingActionEntities: (entities) => toPendingActionEntities(
-        entities as Record<string, unknown> | IntentGatewayDecision['entities'] | undefined,
-      ),
-      setClarificationPendingAction: (userId, channel, surfaceId, action, nowMs) => this.setClarificationPendingAction(
-        userId,
-        channel,
-        surfaceId,
-        action,
-        nowMs,
-      ),
-      buildImmediateResponseMetadata: (_pendingApprovalIds, userId, channel, surfaceId, options) => this.buildImmediateResponseMetadata(
-        [] as ResolvedSkill[],
-        userId,
-        channel,
-        surfaceId,
-        options,
-      ),
-    });
-  }
-
-  private async executeDirectSecondBrainMutation(input: {
-    message: UserMessage;
-    ctx: AgentContext;
-    userKey: string;
-    decision: IntentGatewayDecision;
-    toolName: DirectSecondBrainMutationToolName;
-    args: Record<string, unknown>;
-    summary: string;
-    pendingIntro: string;
-    successDescriptor: {
-      itemType: DirectSecondBrainMutationItemType;
-      action: DirectSecondBrainMutationAction;
-      fallbackId?: string;
-      fallbackLabel?: string;
-    };
-    focusState: SecondBrainFocusContinuationPayload | null | undefined;
-  }): Promise<string | { content: string; metadata?: Record<string, unknown> }> {
-    return executeDirectSecondBrainMutationHelper({
-      ...input,
-      agentId: this.id,
-      tools: this.tools,
-      getPendingApprovals: (userKey, surfaceId, nowMs) => this.getPendingApprovals(userKey, surfaceId, nowMs),
-      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
-      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
-      setPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setPendingApprovalActionForRequest(
-        userKey,
-        surfaceId,
-        action,
-        nowMs,
-      ),
-      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
-        result,
-        fallbackContent,
-      ),
-      toPendingActionEntities: (entities) => toPendingActionEntities(
-        entities as Record<string, unknown> | IntentGatewayDecision['entities'] | undefined,
-      ),
-      buildDirectSecondBrainMutationSuccessResponse: (descriptor, output, focusState) => this.buildDirectSecondBrainMutationSuccessResponse(
-        descriptor,
-        output,
-        focusState,
-      ),
     });
   }
 
@@ -3732,7 +3619,7 @@ interface DegradedDirectIntentResponseInput {
     const focusState = readSecondBrainFocusContinuationState(
       this.getContinuityThread(pendingAction.scope.userId),
     );
-    return this.buildDirectSecondBrainMutationSuccessResponse(
+    return buildDirectSecondBrainSuccessResponse(
       secondBrainDescriptor,
       approvalResult.result?.output,
       focusState,
