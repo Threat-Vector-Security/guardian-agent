@@ -1423,6 +1423,15 @@ Checkpoint after the worker-suspension resume ownership cleanup:
 - Focused coverage passed: `npx vitest run src/runtime/execution-graph/worker-suspension-resume.test.ts src/supervisor/worker-manager.test.ts` reported 51 passing tests.
 - Full local gates passed after the cleanup: `npm run check`, `npm run build`, and full `npm test` (316 files, 3413 tests).
 
+Checkpoint after the mutation approval-resume event ownership cleanup:
+
+- `src/runtime/execution-graph/mutation-node.ts` now owns mutation approval-resume graph event construction, sequence selection, and timeline/store event emission through `emitMutationResumeGraphEvent`, `buildMutationResumeGraphEvent`, and `nextMutationResumeGraphSequence`.
+- `WorkerManager` now supplies only broker-safe graph/timeline stores and the clock around the non-worker `fs_write` approval resume path. It still owns the actual approved tool result handoff, supervisor `ToolExecutor` callback, pending-action completion, artifact persistence, and user-facing response metadata.
+- This deletes the local resume event factory from `WorkerManager` without changing mutation execution, approval policy, Intent Gateway routing, direct routes, or provider/profile selection.
+- Focused coverage passed: `npx vitest run src/runtime/execution-graph/mutation-node.test.ts src/supervisor/worker-manager.test.ts` reported 54 passing tests.
+- Full local gates passed after the cleanup: `npm run check`, `npm run build`, and full `npm test` (316 files, 3415 tests).
+- Approval-continuity harness passed after the cleanup: `node scripts/test-web-approvals.mjs`.
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.

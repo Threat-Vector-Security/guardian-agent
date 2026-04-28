@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ToolExecutionRequest } from '../../tools/types.js';
 import { buildSearchResultSetArtifact, buildWriteSpecArtifact } from './graph-artifacts.js';
-import { executeWriteSpecMutationNode, resumeWriteSpecMutationNodeAfterApproval, type MutationNodeExecutionContext } from './mutation-node.js';
+import {
+  buildMutationResumeGraphEvent,
+  emitMutationResumeGraphEvent,
+  executeWriteSpecMutationNode,
+  resumeWriteSpecMutationNodeAfterApproval,
+  type MutationNodeExecutionContext,
+} from './mutation-node.js';
 
 describe('execution graph mutation node', () => {
   it('executes WriteSpec through supervisor ToolExecutor and verifies read-back content', async () => {
@@ -234,6 +240,83 @@ describe('execution graph mutation node', () => {
     expect(result.receiptArtifact?.artifactId).toBe('graph-1:mutate-1:mutation-receipt:approved:approval-1');
     expect(result.receiptArtifact?.artifactId).not.toBe('graph-1:mutate-1:mutation-receipt');
     expect(result.verificationArtifact?.content.valid).toBe(true);
+  });
+
+  it('emits approval-resume graph events through graph-owned projection', () => {
+    const appended: unknown[] = [];
+    const timeline: unknown[] = [];
+    const event = emitMutationResumeGraphEvent({
+      context: { ...baseContext(), sequenceStart: 2 },
+      kind: 'approval_resolved',
+      payloadDetails: {
+        approvalId: 'approval-1',
+        resultStatus: 'denied',
+        writeSpecArtifactId: 'write-spec-approval',
+      },
+      eventKey: 'approval-denied',
+      now: () => 2_000,
+      nodeId: 'mutate-1',
+      nodeKind: 'mutate',
+      graphStore: {
+        getSnapshot: () => ({
+          events: [
+            { sequence: 3 },
+            { sequence: 8 },
+          ],
+        }),
+        appendEvent: (item) => appended.push(item),
+      },
+      runTimeline: {
+        ingestExecutionGraphEvent: (item) => timeline.push(item),
+      },
+    });
+
+    expect(event).toMatchObject({
+      eventId: 'graph-1:resume:approval-denied:9',
+      graphId: 'graph-1',
+      executionId: 'exec-1',
+      rootExecutionId: 'exec-1',
+      requestId: 'request-1',
+      runId: 'request-1',
+      nodeId: 'mutate-1',
+      nodeKind: 'mutate',
+      kind: 'approval_resolved',
+      timestamp: 2_000,
+      sequence: 9,
+      producer: 'supervisor',
+      channel: 'web',
+      agentId: 'guardian',
+      userId: 'user-1',
+      codeSessionId: 'code-1',
+      payload: {
+        approvalId: 'approval-1',
+        resultStatus: 'denied',
+        writeSpecArtifactId: 'write-spec-approval',
+      },
+    });
+    expect(appended).toEqual([event]);
+    expect(timeline).toEqual([event]);
+  });
+
+  it('can build graph-scoped mutation resume events without a node scope', () => {
+    const event = buildMutationResumeGraphEvent({
+      context: baseContext(),
+      kind: 'graph_completed',
+      payloadDetails: { status: 'succeeded' },
+      eventKey: 'graph-completed-after-approval',
+      sequence: 12,
+      timestamp: 3_000,
+    });
+
+    expect(event).toMatchObject({
+      eventId: 'graph-1:resume:graph-completed-after-approval:12',
+      graphId: 'graph-1',
+      kind: 'graph_completed',
+      sequence: 12,
+      payload: { status: 'succeeded' },
+    });
+    expect(event).not.toHaveProperty('nodeId');
+    expect(event).not.toHaveProperty('nodeKind');
   });
 
   it('rejects no-secret WriteSpecs before executing a tool when content contains secrets', async () => {

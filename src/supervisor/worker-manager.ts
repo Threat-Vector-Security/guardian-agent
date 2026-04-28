@@ -51,7 +51,6 @@ import type { IntentRoutingTraceLog, IntentRoutingTraceStage } from '../runtime/
 import type { DelegatedWorkerProgressEvent, RunTimelineStore } from '../runtime/run-timeline.js';
 import {
   isExecutionGraphEvent,
-  createExecutionGraphEvent,
   type ExecutionGraphEvent,
 } from '../runtime/execution-graph/graph-events.js';
 import type { ExecutionGraphStore } from '../runtime/execution-graph/graph-store.js';
@@ -116,6 +115,7 @@ import {
   completeGraphWriteSpecSynthesisNode,
 } from '../runtime/execution-graph/synthesis-node.js';
 import {
+  emitMutationResumeGraphEvent,
   executeWriteSpecMutationNode,
   resumeWriteSpecMutationNodeAfterApproval,
   type MutationNodeExecutionContext,
@@ -930,29 +930,20 @@ export class WorkerManager {
         producer?: ExecutionGraphEvent['producer'];
       } = {},
     ): ExecutionGraphEvent => {
-      sequence += 1;
-      const event = createExecutionGraphEvent({
-        eventId: `${suspension.graphId}:resume:${eventKey}:${sequence}`,
-        graphId: suspension.graphId,
-        executionId: suspension.mutationContext.executionId,
-        rootExecutionId: suspension.mutationContext.rootExecutionId,
-        ...(suspension.mutationContext.parentExecutionId ? { parentExecutionId: suspension.mutationContext.parentExecutionId } : {}),
-        requestId: suspension.mutationContext.requestId,
-        ...(suspension.mutationContext.runId ? { runId: suspension.mutationContext.runId } : {}),
-        ...(optionsForEvent.nodeId ? { nodeId: optionsForEvent.nodeId } : {}),
-        ...(optionsForEvent.nodeKind ? { nodeKind: optionsForEvent.nodeKind } : {}),
+      const event = emitMutationResumeGraphEvent({
+        context: suspension.mutationContext,
         kind,
-        timestamp: now(),
-        sequence,
-        producer: optionsForEvent.producer ?? 'supervisor',
-        ...(suspension.mutationContext.channel ? { channel: suspension.mutationContext.channel } : {}),
-        ...(suspension.mutationContext.agentId ? { agentId: suspension.mutationContext.agentId } : {}),
-        ...(suspension.mutationContext.userId ? { userId: suspension.mutationContext.userId } : {}),
-        ...(suspension.mutationContext.codeSessionId ? { codeSessionId: suspension.mutationContext.codeSessionId } : {}),
-        payload: payloadDetails,
+        payloadDetails,
+        eventKey,
+        sequenceStart: sequence,
+        graphStore: this.observability.executionGraphStore,
+        runTimeline: this.observability.runTimeline,
+        now,
+        nodeId: optionsForEvent.nodeId,
+        nodeKind: optionsForEvent.nodeKind,
+        producer: optionsForEvent.producer,
       });
-      this.observability.runTimeline?.ingestExecutionGraphEvent(event);
-      this.observability.executionGraphStore?.appendEvent(event);
+      sequence = Math.max(sequence, event.sequence);
       return event;
     };
 
