@@ -105,6 +105,80 @@ describe('execution graph pending-action adapter', () => {
     });
   });
 
+  it('records multi-approval graph interrupts without losing resume metadata', () => {
+    const store = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-graph-multi-pending-actions.test.sqlite',
+      now: () => 1_500,
+    });
+    const event = createExecutionGraphEvent({
+      eventId: 'event-approval-multi',
+      graphId: 'graph-multi',
+      executionId: 'exec-multi',
+      rootExecutionId: 'root-multi',
+      requestId: 'request-multi',
+      runId: 'request-multi',
+      nodeId: 'node-mutate',
+      nodeKind: 'mutate',
+      kind: 'approval_requested',
+      timestamp: 1_600,
+      sequence: 10,
+      producer: 'supervisor',
+      channel: 'web',
+      agentId: 'guardian',
+      userId: 'user-1',
+      payload: {
+        approvalIds: ['approval-a', 'approval-b'],
+        summary: 'Approve both graph writes.',
+      },
+    });
+
+    const record = recordGraphPendingActionInterrupt({
+      store,
+      scope: {
+        agentId: 'guardian',
+        userId: 'user-1',
+        channel: 'web',
+        surfaceId: 'surface-1',
+      },
+      event,
+      originalUserContent: 'Create two approved files.',
+      approvalSummaries: [
+        { id: 'approval-a', toolName: 'fs_write', argsPreview: '{"path":"tmp/a.txt"}' },
+        { id: 'approval-b', toolName: 'fs_write', argsPreview: '{"path":"tmp/b.txt"}' },
+      ],
+      artifactRefs: [
+        buildWriteSpecRef('write-spec-a'),
+        buildWriteSpecRef('write-spec-b'),
+      ],
+      nowMs: 1_500,
+    });
+
+    expect(record).toMatchObject({
+      status: 'pending',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve both graph writes.',
+        approvalIds: ['approval-a', 'approval-b'],
+        approvalSummaries: [
+          { id: 'approval-a', toolName: 'fs_write', argsPreview: '{"path":"tmp/a.txt"}' },
+          { id: 'approval-b', toolName: 'fs_write', argsPreview: '{"path":"tmp/b.txt"}' },
+        ],
+      },
+      resume: {
+        kind: 'execution_graph',
+        payload: {
+          graphId: 'graph-multi',
+          nodeId: 'node-mutate',
+          resumeToken: 'graph-multi:node-mutate:10',
+          artifactIds: ['write-spec-a', 'write-spec-b'],
+        },
+      },
+    });
+    expect(store.findActiveByApprovalId('approval-a')?.id).toBe(record?.id);
+    expect(store.findActiveByApprovalId('approval-b')?.id).toBe(record?.id);
+  });
+
   it('round-trips graph resume payloads without artifact contents', () => {
     const interrupt = {
       graphId: 'graph-1',
@@ -375,9 +449,9 @@ describe('execution graph pending-action adapter', () => {
   });
 });
 
-function buildWriteSpecRef(): ExecutionArtifactRef {
+function buildWriteSpecRef(artifactId = 'write-spec-1'): ExecutionArtifactRef {
   return {
-    artifactId: 'write-spec-1',
+    artifactId,
     graphId: 'graph-1',
     nodeId: 'node-synthesize',
     artifactType: 'WriteSpec',

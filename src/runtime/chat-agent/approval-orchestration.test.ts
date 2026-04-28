@@ -286,6 +286,111 @@ describe('approval-orchestration', () => {
     expect(completePendingAction).not.toHaveBeenCalled();
   });
 
+  it('resumes execution graph pending actions when all approvals are approved together', async () => {
+    const pendingAction = {
+      id: 'pending-graph-multi',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve graph writes',
+        approvalIds: ['approval-graph-a', 'approval-graph-b'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        originalUserContent: 'Write two files after approval.',
+      },
+      resume: {
+        kind: 'execution_graph',
+        payload: {
+          graphId: 'graph-multi',
+          nodeId: 'node-mutate',
+          resumeToken: 'resume-multi',
+          artifactIds: ['write-spec-a', 'write-spec-b'],
+        },
+      },
+      graphInterrupt: {
+        graphId: 'graph-multi',
+        nodeId: 'node-mutate',
+        nodeKind: 'mutate',
+        resumeToken: 'resume-multi',
+        artifactRefs: [],
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    } as const;
+    const resumeStoredExecutionGraphPendingAction = vi.fn(async () => ({
+      content: 'Graph mutation resumed after both approvals.',
+      metadata: { graphId: 'graph-multi' },
+    }));
+    const completePendingAction = vi.fn();
+
+    const result = await handleApprovalMessage({
+      message: {
+        id: 'msg-graph-multi',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+        content: 'approve',
+        timestamp: Date.now(),
+      },
+      ctx: {
+        agentId: 'chat',
+        emit: vi.fn(async () => {}),
+        checkAction: vi.fn(),
+        capabilities: [],
+      },
+      tools: {
+        decideApproval: vi.fn(async (approvalId: string) => ({
+          success: true,
+          approved: true,
+          executionSucceeded: true,
+          message: `Tool '${approvalId}' completed.`,
+        })),
+        getApprovalSummaries: vi.fn(() => new Map()),
+        listPendingApprovalIdsForUser: vi.fn(() => []),
+      },
+      getPendingApprovalAction: vi.fn(() => pendingAction as never),
+      setPendingApprovals: vi.fn(),
+      setPendingApprovalAction: vi.fn(() => ({ action: pendingAction })),
+      completePendingAction,
+      takeApprovalFollowUp: vi.fn(() => null),
+      clearApprovalFollowUp: vi.fn(),
+      resumeStoredExecutionGraphPendingAction,
+      normalizeApprovalContinuationResponse: vi.fn((response) => response),
+      withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
+      formatResolvedApprovalResultResponse: vi.fn(() => null),
+      formatPendingApprovalPrompt: vi.fn(() => 'Approve graph writes'),
+      resolveApprovalTargets: vi.fn(() => ({ ids: ['approval-graph-a', 'approval-graph-b'], errors: [] })),
+    });
+
+    expect(result).toEqual({
+      content: 'Graph mutation resumed after both approvals.',
+      metadata: { graphId: 'graph-multi' },
+    });
+    expect(resumeStoredExecutionGraphPendingAction).toHaveBeenCalledWith(
+      pendingAction,
+      {
+        approvalId: 'approval-graph-a',
+        approvalResult: expect.objectContaining({
+          success: true,
+          approved: true,
+          executionSucceeded: true,
+          message: 'Approved and executed 2 approvals.',
+        }),
+      },
+    );
+    expect(completePendingAction).not.toHaveBeenCalled();
+  });
+
   it('completes graph pending actions when the graph resume handler is unavailable', async () => {
     const pendingAction = {
       id: 'pending-graph-missing-handler',

@@ -2,6 +2,7 @@ import { stat, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { appendSecureFile, mkdirSecure } from '../util/secure-fs.js';
 import { createLogger } from '../util/logging.js';
+import { isSensitiveKeyName, normalizeSensitiveKeyName } from '../util/crypto-guardrails.js';
 import { intentRoutingTraceEntryMatchesContextFilters } from './trace-context-filters.js';
 
 import { getGuardianBaseDir } from '../util/env.js';
@@ -13,6 +14,59 @@ const DEFAULT_TRACE_FILE = 'intent-routing.jsonl';
 const DEFAULT_MAX_FILE_SIZE_BYTES = 5_000_000;
 const DEFAULT_MAX_FILES = 5;
 const DEFAULT_PREVIEW_CHARS = 220;
+const TRACE_REDACTED_VALUE = '[REDACTED]';
+const TRACE_REDACTED_PAYLOAD_REASON = 'trace_payload_redacted';
+const TRACE_MAX_SANITIZE_DEPTH = 12;
+const TRACE_RAW_PAYLOAD_KEYS = new Set([
+  'attachment',
+  'attachments',
+  'body',
+  'content',
+  'data',
+  'email',
+  'emails',
+  'event',
+  'events',
+  'html',
+  'item',
+  'items',
+  'message',
+  'messages',
+  'output',
+  'payload',
+  'rawoutput',
+  'rawpayload',
+  'rawresponse',
+  'rawresult',
+  'record',
+  'records',
+  'response',
+  'result',
+  'rows',
+  'stderr',
+  'stdout',
+  'text',
+  'tooloutput',
+  'toolresult',
+]);
+const TRACE_SENSITIVE_KEY_PATTERN = /(?:apikey|apitoken|authorization|bearer|clientsecret|cookie|credential|jwt|passphrase|password|privatekey|refreshtoken|secret|sessionid|token)/;
+const TRACE_SAFE_CORRELATION_KEYS = new Set([
+  'activeexecutionrefs',
+  'agentid',
+  'approvalid',
+  'approvalids',
+  'codesessionid',
+  'continuitykey',
+  'executionid',
+  'messageid',
+  'pendingactionid',
+  'requestid',
+  'rootexecutionid',
+  'taskexecutionid',
+  'taskrunid',
+  'userid',
+  'workerid',
+]);
 
 export type IntentRoutingTraceStage =
   | 'incoming_dispatch'
@@ -110,10 +164,127 @@ function createTraceId(now: number): string {
 
 function previewText(value: string | undefined, previewChars: number): string | undefined {
   if (!value) return undefined;
-  const trimmed = value.replace(/\s+/g, ' ').trim();
+  const trimmed = redactSensitiveTraceText(value).replace(/\s+/g, ' ').trim();
   if (!trimmed) return undefined;
   if (trimmed.length <= previewChars) return trimmed;
   return `${trimmed.slice(0, previewChars - 1)}…`;
+}
+
+function redactSensitiveTraceText(value: string): string {
+  return value
+    .replace(/\b(Authorization\s*[:=]\s*)Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1Bearer [REDACTED]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [REDACTED]')
+    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, TRACE_REDACTED_VALUE)
+    .replace(/\b\d{6,12}:[A-Za-z0-9_-]{20,}\b/g, TRACE_REDACTED_VALUE)
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, TRACE_REDACTED_VALUE)
+    .replace(/\b(?:sk|rk|xox[baprs]|gh[pousr]|glpat|github_pat|hf)[-_][A-Za-z0-9._-]{12,}\b/g, TRACE_REDACTED_VALUE)
+    .replace(
+      /\b(authorization)\s*[:=]\s*(?!Bearer\s+\[REDACTED\])["']?[^"',;\s)}\]]{4,}/gi,
+      (_match, key: string) => `${key}=${TRACE_REDACTED_VALUE}`,
+    )
+    .replace(
+      /\b(api[_-]?key|access[_-]?token|client[_-]?secret|credential|password|refresh[_-]?token|secret|token)\s*[:=]\s*["']?(?!\[REDACTED\])[^"',;\s)}\]]{4,}/gi,
+      (_match, key: string) => `${key}=${TRACE_REDACTED_VALUE}`,
+    );
+}
+
+function isTraceSensitiveKey(key: string): boolean {
+  const normalized = normalizeSensitiveKeyName(key);
+  if (TRACE_SAFE_CORRELATION_KEYS.has(normalized)) return false;
+  return isSensitiveKeyName(key) || TRACE_SENSITIVE_KEY_PATTERN.test(normalized);
+}
+
+function isTraceRawPayloadKey(key: string): boolean {
+  return TRACE_RAW_PAYLOAD_KEYS.has(normalizeSensitiveKeyName(key));
+}
+
+function summarizeRedactedTracePayload(value: unknown): Record<string, unknown> {
+  if (Array.isArray(value)) {
+    return {
+      redacted: true,
+      reason: TRACE_REDACTED_PAYLOAD_REASON,
+      valueType: 'array',
+      itemCount: value.length,
+    };
+  }
+  if (value !== null && typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>);
+    return {
+      redacted: true,
+      reason: TRACE_REDACTED_PAYLOAD_REASON,
+      valueType: 'object',
+      keyCount: keys.length,
+      keys: keys.slice(0, 12).map((key) => isTraceSensitiveKey(key) ? TRACE_REDACTED_VALUE : redactSensitiveTraceText(key)),
+    };
+  }
+  if (typeof value === 'string') {
+    return {
+      redacted: true,
+      reason: TRACE_REDACTED_PAYLOAD_REASON,
+      valueType: 'string',
+      length: value.length,
+    };
+  }
+  return {
+    redacted: true,
+    reason: TRACE_REDACTED_PAYLOAD_REASON,
+    valueType: value === null ? 'null' : typeof value,
+  };
+}
+
+function sanitizeTraceValue(value: unknown, key: string | undefined, depth: number, seen: WeakSet<object>): unknown {
+  if (key && isTraceSensitiveKey(key)) {
+    return TRACE_REDACTED_VALUE;
+  }
+  if (key && isTraceRawPayloadKey(key)) {
+    return summarizeRedactedTracePayload(value);
+  }
+  if (typeof value === 'string') {
+    return redactSensitiveTraceText(value);
+  }
+  if (Array.isArray(value)) {
+    if (depth >= TRACE_MAX_SANITIZE_DEPTH) {
+      return { redacted: true, reason: 'trace_depth_limit', valueType: 'array', itemCount: value.length };
+    }
+    return value.map((item) => sanitizeTraceValue(item, undefined, depth + 1, seen));
+  }
+  if (value !== null && typeof value === 'object') {
+    if (seen.has(value)) {
+      return { redacted: true, reason: 'trace_cycle' };
+    }
+    if (depth >= TRACE_MAX_SANITIZE_DEPTH) {
+      return {
+        redacted: true,
+        reason: 'trace_depth_limit',
+        valueType: 'object',
+        keyCount: Object.keys(value as Record<string, unknown>).length,
+      };
+    }
+    seen.add(value);
+    const sanitized: Record<string, unknown> = {};
+    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+      sanitized[childKey] = sanitizeTraceValue(childValue, childKey, depth + 1, seen);
+    }
+    seen.delete(value);
+    return sanitized;
+  }
+  return value;
+}
+
+function sanitizeTraceDetails(details: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!details) return undefined;
+  const sanitized = sanitizeTraceValue(details, undefined, 0, new WeakSet<object>());
+  return sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)
+    ? sanitized as Record<string, unknown>
+    : undefined;
+}
+
+function sanitizeTraceEntry(entry: IntentRoutingTraceEntry, previewChars: number): IntentRoutingTraceEntry {
+  return {
+    ...entry,
+    contentPreview: previewText(entry.contentPreview, previewChars),
+    details: sanitizeTraceDetails(entry.details),
+  };
 }
 
 export class IntentRoutingTraceLog {
@@ -158,6 +329,7 @@ export class IntentRoutingTraceLog {
       id: createTraceId(now),
       timestamp: now,
       contentPreview: previewText(input.contentPreview, this.previewChars),
+      details: sanitizeTraceDetails(input.details),
     };
     const line = `${JSON.stringify(entry)}\n`;
     this.writeQueue = this.writeQueue
@@ -218,7 +390,7 @@ export class IntentRoutingTraceLog {
         const lines = content.split('\n').filter(Boolean);
         for (const line of lines) {
           try {
-            entries.push(JSON.parse(line) as IntentRoutingTraceEntry);
+            entries.push(sanitizeTraceEntry(JSON.parse(line) as IntentRoutingTraceEntry, this.previewChars));
           } catch {
             // ignore malformed entries in tail reads
           }
