@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildPlannedTask,
   buildStepReceipts,
   computeWorkerRunStatus,
   findAnswerStepId,
@@ -213,6 +214,17 @@ describe('task plan receipt accounting', () => {
       args: { query: 'SMOKE-MEM-42801' },
     })).toBe('step_1');
 
+    expect(matchPlannedStepForTool({
+      plannedTask: {
+        ...plannedTask,
+        steps: plannedTask.steps.map((step) => step.stepId === 'step_1'
+          ? { ...step, expectedToolCategories: ['memory_task'] }
+          : step),
+      },
+      toolName: 'memory_search',
+      args: { query: 'SMOKE-MEM-42801' },
+    })).toBe('step_1');
+
     const stepReceipts = buildStepReceipts({
       plannedTask,
       evidenceReceipts: [memoryReceipt, answerReceipt],
@@ -225,6 +237,63 @@ describe('task plan receipt accounting', () => {
       { stepId: 'step_2', status: 'satisfied', evidenceReceiptIds: ['answer:1'] },
     ]);
     expect(computeWorkerRunStatus(plannedTask, stepReceipts, [], 'end_turn')).toBe('completed');
+  });
+
+  it('infers semantic evidence categories for generic general-assistant search steps', () => {
+    const plannedTask = buildPlannedTask({
+      route: 'general_assistant',
+      operation: 'search',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Search the web for the title of https://example.com.',
+          required: true,
+        },
+        {
+          kind: 'search',
+          summary: 'Search this repo for runLiveToolLoopController.',
+          required: true,
+        },
+        {
+          kind: 'search',
+          summary: 'Search memory for SMOKE-MEM-42801.',
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return three short bullets with what each source found.',
+          required: true,
+          dependsOn: ['step_1', 'step_2', 'step_3'],
+        },
+      ],
+    }, {
+      kind: 'general_answer',
+      route: 'general_assistant',
+      operation: 'search',
+      summary: 'User wants three parallel searches and a bullet summary of results.',
+    });
+
+    expect(plannedTask.steps.map((step) => step.expectedToolCategories ?? [])).toEqual([
+      ['web'],
+      ['repo_inspect'],
+      ['memory'],
+      [],
+    ]);
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'web_fetch',
+      args: { url: 'https://example.com' },
+    })).toBe('step_1');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'fs_search',
+      args: { query: 'runLiveToolLoopController' },
+    })).toBe('step_2');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'memory_search',
+      args: { query: 'SMOKE-MEM-42801' },
+    })).toBe('step_3');
   });
 
   it('allows semantic write steps to be satisfied by Second Brain mutation tools', () => {

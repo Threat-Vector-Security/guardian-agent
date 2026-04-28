@@ -99,6 +99,7 @@ const READ_ONLY_EVIDENCE_STEP_CATEGORIES = new Set([
   'browser_extract',
   'browser_state',
   'memory',
+  'memory_task',
   'memory_search',
   'memory_recall',
   'automation',
