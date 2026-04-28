@@ -84,6 +84,7 @@ import {
   resolveDelegatedWorkerLifecycle,
 } from '../runtime/execution-graph/delegated-worker-handoff.js';
 import {
+  finalizeDelegatedWorkerVerification,
   isDelegatedJobInFlight,
   runDelegatedEvidenceDrainExtension,
   verifyDelegatedWorkerResult,
@@ -2214,23 +2215,18 @@ export class WorkerManager {
           };
         }
       }
-      const verifiedEnvelope = attachDelegatedVerificationDecision(
-        verifiedResult.envelope,
-        verifiedResult.decision,
-        this.observability.now?.() ?? Date.now(),
-      );
-      const supervisorPlanId = effectiveTaskContract.plan.planId;
-      const envelopePlanId = verifiedEnvelope.taskContract.plan.planId;
-      const planDrift = supervisorPlanId !== envelopePlanId
-        || effectiveTaskContract.plan.steps.length !== verifiedEnvelope.taskContract.plan.steps.length;
+      const verificationFinalization = finalizeDelegatedWorkerVerification({
+        taskContract: effectiveTaskContract,
+        verifiedResult,
+        timestamp: this.observability.now?.() ?? Date.now(),
+      });
+      const verifiedEnvelope = verificationFinalization.verifiedEnvelope;
       this.recordDelegatedWorkerTrace('delegated_worker_contract_reconciled', effectiveInput, delegatedTarget, {
         requestId,
         taskRunId: delegatedTaskRunId,
         lifecycle: insufficiency ? 'failed' : 'completed',
-        taskContract: verifiedEnvelope.taskContract,
-        reason: planDrift
-          ? `Plan drift detected: supervisor=${supervisorPlanId} (${effectiveTaskContract.plan.steps.length} step(s)); envelope=${envelopePlanId} (${verifiedEnvelope.taskContract.plan.steps.length} step(s))`
-          : `Plan reconciled: ${envelopePlanId} (${verifiedEnvelope.taskContract.plan.steps.length} step(s))`,
+        taskContract: verificationFinalization.traceTaskContract,
+        reason: verificationFinalization.traceReason,
       });
       const sanitizedVerifiedEnvelope = sanitizeDelegatedEnvelopeForOperator(verifiedEnvelope);
       const verifiedMetadata: Record<string, unknown> = {
@@ -4310,42 +4306,6 @@ function listDelegatedRequestJobSnapshots(
       resultPreview: job.resultPreview,
       error: job.error,
     }));
-}
-
-function attachDelegatedVerificationDecision(
-  envelope: DelegatedResultEnvelope,
-  decision: VerificationDecision,
-  timestamp: number,
-): DelegatedResultEnvelope {
-  const verificationEvent: ExecutionEvent = {
-    eventId: `verification:${decision.decision}`,
-    type: 'verification_decided',
-    timestamp,
-    payload: {
-      decision: decision.decision,
-      reasons: [...decision.reasons],
-      retryable: decision.retryable,
-      ...(decision.requiredNextAction ? { requiredNextAction: decision.requiredNextAction } : {}),
-      ...(decision.missingEvidenceKinds ? { missingEvidenceKinds: [...decision.missingEvidenceKinds] } : {}),
-      ...(decision.unsatisfiedStepIds ? { unsatisfiedStepIds: [...decision.unsatisfiedStepIds] } : {}),
-      ...(decision.qualityNotes ? { qualityNotes: [...decision.qualityNotes] } : {}),
-      summary: decision.reasons[0] ?? 'Verification completed.',
-    },
-  };
-  return {
-    ...envelope,
-    verification: {
-      ...decision,
-      reasons: [...decision.reasons],
-      ...(decision.missingEvidenceKinds ? { missingEvidenceKinds: [...decision.missingEvidenceKinds] } : {}),
-      ...(decision.unsatisfiedStepIds ? { unsatisfiedStepIds: [...decision.unsatisfiedStepIds] } : {}),
-      ...(decision.qualityNotes ? { qualityNotes: [...decision.qualityNotes] } : {}),
-    },
-    events: [
-      ...envelope.events.filter((event) => event.type !== 'verification_decided'),
-      verificationEvent,
-    ],
-  };
 }
 
 function sanitizeDelegatedEnvelopeForOperator(
