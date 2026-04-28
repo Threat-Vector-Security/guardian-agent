@@ -210,12 +210,15 @@ Current behavior:
 - on Unix-like hosts, coding sessions can use `clamdscan` or `clamscan` when installed
 - native detections are merged back into `workspaceTrust` and can force the repo trust state to `blocked`
 - clean native scans do not override static repo findings
+- static workspace trust also monitors SaaS anti-patterns such as client-exposed service-role credentials, public secret env prefixes, hardcoded fallback secrets, permissive RLS, public buckets, and unsigned webhook handlers
+- Assistant Security monitoring promotes unreviewed SaaS anti-pattern workspace findings as incident candidates
 - the `security-triage` agent does not currently review repos or assign workspace-trust verdicts
 
 Current boundary:
 
 - Windows Defender is a first-class native provider in the Security page and unified-alert pipeline
 - Unix ClamAV is currently consumed only as a coding-session workspace scan signal, not as a first-class Security-page provider surface
+- code-session web workbench file, git, and terminal APIs remain session-bound and do not use browser-supplied host paths as an authorization boundary
 
 Primary files:
 

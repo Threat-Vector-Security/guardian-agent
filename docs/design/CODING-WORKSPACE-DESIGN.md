@@ -20,7 +20,7 @@ It provides:
 - repo-aware Guardian chat with backend workspace profiling, bounded repo indexing, and retrieval-backed working context
 - explorer and source/diff inspection
 - approval-aware coding execution
-- PTY terminals for manual operator shell work
+- session-bound PTY terminals for manual operator shell work
 - session-scoped managed remote sandboxes for longer-running isolated coding work
 - session resume across web, main chat, CLI, and Telegram
 - broader Guardian actions performed from the active workspace context
@@ -51,6 +51,8 @@ Core layers:
   - **Lifecycle Management:** Users can manually **Stop** (hibernate) and **Start** (resume) persistent managed sandboxes to manage costs.
   - **Live Status:** Managed sandboxes display real-time status badges (**RUNNING**, **STOPPED**) based on their active cloud state.
 - the Code page renders and edits a server-owned session, but still keeps transient UI cache locally
+- web workbench routes resolve files, git diffs, and manual terminals through a backend `CodeSession`; they fail closed when a session cannot be resolved
+- web code-session ownership is server-derived for the web principal/surface and does not trust client-supplied `userId` or `channel` values
 
 ## Backend-Owned Code Sessions
 
@@ -138,7 +140,7 @@ Each backend `CodeSession` carries durable workspace awareness state:
 - `workspaceTrust`
   - bounded static review of the attached repo before Guardian treats repo execution as low-friction
   - persisted trust state: `trusted`, `caution`, `blocked`
-  - summary plus finding list for suspicious prompt-injection or execution indicators
+  - summary plus finding list for suspicious prompt-injection, execution, SaaS credential, authorization, exposure, and webhook indicators
   - optional `nativeProtection` sub-state for host malware scan results such as Windows Defender or ClamAV
 - `workspaceTrustReview`
   - optional session-scoped manual acceptance of the current `workspaceTrust` findings
@@ -158,6 +160,7 @@ The shipped repo-assessment boundary is intentionally narrow: `workspaceTrust` i
 Current trust-review heuristics also distinguish between strong execution indicators and review-only context:
 
 - native AV detections and other blocking indicators are surfaced first in the bounded findings list
+- public secret environment prefixes, client-exposed service-role references, hardcoded fallback secrets, permissive RLS policies, public storage buckets, and unsigned webhook handlers are monitored as workspace trust findings
 - prompt-injection matches in documentation or prompt-testing content remain visible as caution signals, not direct malware proof
 - inline `node -e` helpers are treated as review indicators unless they pair with stronger execution signals such as fetch-and-exec or encoded payloads
 
@@ -249,7 +252,10 @@ That means:
 - Code uses a dedicated Code-session prompt architecture rather than inheriting the main Guardian host prompt and trying to rewrite it after the fact
 - Code sessions use a separate durable long-term memory store as bounded workspace-scoped augment context while still keeping Guardian global memory as the primary durable memory scope
 - repo-local actions such as file edits, shell commands, git operations, tests, builds, and lint runs stay scoped to the active `workspaceRoot`
+- web workbench REST routes for file browsing/editing and git diffs require a resolved backend code session and do not fall back to host-relative paths
+- manual Code terminals require a resolved backend code session, resolve cwd under that session root, and start with a filtered workspace-scoped environment rather than the full Guardian process environment
 - Coding-session shell execution prefers structured direct exec for simple repo-local binaries and blocks known interpreter/launcher trampoline forms instead of treating every command as an opaque shell string
+- `package_install` uses the managed package trust path and resolves its `cwd` through the active workspace or configured allowed paths before approval or execution
 - broader Guardian capabilities remain available from within the Coding Workspace, including research, web/docs lookup, automation creation, and unrelated assistant tasks
 - using broader capabilities does not replace the session's repo identity or current focus unless the user explicitly changes sessions or retargets the work
 

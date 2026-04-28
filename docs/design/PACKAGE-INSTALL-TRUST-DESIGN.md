@@ -24,7 +24,7 @@ It exists to reduce silent execution of newly downloaded package artifacts by:
 - blocking or pausing risky installs before the package manager mutates the target environment
 - surfacing caution and blocked outcomes through unified Security alerts
 
-It is not the Coding Assistant workspace trust system and it does not depend on a code-session workspace root.
+It is not the Coding Assistant workspace trust system. When invoked from a code session it still uses the session workspace root as the filesystem boundary for `cwd`; outside code sessions it uses Guardian's configured allowed paths.
 
 ## Primary Surface
 
@@ -34,7 +34,7 @@ Behavior:
 
 - `package_install` accepts `command`, optional `cwd`, and optional `allowCaution`
 - it is approval-gated because it is mutating
-- it does not use the normal `allowedPaths` widening model for `cwd`
+- `cwd` must resolve inside the active workspace root or configured `allowedPaths` before approval or execution
 - it routes through the dedicated `PackageInstallTrustService`
 
 Guardrails around the old shell path:
@@ -79,11 +79,11 @@ The intent is to keep the safety claim honest: Guardian only manages the explici
 
 ## Target Model
 
-Package Install Trust is target-agnostic in the sense that it is not workspace-scoped.
+Package Install Trust is separate from repo/workspace trust, but its working directory is still filesystem-scoped.
 
 The install target comes from:
 
-- the tool `cwd`
+- the tool `cwd`, which must resolve through Guardian's allowed-path/workspace path resolver
 - package-manager flags such as `--prefix`, `--target`, `--root`, `--user`, or `-g` when supported by the managed parser
 
 The persisted event records the target as one of:
@@ -94,6 +94,8 @@ The persisted event records the target as one of:
 - `global`
 
 This is a host/package safety system, not a repo trust system.
+
+The cwd rule prevents the managed install path from becoming a parallel host-filesystem mutation API. The package review still answers a supply-chain question about staged package artifacts; the path resolver answers where the install command is allowed to run.
 
 ## Managed Install Flow
 
