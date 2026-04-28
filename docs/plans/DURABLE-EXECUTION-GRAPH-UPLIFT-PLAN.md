@@ -1290,6 +1290,16 @@ Checkpoint after the recovery-advisor graph lifecycle ownership cleanup:
 - Live API spot checks passed without fallback: exact answer `recoverygraph-exact-42804` (`general_assistant`, `ollama-cloud-direct`, `minimax-m2.1`), repo-grounded symbol search `recoverygraph-repo-42804` (`coding_task`, `ollama-cloud-coding`, `glm-5.1`), automation listing `recoverygraph-auto-list-42804` (`automation_control`, `ollama-cloud-tools`, `glm-4.7`), and credential-disclosure refusal `recoverygraph-security-42804` (`security_task`, `ollama-cloud-direct`, `minimax-m2.1`, no raw secret-pattern match).
 - Recovery graph lifecycle was proven with focused execution-graph/WorkerManager tests in this slice. The live API spot check was a regression ladder for already-proven direct, coding, automation, and security paths; it did not force an artificial live recovery failure.
 
+Checkpoint after the delegated grounded-synthesis retry ownership cleanup:
+
+- `src/runtime/execution-graph/delegated-worker-retry.ts` now owns the no-tools grounded answer-synthesis retry prompt builder, synthesized answer envelope repair, and delegated evidence-ref extraction used by retry/reconciliation paths.
+- `WorkerManager` still owns brokered worker dispatch, progress publication, response metadata merge, and final verifier invocation, but no longer carries pure prompt/envelope construction helpers for answer-only delegated retry.
+- Focused coverage passed: `npx vitest run src/runtime/execution-graph/delegated-worker-retry.test.ts src/supervisor/worker-manager.test.ts` reported 55 passing tests.
+- Full local gates passed after the extraction: `npm run check`, `npm run build`, and full `npm test` (312 files, 3385 tests).
+- The actual app was restarted with `scripts/start-dev-windows.ps1 -StartOnly`; `GET http://localhost:3000/api/status` returned `status=running`, and `GET http://localhost:3000/api/providers` exposed the configured managed-cloud Ollama Cloud/OpenRouter/NVIDIA profiles.
+- Live API startup/regression smoke passed with request id `grounded-retry-extract-42804`: `/api/message` returned exactly `GROUNDED-RETRY-EXTRACT-42804`, the routing trace classified `general_assistant`, selected `ollama-cloud-direct` / `minimax-m2.1`, completed the run, and reported no provider fallback.
+- Answer-only delegated retry behavior was proven with focused execution-graph/WorkerManager tests in this slice. The live API spot check did not force an artificial live recovery failure.
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.
