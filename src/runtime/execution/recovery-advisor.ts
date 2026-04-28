@@ -42,6 +42,13 @@ export interface RecoveryAdvisorRequest {
   jobSnapshots?: RecoveryAdvisorJobSnapshot[];
 }
 
+export interface RecoveryAdvisorRequestJobSnapshotInput {
+  toolName?: string;
+  status?: string;
+  argsPreview?: string;
+  resultPreview?: string;
+}
+
 export interface ValidatedRecoveryAdvice {
   reason: string;
   actions: RecoveryAdvisorAction[];
@@ -94,6 +101,25 @@ const STRATEGIES_BY_STEP_KIND: Record<PlannedStep['kind'], readonly RecoveryAdvi
   tool_call: ['retry_tool_call'],
   memory_save: ['retry_tool_call'],
 };
+
+export function buildRecoveryAdvisorRequest(input: {
+  originalRequest: string;
+  taskContract: DelegatedResultEnvelope['taskContract'];
+  verification: VerificationDecision;
+  jobSnapshots?: RecoveryAdvisorRequestJobSnapshotInput[];
+  maxJobSnapshots?: number;
+}): RecoveryAdvisorRequest {
+  const maxJobSnapshots = input.maxJobSnapshots ?? 20;
+  const jobSnapshots = (input.jobSnapshots ?? [])
+    .slice(0, Math.max(0, maxJobSnapshots))
+    .map(toRecoveryAdvisorJobSnapshot);
+  return {
+    originalRequest: input.originalRequest,
+    taskContract: input.taskContract,
+    verification: input.verification,
+    ...(jobSnapshots.length > 0 ? { jobSnapshots } : {}),
+  };
+}
 
 export function buildRecoveryAdvisorMessages(input: RecoveryAdvisorRequest): ChatMessage[] {
   const unsatisfiedSteps = readRecoveryUnsatisfiedSteps(input);
@@ -157,20 +183,34 @@ export function buildRecoveryAdvisorMessages(input: RecoveryAdvisorRequest): Cha
 export function parseRecoveryAdvisorProposal(content: string | undefined): RecoveryAdvisorProposal | null {
   const parsed = parseStructuredJsonObject(content ?? '');
   if (!parsed || typeof parsed !== 'object') return null;
-  const decision = parsed.decision === 'retry' || parsed.decision === 'give_up'
-    ? parsed.decision
+  return normalizeRecoveryAdvisorProposal(parsed);
+}
+
+export function readRecoveryAdvisorProposal(
+  metadata: Record<string, unknown> | undefined,
+): RecoveryAdvisorProposal | null {
+  const recoveryAdvisor = isRecord(metadata?.recoveryAdvisor) ? metadata.recoveryAdvisor : null;
+  const proposal = isRecord(recoveryAdvisor?.proposal) ? recoveryAdvisor.proposal : null;
+  return proposal ? normalizeRecoveryAdvisorProposal(proposal) : null;
+}
+
+function normalizeRecoveryAdvisorProposal(
+  proposal: Record<string, unknown>,
+): RecoveryAdvisorProposal | null {
+  const decision = proposal.decision === 'retry' || proposal.decision === 'give_up'
+    ? proposal.decision
     : null;
   if (!decision) return null;
-  const actions = Array.isArray(parsed.actions)
-    ? parsed.actions
-        .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry))
+  const actions = Array.isArray(proposal.actions)
+    ? proposal.actions
+        .filter(isRecord)
         .map((entry) => normalizeRecoveryAdvisorAction(entry))
         .filter((entry): entry is RecoveryAdvisorAction => !!entry)
     : undefined;
   return {
     decision,
-    ...(typeof parsed.reason === 'string' && parsed.reason.trim()
-      ? { reason: parsed.reason.trim() }
+    ...(typeof proposal.reason === 'string' && proposal.reason.trim()
+      ? { reason: proposal.reason.trim() }
       : {}),
     ...(actions && actions.length > 0 ? { actions } : {}),
   };
@@ -268,6 +308,17 @@ export function buildRecoveryAdvisorAdditionalSection(
   };
 }
 
+function toRecoveryAdvisorJobSnapshot(
+  snapshot: RecoveryAdvisorRequestJobSnapshotInput,
+): RecoveryAdvisorJobSnapshot {
+  return {
+    ...(snapshot.toolName ? { toolName: snapshot.toolName } : {}),
+    ...(snapshot.status ? { status: snapshot.status } : {}),
+    ...(snapshot.argsPreview ? { argsPreview: snapshot.argsPreview } : {}),
+    ...(snapshot.resultPreview ? { resultPreview: snapshot.resultPreview } : {}),
+  };
+}
+
 function normalizeRecoveryAdvisorAction(value: Record<string, unknown>): RecoveryAdvisorAction | null {
   const stepId = typeof value.stepId === 'string' ? value.stepId.trim() : '';
   const strategy = normalizeRecoveryAdvisorStrategy(value.strategy);
@@ -352,4 +403,8 @@ function truncateRecoveryText(value: string, maxLength: number): string {
   const normalized = value.replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, Math.max(0, maxLength - 1))}...`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
