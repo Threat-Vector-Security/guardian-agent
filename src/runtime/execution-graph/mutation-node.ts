@@ -51,6 +51,15 @@ export interface ExecuteWriteSpecMutationNodeResult {
   events: ExecutionGraphEvent[];
 }
 
+export interface MutationResumeGraphEventStore {
+  getSnapshot?: (graphId: string) => { events: Array<{ sequence: number }> } | null | undefined;
+  appendEvent?: (event: ExecutionGraphEvent) => void;
+}
+
+export interface MutationResumeGraphTimeline {
+  ingestExecutionGraphEvent?: (event: ExecutionGraphEvent) => void;
+}
+
 export interface ResumeWriteSpecMutationNodeAfterApprovalInput {
   writeSpec: ExecutionArtifact<WriteSpecContent>;
   approvedToolResult: Record<string, unknown>;
@@ -421,6 +430,78 @@ export async function resumeWriteSpecMutationNodeAfterApproval(
     path: input.writeSpec.content.path,
   }, 'node-completed');
   return { status: 'succeeded', receiptArtifact, verificationArtifact, events };
+}
+
+export function emitMutationResumeGraphEvent(input: {
+  context: MutationNodeExecutionContext;
+  kind: ExecutionGraphEvent['kind'];
+  payloadDetails: Record<string, unknown>;
+  eventKey: string;
+  graphStore?: MutationResumeGraphEventStore;
+  runTimeline?: MutationResumeGraphTimeline;
+  now?: () => number;
+  sequenceStart?: number;
+  nodeId?: string;
+  nodeKind?: ExecutionGraphEvent['nodeKind'];
+  producer?: ExecutionGraphEvent['producer'];
+}): ExecutionGraphEvent {
+  const sequence = nextMutationResumeGraphSequence(
+    input.context,
+    input.graphStore,
+    input.sequenceStart,
+  );
+  const event = buildMutationResumeGraphEvent({
+    context: input.context,
+    kind: input.kind,
+    payloadDetails: input.payloadDetails,
+    eventKey: input.eventKey,
+    sequence,
+    timestamp: input.now?.() ?? input.context.now?.() ?? Date.now(),
+    nodeId: input.nodeId,
+    nodeKind: input.nodeKind,
+    producer: input.producer,
+  });
+  input.runTimeline?.ingestExecutionGraphEvent?.(event);
+  input.graphStore?.appendEvent?.(event);
+  return event;
+}
+
+export function buildMutationResumeGraphEvent(input: {
+  context: MutationNodeExecutionContext;
+  kind: ExecutionGraphEvent['kind'];
+  payloadDetails: Record<string, unknown>;
+  eventKey: string;
+  sequence: number;
+  timestamp: number;
+  nodeId?: string;
+  nodeKind?: ExecutionGraphEvent['nodeKind'];
+  producer?: ExecutionGraphEvent['producer'];
+}): ExecutionGraphEvent {
+  return createExecutionGraphEvent({
+    ...baseEventContext(input.context),
+    eventId: `${input.context.graphId}:resume:${input.eventKey}:${input.sequence}`,
+    ...(input.nodeId ? { nodeId: input.nodeId } : {}),
+    ...(input.nodeKind ? { nodeKind: input.nodeKind } : {}),
+    kind: input.kind,
+    timestamp: input.timestamp,
+    sequence: input.sequence,
+    producer: input.producer ?? 'supervisor',
+    payload: input.payloadDetails,
+  });
+}
+
+export function nextMutationResumeGraphSequence(
+  context: Pick<MutationNodeExecutionContext, 'graphId' | 'sequenceStart'>,
+  graphStore?: MutationResumeGraphEventStore,
+  sequenceStart?: number,
+): number {
+  const fallback = sequenceStart ?? context.sequenceStart ?? 0;
+  const snapshot = graphStore?.getSnapshot?.(context.graphId);
+  if (!snapshot) return fallback + 1;
+  return snapshot.events.reduce(
+    (highest, event) => Math.max(highest, event.sequence),
+    fallback,
+  ) + 1;
 }
 
 function validateWriteSpecForMutation(writeSpec: ExecutionArtifact<WriteSpecContent>): string | null {
