@@ -142,10 +142,9 @@ import { buildDelegatedTaskContract } from '../runtime/execution/verifier.js';
 import {
   buildDeterministicRecoveryAdvice,
   buildGraphRecoveryProposalCandidateFromAdvice,
+  buildRecoveryAdvisorRequest,
+  readRecoveryAdvisorProposal,
   validateRecoveryAdvisorProposal,
-  type RecoveryAdvisorAction,
-  type RecoveryAdvisorJobSnapshot,
-  type RecoveryAdvisorProposal,
   type RecoveryAdvisorRequest,
 } from '../runtime/execution/recovery-advisor.js';
 import {
@@ -1763,12 +1762,12 @@ export class WorkerManager {
     effectiveIntentDecision?: IntentGatewayDecision;
     dispatchBase: DelegatedWorkerDispatchBase;
   }): Promise<RecoveryAdvisorGraphResult | null> {
-    const advisorRequest: RecoveryAdvisorRequest = {
+    const advisorRequest: RecoveryAdvisorRequest = buildRecoveryAdvisorRequest({
       originalRequest: input.request.message.content,
       taskContract: input.taskContract,
       verification: input.verification,
-      jobSnapshots: input.jobSnapshots.slice(0, 20).map(toRecoveryAdvisorJobSnapshot),
-    };
+      jobSnapshots: input.jobSnapshots,
+    });
 
     this.observability.intentRoutingTrace?.record({
       stage: 'recovery_advisor_started',
@@ -4987,38 +4986,6 @@ function mergeUniquePaths(...groups: Array<string[] | undefined>): string[] {
     }
   }
   return [...merged];
-}
-
-function toRecoveryAdvisorJobSnapshot(snapshot: DelegatedJobSnapshot): RecoveryAdvisorJobSnapshot {
-  return {
-    toolName: snapshot.toolName,
-    status: snapshot.status,
-    ...(snapshot.argsPreview ? { argsPreview: snapshot.argsPreview } : {}),
-    ...(snapshot.resultPreview ? { resultPreview: snapshot.resultPreview } : {}),
-  };
-}
-
-function readRecoveryAdvisorProposal(metadata: Record<string, unknown> | undefined): RecoveryAdvisorProposal | null {
-  const recoveryAdvisor = isRecord(metadata?.recoveryAdvisor) ? metadata.recoveryAdvisor : null;
-  const proposal = isRecord(recoveryAdvisor?.proposal) ? recoveryAdvisor.proposal : null;
-  if (!proposal) return null;
-  const decision = proposal.decision === 'retry' || proposal.decision === 'give_up'
-    ? proposal.decision
-    : null;
-  if (!decision) return null;
-  const actions = Array.isArray(proposal.actions)
-    ? proposal.actions
-        .filter((entry): entry is RecoveryAdvisorAction => (
-          isRecord(entry)
-          && typeof entry.stepId === 'string'
-          && typeof entry.strategy === 'string'
-        ))
-    : undefined;
-  return {
-    decision,
-    ...(typeof proposal.reason === 'string' ? { reason: proposal.reason } : {}),
-    ...(actions && actions.length > 0 ? { actions } : {}),
-  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

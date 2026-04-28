@@ -4,7 +4,9 @@ import {
   buildGraphRecoveryProposalCandidateFromAdvice,
   buildDeterministicRecoveryAdvice,
   buildRecoveryAdvisorAdditionalSection,
+  buildRecoveryAdvisorRequest,
   parseRecoveryAdvisorProposal,
+  readRecoveryAdvisorProposal,
   validateRecoveryAdvisorProposal,
 } from './recovery-advisor.js';
 
@@ -52,6 +54,57 @@ function verification(): VerificationDecision {
 }
 
 describe('recovery advisor', () => {
+  it('builds bounded advisor requests and reads typed worker proposals', () => {
+    const request = buildRecoveryAdvisorRequest({
+      originalRequest: 'Search then write a summary.',
+      taskContract: taskContract(),
+      verification: verification(),
+      maxJobSnapshots: 1,
+      jobSnapshots: [
+        {
+          toolName: 'fs_search',
+          status: 'succeeded',
+          argsPreview: '{"query":"planned_steps"}',
+          resultPreview: 'src/runtime/execution/task-plan.ts',
+        },
+        {
+          toolName: 'fs_write',
+          status: 'queued',
+          resultPreview: 'not included',
+        },
+      ],
+    });
+
+    expect(request.jobSnapshots).toEqual([{
+      toolName: 'fs_search',
+      status: 'succeeded',
+      argsPreview: '{"query":"planned_steps"}',
+      resultPreview: 'src/runtime/execution/task-plan.ts',
+    }]);
+
+    expect(readRecoveryAdvisorProposal({
+      recoveryAdvisor: {
+        proposal: {
+          decision: 'retry',
+          reason: 'Missing write receipt.',
+          actions: [{
+            stepId: 'step_2',
+            strategy: 'complete_missing_write',
+            toolName: 'fs_write',
+          }],
+        },
+      },
+    })).toEqual({
+      decision: 'retry',
+      reason: 'Missing write receipt.',
+      actions: [{
+        stepId: 'step_2',
+        strategy: 'complete_missing_write',
+        toolName: 'fs_write',
+      }],
+    });
+  });
+
   it('validates a bounded write-step retry and builds deterministic guidance', () => {
     const proposal = parseRecoveryAdvisorProposal(JSON.stringify({
       decision: 'retry',
