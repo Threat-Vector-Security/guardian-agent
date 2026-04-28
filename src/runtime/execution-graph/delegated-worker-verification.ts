@@ -23,6 +23,7 @@ import {
 import {
   buildDelegatedRetryableFailure,
   extractDelegatedEvidenceRefs,
+  shouldAdoptDelegatedTaskContract,
   type DelegatedResultSufficiencyFailure,
 } from './delegated-worker-retry.js';
 
@@ -91,6 +92,27 @@ export interface DelegatedWorkerVerificationFinalizationResult {
   planDrift: boolean;
 }
 
+export interface DelegatedWorkerVerificationCycleInput {
+  requestId: string;
+  taskRunId: string;
+  metadata: Record<string, unknown> | undefined;
+  intentDecision: IntentGatewayDecision | undefined;
+  executionProfile: SelectedExecutionProfile | undefined;
+  taskContract: DelegatedResultEnvelope['taskContract'];
+  jobSnapshots: DelegatedJobSnapshot[];
+  attemptLabel?: string;
+  drainPendingJobs: (deadlineMs: number) => Promise<DelegatedJobDrainResult>;
+  trace?: (event: DelegatedEvidenceDrainExtensionTraceEvent) => void;
+}
+
+export interface DelegatedWorkerVerificationCycleResult {
+  taskContract: DelegatedResultEnvelope['taskContract'];
+  verifiedResult: DelegatedWorkerVerificationResult;
+  insufficiency: DelegatedResultSufficiencyFailure | null;
+  jobSnapshots: DelegatedJobSnapshot[];
+  extendedDrain: DelegatedEvidenceDrainExtensionResult | null;
+}
+
 export function verifyDelegatedWorkerResult(
   input: DelegatedWorkerVerificationInput,
 ): DelegatedWorkerVerificationResult {
@@ -150,6 +172,54 @@ export function verifyDelegatedWorkerResult(
         .filter((step) => step.required !== false)
         .map((step) => step.stepId),
     },
+  };
+}
+
+export async function runDelegatedWorkerVerificationCycle(
+  input: DelegatedWorkerVerificationCycleInput,
+): Promise<DelegatedWorkerVerificationCycleResult> {
+  let taskContract = input.taskContract;
+  let jobSnapshots = input.jobSnapshots;
+  let verifiedResult = verifyDelegatedWorkerResult({
+    metadata: input.metadata,
+    intentDecision: input.intentDecision,
+    executionProfile: input.executionProfile,
+    taskContract,
+    jobSnapshots,
+  });
+  let insufficiency = buildDelegatedRetryableFailure(verifiedResult.decision, verifiedResult.envelope);
+  if (shouldAdoptDelegatedTaskContract(taskContract, verifiedResult.envelope.taskContract)) {
+    taskContract = verifiedResult.envelope.taskContract;
+  }
+
+  const extendedDrain = await runDelegatedEvidenceDrainExtension({
+    requestId: input.requestId,
+    taskRunId: input.taskRunId,
+    metadata: input.metadata,
+    intentDecision: input.intentDecision,
+    executionProfile: input.executionProfile,
+    taskContract,
+    decision: verifiedResult.decision,
+    jobSnapshots,
+    ...(input.attemptLabel ? { attemptLabel: input.attemptLabel } : {}),
+    drainPendingJobs: input.drainPendingJobs,
+    trace: input.trace,
+  });
+  if (extendedDrain) {
+    jobSnapshots = extendedDrain.jobSnapshots;
+    verifiedResult = extendedDrain.verifiedResult;
+    if (shouldAdoptDelegatedTaskContract(taskContract, verifiedResult.envelope.taskContract)) {
+      taskContract = verifiedResult.envelope.taskContract;
+    }
+    insufficiency = extendedDrain.insufficiency;
+  }
+
+  return {
+    taskContract,
+    verifiedResult,
+    insufficiency,
+    jobSnapshots,
+    extendedDrain,
   };
 }
 

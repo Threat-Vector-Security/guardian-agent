@@ -9,6 +9,7 @@ import {
   isDelegatedJobInFlight,
   reconcileDelegatedEnvelopeWithJobSnapshots,
   runDelegatedEvidenceDrainExtension,
+  runDelegatedWorkerVerificationCycle,
   shouldExtendDelegatedEvidenceDrain,
   verifyDelegatedWorkerResult,
   type DelegatedJobSnapshot,
@@ -192,6 +193,54 @@ describe('delegated worker verification graph policy', () => {
         summary: 'All required delegated steps were satisfied.',
       },
     }]);
+  });
+
+  it('runs the delegated verification cycle with contract adoption outside WorkerManager', async () => {
+    const supervisorContract = delegatedTaskContract();
+    const workerContract: DelegatedTaskContract = {
+      ...supervisorContract,
+      plan: {
+        ...supervisorContract.plan,
+        planId: 'plan-worker',
+      },
+    };
+    const metadata = buildDelegatedExecutionMetadata(buildDelegatedSyntheticEnvelope({
+      taskContract: workerContract,
+      runStatus: 'incomplete',
+      stopReason: 'end_turn',
+      operatorSummary: 'Worker is still gathering evidence.',
+    }));
+    let drainCalled = false;
+
+    const result = await runDelegatedWorkerVerificationCycle({
+      requestId: 'req-cycle',
+      taskRunId: 'task-cycle',
+      metadata,
+      intentDecision: undefined,
+      executionProfile: undefined,
+      taskContract: supervisorContract,
+      jobSnapshots: [{ id: 'job-running', toolName: 'fs_read', status: 'running' }],
+      drainPendingJobs: async (_deadlineMs) => {
+        drainCalled = true;
+        return {
+          snapshots: [{
+            id: 'job-cycle',
+            toolName: 'fs_read',
+            status: 'completed',
+            argsPreview: '{"path":"src/runtime/execution-graph/delegated-worker-verification.ts"}',
+            resultPreview: 'runDelegatedWorkerVerificationCycle',
+          }],
+          waitedMs: 50,
+          inFlightRemaining: 0,
+        };
+      },
+    });
+
+    expect(result.taskContract.plan.planId).toBe('plan-worker');
+    expect(result.extendedDrain).toBeNull();
+    expect(drainCalled).toBe(false);
+    expect(result.jobSnapshots).toEqual([expect.objectContaining({ id: 'job-running' })]);
+    expect(result.insufficiency?.decision.retryable).toBe(true);
   });
 
   it('normalizes in-flight delegated job statuses', () => {
