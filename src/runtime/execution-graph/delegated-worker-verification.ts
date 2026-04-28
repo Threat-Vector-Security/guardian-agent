@@ -12,6 +12,7 @@ import {
 } from '../execution/task-plan.js';
 import type {
   DelegatedResultEnvelope,
+  ExecutionEvent,
   VerificationDecision,
 } from '../execution/types.js';
 import { verifyDelegatedResult } from '../execution/verifier.js';
@@ -77,6 +78,19 @@ export interface DelegatedEvidenceDrainExtensionResult {
   insufficiency: DelegatedResultSufficiencyFailure | null;
 }
 
+export interface DelegatedWorkerVerificationFinalizationInput {
+  taskContract: DelegatedResultEnvelope['taskContract'];
+  verifiedResult: DelegatedWorkerVerificationResult;
+  timestamp: number;
+}
+
+export interface DelegatedWorkerVerificationFinalizationResult {
+  verifiedEnvelope: DelegatedResultEnvelope;
+  traceTaskContract: DelegatedResultEnvelope['taskContract'];
+  traceReason: string;
+  planDrift: boolean;
+}
+
 export function verifyDelegatedWorkerResult(
   input: DelegatedWorkerVerificationInput,
 ): DelegatedWorkerVerificationResult {
@@ -136,6 +150,28 @@ export function verifyDelegatedWorkerResult(
         .filter((step) => step.required !== false)
         .map((step) => step.stepId),
     },
+  };
+}
+
+export function finalizeDelegatedWorkerVerification(
+  input: DelegatedWorkerVerificationFinalizationInput,
+): DelegatedWorkerVerificationFinalizationResult {
+  const verifiedEnvelope = attachDelegatedVerificationDecision(
+    input.verifiedResult.envelope,
+    input.verifiedResult.decision,
+    input.timestamp,
+  );
+  const supervisorPlanId = input.taskContract.plan.planId;
+  const envelopePlanId = verifiedEnvelope.taskContract.plan.planId;
+  const planDrift = supervisorPlanId !== envelopePlanId
+    || input.taskContract.plan.steps.length !== verifiedEnvelope.taskContract.plan.steps.length;
+  return {
+    verifiedEnvelope,
+    traceTaskContract: verifiedEnvelope.taskContract,
+    planDrift,
+    traceReason: planDrift
+      ? `Plan drift detected: supervisor=${supervisorPlanId} (${input.taskContract.plan.steps.length} step(s)); envelope=${envelopePlanId} (${verifiedEnvelope.taskContract.plan.steps.length} step(s))`
+      : `Plan reconciled: ${envelopePlanId} (${verifiedEnvelope.taskContract.plan.steps.length} step(s))`,
   };
 }
 
@@ -319,6 +355,42 @@ export function isDelegatedWorkerBudgetExhausted(terminationReason: string | und
   return terminationReason === 'max_rounds'
     || terminationReason === 'max_wall_clock'
     || terminationReason === 'watchdog_kill';
+}
+
+function attachDelegatedVerificationDecision(
+  envelope: DelegatedResultEnvelope,
+  decision: VerificationDecision,
+  timestamp: number,
+): DelegatedResultEnvelope {
+  const verificationEvent: ExecutionEvent = {
+    eventId: `verification:${decision.decision}`,
+    type: 'verification_decided',
+    timestamp,
+    payload: {
+      decision: decision.decision,
+      reasons: [...decision.reasons],
+      retryable: decision.retryable,
+      ...(decision.requiredNextAction ? { requiredNextAction: decision.requiredNextAction } : {}),
+      ...(decision.missingEvidenceKinds ? { missingEvidenceKinds: [...decision.missingEvidenceKinds] } : {}),
+      ...(decision.unsatisfiedStepIds ? { unsatisfiedStepIds: [...decision.unsatisfiedStepIds] } : {}),
+      ...(decision.qualityNotes ? { qualityNotes: [...decision.qualityNotes] } : {}),
+      summary: decision.reasons[0] ?? 'Verification completed.',
+    },
+  };
+  return {
+    ...envelope,
+    verification: {
+      ...decision,
+      reasons: [...decision.reasons],
+      missingEvidenceKinds: decision.missingEvidenceKinds ? [...decision.missingEvidenceKinds] : undefined,
+      unsatisfiedStepIds: decision.unsatisfiedStepIds ? [...decision.unsatisfiedStepIds] : undefined,
+      qualityNotes: decision.qualityNotes ? [...decision.qualityNotes] : undefined,
+    },
+    events: [
+      ...envelope.events.filter((event) => event.type !== 'verification_decided'),
+      verificationEvent,
+    ],
+  };
 }
 
 function synthesizeDelegatedEvidenceReceiptsFromJobs(

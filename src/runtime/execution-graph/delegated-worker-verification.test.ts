@@ -4,6 +4,7 @@ import type { DelegatedTaskContract } from '../execution/types.js';
 import type { WorkerExecutionMetadata } from '../worker-execution-metadata.js';
 import {
   buildSyntheticDelegatedEnvelopeFromJobs,
+  finalizeDelegatedWorkerVerification,
   isDelegatedWorkerBudgetExhausted,
   isDelegatedJobInFlight,
   reconcileDelegatedEnvelopeWithJobSnapshots,
@@ -131,6 +132,66 @@ describe('delegated worker verification graph policy', () => {
     expect(result.envelope.evidenceReceipts.map((receipt) => receipt.receiptId)).toContain('job:job-3');
     expect(result.decision.decision).not.toBe('contradicted');
     expect(result.decision.missingEvidenceKinds ?? []).not.toContain('delegated_result_envelope');
+  });
+
+  it('finalizes verification envelopes and trace reconciliation details without WorkerManager state', () => {
+    const supervisorContract = delegatedTaskContract();
+    const workerContract: DelegatedTaskContract = {
+      ...supervisorContract,
+      plan: {
+        ...supervisorContract.plan,
+        planId: 'plan-worker',
+      },
+    };
+    const envelope = buildDelegatedSyntheticEnvelope({
+      taskContract: workerContract,
+      runStatus: 'completed',
+      stopReason: 'end_turn',
+      operatorSummary: 'Done.',
+      events: [{
+        eventId: 'old-verification',
+        type: 'verification_decided',
+        timestamp: 1,
+        payload: {
+          decision: 'insufficient',
+          reasons: ['old'],
+          retryable: true,
+          summary: 'old',
+        },
+      }],
+    });
+
+    const result = finalizeDelegatedWorkerVerification({
+      taskContract: supervisorContract,
+      timestamp: 42,
+      verifiedResult: {
+        envelope,
+        decision: {
+          decision: 'satisfied',
+          reasons: ['All required delegated steps were satisfied.'],
+          retryable: false,
+        },
+      },
+    });
+
+    expect(result.planDrift).toBe(true);
+    expect(result.traceTaskContract.plan.planId).toBe('plan-worker');
+    expect(result.traceReason).toContain('Plan drift detected: supervisor=plan-verify');
+    expect(result.verifiedEnvelope.verification).toMatchObject({
+      decision: 'satisfied',
+      retryable: false,
+    });
+    expect(result.verifiedEnvelope.events.filter((event) => event.type === 'verification_decided')).toEqual([{
+      eventId: 'verification:satisfied',
+      type: 'verification_decided',
+      timestamp: 42,
+      payload: {
+        decision: 'satisfied',
+        reasons: ['All required delegated steps were satisfied.'],
+        retryable: false,
+        summary: 'All required delegated steps were satisfied.',
+      },
+    }]);
   });
 
   it('normalizes in-flight delegated job statuses', () => {
