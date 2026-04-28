@@ -3,7 +3,7 @@ import type { ChatMessage } from '../llm/types.js';
 import type { SelectedExecutionProfile } from './execution-profiles.js';
 import type { DelegatedWorkerRunClass } from './assistant-jobs.js';
 import type { OrchestrationRoleDescriptor } from './orchestration-role-descriptors.js';
-import type { DelegatedTaskContract } from './execution/types.js';
+import type { DelegatedResultEnvelope, DelegatedTaskContract } from './execution/types.js';
 import type { ExecutionPlan } from './planner/types.js';
 import type { WorkerAutomationAuthoringResume } from '../worker/automation-resume.js';
 
@@ -36,6 +36,7 @@ export interface SerializedToolLoopWorkerSuspension {
   pendingTools: SerializedSuspendedToolCall[];
   originalMessage: UserMessage;
   taskContract?: DelegatedTaskContract;
+  sourceEnvelope?: DelegatedResultEnvelope;
   executionProfile?: SelectedExecutionProfile;
   createdAt: number;
   expiresAt: number;
@@ -162,6 +163,7 @@ export function readWorkerSuspensionSession(value: unknown): SerializedWorkerSus
       pendingTools,
       originalMessage,
       ...(isRecord(value.taskContract) ? { taskContract: clonePlain(value.taskContract) as unknown as DelegatedTaskContract } : {}),
+      ...(isRecord(value.sourceEnvelope) ? { sourceEnvelope: clonePlain(value.sourceEnvelope) as unknown as DelegatedResultEnvelope } : {}),
       ...(isRecord(value.executionProfile) ? { executionProfile: clonePlain(value.executionProfile) as unknown as SelectedExecutionProfile } : {}),
       createdAt,
       expiresAt,

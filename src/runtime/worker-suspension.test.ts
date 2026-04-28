@@ -6,9 +6,19 @@ import {
   readWorkerSuspensionMetadata,
   WORKER_SUSPENSION_SCHEMA_VERSION,
 } from './worker-suspension.js';
+import { buildDelegatedSyntheticEnvelope } from './execution/metadata.js';
+import { buildDelegatedTaskContract } from './execution/verifier.js';
 
 describe('worker suspension serialization', () => {
   it('round-trips suspended tool-loop state through metadata and graph envelope payloads', () => {
+    const sourceEnvelope = buildDelegatedSyntheticEnvelope({
+      taskContract: buildDelegatedTaskContract(null),
+      runStatus: 'suspended',
+      stopReason: 'approval_required',
+      operatorSummary: 'Waiting for approval.',
+      evidenceReceipts: [],
+      events: [],
+    });
     const session = {
       version: WORKER_SUSPENSION_SCHEMA_VERSION,
       kind: 'tool_loop' as const,
@@ -25,6 +35,7 @@ describe('worker suspension serialization', () => {
         content: 'Write the report.',
         timestamp: 1,
       },
+      sourceEnvelope,
       createdAt: 2,
       expiresAt: 3_000,
     };

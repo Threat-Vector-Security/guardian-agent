@@ -167,6 +167,7 @@ interface SuspendedToolLoopSession {
   pendingTools: SuspendedToolCall[];
   originalMessage: UserMessage;
   taskContract?: DelegatedTaskContract;
+  sourceEnvelope?: DelegatedResultEnvelope;
   executionProfile?: SelectedExecutionProfile;
 }
 
@@ -1196,6 +1197,32 @@ function uniqueReceipts(receipts: EvidenceReceipt[]): EvidenceReceipt[] {
   return next;
 }
 
+function mergeApprovalContinuationSourceEnvelopes(
+  first: DelegatedResultEnvelope | undefined,
+  second: DelegatedResultEnvelope | null | undefined,
+): DelegatedResultEnvelope | undefined {
+  if (!first) return second ?? undefined;
+  if (!second) return first;
+  const evidenceReceipts = uniqueReceipts([
+    ...first.evidenceReceipts,
+    ...second.evidenceReceipts,
+  ]);
+  const eventIds = new Set<string>();
+  const events: ExecutionEvent[] = [];
+  for (const event of [...first.events, ...second.events]) {
+    if (eventIds.has(event.eventId)) continue;
+    eventIds.add(event.eventId);
+    events.push(event);
+  }
+  return {
+    ...second,
+    taskContract: first.taskContract,
+    evidenceReceipts,
+    events,
+    interruptions: [...first.interruptions, ...second.interruptions],
+  };
+}
+
 function buildApprovalContinuationReceiptStepIds(input: {
   taskContract: DelegatedTaskContract;
   sourceEnvelope?: DelegatedResultEnvelope;
@@ -1784,6 +1811,7 @@ export class BrokeredWorkerSession {
         pendingTools: suspended.pendingTools.map((pending) => ({ ...pending })),
         originalMessage: structuredClone(suspended.originalMessage),
         ...(suspended.taskContract ? { taskContract: structuredClone(suspended.taskContract) } : {}),
+        ...(suspended.sourceEnvelope ? { sourceEnvelope: structuredClone(suspended.sourceEnvelope) } : {}),
         ...(suspended.executionProfile ? { executionProfile: structuredClone(suspended.executionProfile) } : {}),
         createdAt,
         expiresAt,
@@ -1817,6 +1845,7 @@ export class BrokeredWorkerSession {
         pendingTools: suspension.pendingTools.map((pending) => ({ ...pending })),
         originalMessage: structuredClone(suspension.originalMessage),
         ...(suspension.taskContract ? { taskContract: structuredClone(suspension.taskContract) } : {}),
+        ...(suspension.sourceEnvelope ? { sourceEnvelope: structuredClone(suspension.sourceEnvelope) } : {}),
         ...(suspension.executionProfile ? { executionProfile: structuredClone(suspension.executionProfile) } : {}),
       };
       this.pendingApprovals = {
@@ -2839,7 +2868,10 @@ export class BrokeredWorkerSession {
     approvedEvents: ExecutionEvent[];
     chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>;
   }): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const sourceEnvelope = readDelegatedResultEnvelope(input.resumed.metadata);
+    const sourceEnvelope = mergeApprovalContinuationSourceEnvelopes(
+      input.suspended.sourceEnvelope,
+      readDelegatedResultEnvelope(input.resumed.metadata),
+    );
     const taskContract = input.suspended.taskContract
       ?? sourceEnvelope?.taskContract
       ?? buildDelegatedTaskContract(readPreRoutedIntentGatewayMetadata(input.suspended.originalMessage.metadata)?.decision);
@@ -3365,22 +3397,6 @@ export class BrokeredWorkerSession {
       this.rememberToolReportScope(message, codeContext, toolExecutor);
       const ids = pendingTools.map((pending) => pending.approvalId);
       const expiresAt = Date.now() + PENDING_APPROVAL_TTL_MS;
-      this.pendingApprovals = {
-        ids,
-        expiresAt,
-      };
-      this.suspendedSession = {
-        kind: 'tool_loop',
-        llmMessages: result.messages,
-        pendingTools,
-        originalMessage: {
-          ...message,
-          ...(message.metadata ? { metadata: { ...message.metadata } } : {}),
-        },
-        taskContract,
-        ...(selectedExecutionProfile ? { executionProfile: selectedExecutionProfile } : {}),
-      };
-
       const pendingApprovalMeta = toolExecutor.getApprovalMetadata(ids);
       const interruptions: Interruption[] = [{
         interruptionId: `approval:${ids.join(',')}`,
@@ -3419,6 +3435,22 @@ export class BrokeredWorkerSession {
         selectedExecutionProfile,
         stopReason: result.outcome.stopReason,
       });
+      this.pendingApprovals = {
+        ids,
+        expiresAt,
+      };
+      this.suspendedSession = {
+        kind: 'tool_loop',
+        llmMessages: result.messages,
+        pendingTools,
+        originalMessage: {
+          ...message,
+          ...(message.metadata ? { metadata: { ...message.metadata } } : {}),
+        },
+        taskContract,
+        sourceEnvelope: envelope,
+        ...(selectedExecutionProfile ? { executionProfile: selectedExecutionProfile } : {}),
+      };
       return {
         content: pendingContent,
         metadata: this.attachCurrentWorkerSuspension(

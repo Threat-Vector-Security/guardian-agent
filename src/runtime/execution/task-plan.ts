@@ -712,9 +712,9 @@ function inferExpectedToolCategories(
 ): string[] {
   switch (step.kind) {
     case 'search':
-      return inferSearchToolCategories(contract);
+      return inferSearchToolCategories(step.summary, contract);
     case 'read':
-      return inferReadToolCategories(contract);
+      return inferReadToolCategories(step.summary, contract);
     case 'write':
       return inferWriteToolCategories(step.summary, contract);
     case 'memory_save':
@@ -727,10 +727,15 @@ function inferExpectedToolCategories(
 }
 
 function inferSearchToolCategories(
+  summary: string | undefined,
   contract: {
     route?: string;
   },
 ): string[] {
+  const semanticCategories = inferSemanticEvidenceToolCategories(summary);
+  if (semanticCategories.length > 0) {
+    return semanticCategories;
+  }
   if (contract.route === 'memory_task') {
     return ['memory_search', 'memory_recall'];
   }
@@ -747,10 +752,15 @@ function inferSearchToolCategories(
 }
 
 function inferReadToolCategories(
+  summary: string | undefined,
   contract: {
     route?: string;
   },
 ): string[] {
+  const semanticCategories = inferSemanticEvidenceToolCategories(summary);
+  if (semanticCategories.length > 0) {
+    return semanticCategories;
+  }
   if (contract.route === 'memory_task') {
     return ['memory_search', 'memory_recall'];
   }
@@ -764,6 +774,62 @@ function inferReadToolCategories(
     return ['web_fetch', 'fs_read', 'fs_list'];
   }
   return ['fs_read', 'fs_list'];
+}
+
+function inferSemanticEvidenceToolCategories(summary: string | undefined): string[] {
+  const normalized = summary?.trim().toLowerCase() ?? '';
+  if (!normalized) {
+    return [];
+  }
+  const categories: string[] = [];
+  if (containsAny(normalized, ['memory', 'remembered', 'knowledge base'])) {
+    categories.push('memory');
+  }
+  if (containsAny(normalized, [
+    'repo',
+    'repository',
+    'workspace',
+    'codebase',
+    'source code',
+    'local code',
+    'implementation',
+    'file path',
+    'symbol',
+  ])) {
+    categories.push('repo_inspect');
+  }
+  if (containsAny(normalized, [
+    'web',
+    'internet',
+    'browser',
+    'website',
+    'page title',
+    'url',
+    'http://',
+    'https://',
+  ])) {
+    categories.push('web');
+  }
+  if (containsAny(normalized, ['automation', 'automations', 'workflow', 'workflows'])) {
+    categories.push('automation_list');
+  }
+  if (containsAny(normalized, [
+    'second brain',
+    'calendar',
+    'appointment',
+    'reminder',
+    'note',
+    'contact',
+    'contacts',
+    'library',
+  ])) {
+    categories.push('second_brain');
+  }
+  return [...new Set(categories)];
+}
+
+function containsAny(value: string, needles: string[]): boolean {
+  return needles.some((needle) => value.includes(needle));
 }
 
 function inferToolCallCategories(
@@ -884,9 +950,17 @@ function expectedToolCategoryMatchesTool(
     || (normalized === 'repo_inspect' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
     || (normalized === 'repo_inspection' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
     || (normalized === 'second_brain' && toolName.startsWith('second_brain_'))
+    || (normalized === 'personal_assistant_task' && toolName.startsWith('second_brain_'))
     || (normalized === 'browser' && (toolName.startsWith('browser_') || toolName.startsWith('web_')))
     || (normalized === 'web' && (toolName.startsWith('web_') || toolName.startsWith('browser_')))
+    || (normalized === 'browser_task' && (toolName.startsWith('browser_') || toolName.startsWith('web_')))
+    || (normalized === 'search_task' && (toolName.startsWith('web_') || toolName.startsWith('browser_')))
     || (normalized === 'memory' && (
+      stepKind === 'memory_save'
+        ? toolName === 'memory_save'
+        : MEMORY_READ_TOOL_NAMES.has(toolName)
+    ))
+    || (normalized === 'memory_task' && (
       stepKind === 'memory_save'
         ? toolName === 'memory_save'
         : MEMORY_READ_TOOL_NAMES.has(toolName)

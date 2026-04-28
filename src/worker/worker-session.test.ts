@@ -1874,7 +1874,7 @@ describe('BrokeredWorkerSession automation control', () => {
       .map((message: { content?: string }) => message.content ?? '')
       .join('\n\n');
     expect(systemMessages).toContain('Execution plan:');
-    expect(systemMessages).toContain('step_1: search - Search the repo for the delegated worker completion contract files. (required; expected tool categories: fs_search, code_symbol_search)');
+    expect(systemMessages).toContain('step_1: search - Search the repo for the delegated worker completion contract files. (required; expected tool categories: repo_inspect)');
     expect(systemMessages).toContain('step_2: read - Read the specific implementation files needed to ground the exact file references. (required; expected tool categories: fs_read, fs_list; depends on: step_1)');
     expect(systemMessages).toContain('step_3: answer - Answer with exact file names and symbol names grounded in the repo evidence. (required; depends on: step_1, step_2)');
     expect(systemMessages).toContain('Delegated task contract:');
