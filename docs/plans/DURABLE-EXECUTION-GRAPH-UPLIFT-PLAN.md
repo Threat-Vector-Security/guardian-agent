@@ -1415,6 +1415,14 @@ Checkpoint after the delegated retry invocation cleanup:
 - Rebuilt-app API spot check passed for ordinary paths after restarting `node dist/index.js`: `GET /api/status`, provider/routing inspection, exact marker request `codex-live-retry-exact-42804` via `ollama-cloud-direct`, and raw credential disclosure refusal `codex-live-retry-security-42804` with no pending action.
 - The mixed web+repo delegated request exposed provider/profile suitability rather than a new architecture failure: the default `ollama-cloud-tools` / `glm-4.7` worker run `codex-live-retry-mixed-42804` timed out at the 300s app budget before concrete tool evidence, while the same request with request-scoped `ollama-cloud-coding` / `glm-5.1` (`codex-live-retry-mixed-coding-42804`) gathered web/browser/repo evidence, suspended on two harmless `example.com` read approvals, resumed through `/api/tools/approvals/decision`, completed the graph, cleared the pending action, and returned a grounded final answer citing `Example Domain`, `src/tools/builtin/browser-tools.ts`, and `src/runtime/browser-prerouter.ts`.
 
+Checkpoint after the worker-suspension resume ownership cleanup:
+
+- `src/runtime/execution-graph/worker-suspension-resume.ts` now owns worker-suspension resume context projection, graph event construction, graph sequence selection, timeline/store event emission, and approval-continuation trace-context projection.
+- `WorkerManager` now supplies only broker-safe graph/timeline stores and clock callbacks for this path. It still owns actual worker dispatch, pending-action store writes, audit/progress publication, and approval result handling, and brokered workers still receive no direct `Runtime`, `ToolExecutor`, provider, channel, or filesystem authority.
+- This is a narrow ownership cleanup for approval/resume projection. It does not change Intent Gateway routing, provider/profile selection, direct routes, or delegated-worker authority boundaries.
+- Focused coverage passed: `npx vitest run src/runtime/execution-graph/worker-suspension-resume.test.ts src/supervisor/worker-manager.test.ts` reported 51 passing tests.
+- Full local gates passed after the cleanup: `npm run check`, `npm run build`, and full `npm test` (316 files, 3413 tests).
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.
