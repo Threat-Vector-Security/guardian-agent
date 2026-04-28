@@ -104,6 +104,13 @@ import {
   readWorkerSuspensionArtifact,
 } from '../runtime/execution-graph/worker-suspension-artifact.js';
 import {
+  buildWorkerSuspensionResumeContext,
+  emitWorkerSuspensionGraphEvent,
+  workerSuspensionResumeContextToTraceContext,
+  type WorkerApprovalContinuationTraceContext,
+  type WorkerSuspensionGraphResumeContext,
+} from '../runtime/execution-graph/worker-suspension-resume.js';
+import {
   buildGraphWriteSpecSynthesisMessages,
   buildGroundedSynthesisLedgerArtifact,
   completeGraphWriteSpecSynthesisNode,
@@ -162,8 +169,6 @@ import {
   attachWorkerSuspensionMetadata,
   buildWorkerSuspensionEnvelope,
   readWorkerSuspensionMetadata,
-  type SerializedWorkerSuspensionSession,
-  type WorkerSuspensionResumeContext,
 } from '../runtime/worker-suspension.js';
 import type {
   DelegatedResultEnvelope,
@@ -326,27 +331,6 @@ interface ExecutionGraphResumeContext {
   expiresAt: number;
 }
 
-interface WorkerSuspensionGraphResumeContext {
-  graphId: string;
-  executionId: string;
-  rootExecutionId: string;
-  parentExecutionId?: string;
-  requestId: string;
-  runId?: string;
-  nodeId: string;
-  resumeToken: string;
-  approvalId: string;
-  channel?: string;
-  agentId?: string;
-  userId?: string;
-  codeSessionId?: string;
-  resume: WorkerSuspensionResumeContext;
-  session: SerializedWorkerSuspensionSession;
-  artifactIds: string[];
-  sequenceStart: number;
-  expiresAt: number;
-}
-
 export interface WorkerProcess {
   id: string;
   sessionId: string;
@@ -363,32 +347,6 @@ export interface WorkerProcess {
   dispatchQueue: Promise<void>;
   pendingMessageResolve?: (result: { content: string; metadata?: Record<string, unknown> }) => void;
   pendingMessageReject?: (error: Error) => void;
-}
-
-interface WorkerApprovalContinuationTraceContext {
-  sessionId: string;
-  agentId: string;
-  userId: string;
-  surfaceId?: string;
-  originalUserContent?: string;
-  requestId?: string;
-  messageId?: string;
-  executionId?: string;
-  rootExecutionId?: string;
-  originChannel?: string;
-  originSurfaceId?: string;
-  continuityKey?: string;
-  activeExecutionRefs?: string[];
-  pendingActionId?: string;
-  codeSessionId?: string;
-  runClass?: DelegatedWorkerRunClass;
-  taskRunId?: string;
-  agentName?: string;
-  orchestration?: OrchestrationRoleDescriptor;
-  executionProfile?: SelectedExecutionProfile;
-  principalId: string;
-  principalRole: NonNullable<UserMessage['principalRole']>;
-  channel: string;
 }
 
 interface WorkerJobFollowUpActionResult {
@@ -1117,19 +1075,44 @@ export class WorkerManager {
       };
     }
 
-    this.emitWorkerSuspensionGraphEvent(suspension, 'interruption_resolved', {
-      approvalId: options.approvalId,
-      resultStatus: options.approvalResult.approved ? 'approved' : 'denied',
-      resumeToken: suspension.resumeToken,
-    }, 'approval-resolved');
+    emitWorkerSuspensionGraphEvent({
+      suspension,
+      kind: 'interruption_resolved',
+      payloadDetails: {
+        approvalId: options.approvalId,
+        resultStatus: options.approvalResult.approved ? 'approved' : 'denied',
+        resumeToken: suspension.resumeToken,
+      },
+      eventKey: 'approval-resolved',
+      graphStore: this.observability.executionGraphStore,
+      runTimeline: this.observability.runTimeline,
+      now: this.observability.now,
+    });
 
     if (!options.approvalResult.approved) {
-      this.emitWorkerSuspensionGraphEvent(suspension, 'node_failed', {
-        reason: options.approvalResult.message || 'Approval denied.',
-      }, 'node-denied');
-      this.emitWorkerSuspensionGraphEvent(suspension, 'graph_failed', {
-        reason: options.approvalResult.message || 'Approval denied.',
-      }, 'graph-denied', { nodeScoped: false });
+      emitWorkerSuspensionGraphEvent({
+        suspension,
+        kind: 'node_failed',
+        payloadDetails: {
+          reason: options.approvalResult.message || 'Approval denied.',
+        },
+        eventKey: 'node-denied',
+        graphStore: this.observability.executionGraphStore,
+        runTimeline: this.observability.runTimeline,
+        now: this.observability.now,
+      });
+      emitWorkerSuspensionGraphEvent({
+        suspension,
+        kind: 'graph_failed',
+        payloadDetails: {
+          reason: options.approvalResult.message || 'Approval denied.',
+        },
+        eventKey: 'graph-denied',
+        graphStore: this.observability.executionGraphStore,
+        runTimeline: this.observability.runTimeline,
+        now: this.observability.now,
+        nodeScoped: false,
+      });
       this.completeExecutionGraphPendingAction(pendingAction, now());
       return {
         content: options.approvalResult.message || 'Approval denied. I did not continue the delegated worker action.',
@@ -1184,7 +1167,7 @@ export class WorkerManager {
       hasFallbackProvider: !!this.runtime.getFallbackProviderConfig?.(worker.agentId),
     });
 
-    const traceContext = this.workerSuspensionResumeContextToTraceContext(suspension.resume);
+    const traceContext = workerSuspensionResumeContextToTraceContext(suspension.resume);
     this.recordWorkerApprovalContinuationExecutionArtifacts(
       traceContext,
       options.approvalId,
@@ -1207,14 +1190,31 @@ export class WorkerManager {
       };
     }
 
-    this.emitWorkerSuspensionGraphEvent(suspension, 'node_completed', {
-      status: 'succeeded',
-      artifactIds: suspension.artifactIds,
-    }, 'node-completed-after-approval');
-    this.emitWorkerSuspensionGraphEvent(suspension, 'graph_completed', {
-      status: 'succeeded',
-      artifactIds: suspension.artifactIds,
-    }, 'graph-completed-after-approval', { nodeScoped: false });
+    emitWorkerSuspensionGraphEvent({
+      suspension,
+      kind: 'node_completed',
+      payloadDetails: {
+        status: 'succeeded',
+        artifactIds: suspension.artifactIds,
+      },
+      eventKey: 'node-completed-after-approval',
+      graphStore: this.observability.executionGraphStore,
+      runTimeline: this.observability.runTimeline,
+      now: this.observability.now,
+    });
+    emitWorkerSuspensionGraphEvent({
+      suspension,
+      kind: 'graph_completed',
+      payloadDetails: {
+        status: 'succeeded',
+        artifactIds: suspension.artifactIds,
+      },
+      eventKey: 'graph-completed-after-approval',
+      graphStore: this.observability.executionGraphStore,
+      runTimeline: this.observability.runTimeline,
+      now: this.observability.now,
+      nodeScoped: false,
+    });
     this.completeExecutionGraphPendingAction(pendingAction, now());
     return {
       content: continuationResult.content,
@@ -1243,13 +1243,21 @@ export class WorkerManager {
       return null;
     }
     const nowMs = this.observability.now?.() ?? Date.now();
-    const event = this.emitWorkerSuspensionGraphEvent(input.suspension, 'interruption_requested', {
-      kind: 'approval',
-      prompt: approvalMetadata.prompt,
-      approvalIds: approvalMetadata.approvalIds,
-      approvalSummaries: approvalMetadata.approvalSummaries.map((summary) => ({ ...summary })),
-      resumeToken: `${input.suspension.graphId}:${input.suspension.nodeId}:approval:${approvalMetadata.approvalIds.join(',')}`,
-    }, 'approval-continuation');
+    const event = emitWorkerSuspensionGraphEvent({
+      suspension: input.suspension,
+      kind: 'interruption_requested',
+      payloadDetails: {
+        kind: 'approval',
+        prompt: approvalMetadata.prompt,
+        approvalIds: approvalMetadata.approvalIds,
+        approvalSummaries: approvalMetadata.approvalSummaries.map((summary) => ({ ...summary })),
+        resumeToken: `${input.suspension.graphId}:${input.suspension.nodeId}:approval:${approvalMetadata.approvalIds.join(',')}`,
+      },
+      eventKey: 'approval-continuation',
+      graphStore,
+      runTimeline: this.observability.runTimeline,
+      now: this.observability.now,
+    });
     const resume = {
       ...input.suspension.resume,
       workerId: input.worker.id,
@@ -1279,77 +1287,6 @@ export class WorkerManager {
       nowMs,
       expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
     });
-  }
-
-  private emitWorkerSuspensionGraphEvent(
-    suspension: WorkerSuspensionGraphResumeContext,
-    kind: ExecutionGraphEvent['kind'],
-    payloadDetails: Record<string, unknown>,
-    eventKey: string,
-    options: {
-      nodeScoped?: boolean;
-    } = {},
-  ): ExecutionGraphEvent {
-    const nodeScoped = options.nodeScoped ?? true;
-    const sequence = this.nextGraphSequence(suspension.graphId, suspension.sequenceStart);
-    const event = createExecutionGraphEvent({
-      eventId: `${suspension.graphId}:worker-resume:${eventKey}:${sequence}`,
-      graphId: suspension.graphId,
-      executionId: suspension.executionId,
-      rootExecutionId: suspension.rootExecutionId,
-      ...(suspension.parentExecutionId ? { parentExecutionId: suspension.parentExecutionId } : {}),
-      requestId: suspension.requestId,
-      ...(suspension.runId ? { runId: suspension.runId } : {}),
-      ...(nodeScoped ? { nodeId: suspension.nodeId, nodeKind: 'delegated_worker' } : {}),
-      kind,
-      timestamp: this.observability.now?.() ?? Date.now(),
-      sequence,
-      producer: 'supervisor',
-      ...(suspension.channel ? { channel: suspension.channel } : {}),
-      ...(suspension.agentId ? { agentId: suspension.agentId } : {}),
-      ...(suspension.userId ? { userId: suspension.userId } : {}),
-      ...(suspension.codeSessionId ? { codeSessionId: suspension.codeSessionId } : {}),
-      payload: payloadDetails,
-    });
-    this.observability.runTimeline?.ingestExecutionGraphEvent(event);
-    this.observability.executionGraphStore?.appendEvent(event);
-    return event;
-  }
-
-  private nextGraphSequence(graphId: string, fallback: number): number {
-    const snapshot = this.observability.executionGraphStore?.getSnapshot(graphId);
-    if (!snapshot) return fallback + 1;
-    return snapshot.events.reduce((highest, event) => Math.max(highest, event.sequence), fallback) + 1;
-  }
-
-  private workerSuspensionResumeContextToTraceContext(
-    resume: WorkerSuspensionResumeContext,
-  ): WorkerApprovalContinuationTraceContext {
-    return {
-      sessionId: resume.sessionId,
-      agentId: resume.agentId,
-      userId: resume.userId,
-      ...(resume.surfaceId ? { surfaceId: resume.surfaceId } : {}),
-      ...(resume.originalUserContent ? { originalUserContent: resume.originalUserContent } : {}),
-      ...(resume.requestId ? { requestId: resume.requestId } : {}),
-      ...(resume.messageId ? { messageId: resume.messageId } : {}),
-      ...(resume.executionId ? { executionId: resume.executionId } : {}),
-      ...(resume.rootExecutionId ? { rootExecutionId: resume.rootExecutionId } : {}),
-      ...(resume.originChannel ? { originChannel: resume.originChannel } : {}),
-      ...(resume.originSurfaceId ? { originSurfaceId: resume.originSurfaceId } : {}),
-      ...(resume.continuityKey ? { continuityKey: resume.continuityKey } : {}),
-      ...(resume.activeExecutionRefs?.length ? { activeExecutionRefs: [...resume.activeExecutionRefs] } : {}),
-      ...(resume.pendingActionId ? { pendingActionId: resume.pendingActionId } : {}),
-      ...(resume.codeSessionId ? { codeSessionId: resume.codeSessionId } : {}),
-      ...(resume.runClass ? { runClass: resume.runClass } : {}),
-      ...(resume.taskRunId ? { taskRunId: resume.taskRunId } : {}),
-      ...(resume.agentName ? { agentName: resume.agentName } : {}),
-      ...(resume.orchestration ? { orchestration: cloneOrchestrationRoleDescriptor(resume.orchestration) } : {}),
-      ...(resume.executionProfile ? { executionProfile: cloneSelectedExecutionProfile(resume.executionProfile) } : {}),
-      principalId: resume.principalId,
-      principalRole: resume.principalRole,
-      channel: resume.channel,
-    };
   }
 
   private async resumeChatContinuationGraphPendingAction(
@@ -3543,7 +3480,7 @@ export class WorkerManager {
       || input.request.delegation?.originSurfaceId?.trim()
       || input.request.message.channel;
     const nowMs = this.observability.now?.() ?? Date.now();
-    const resume = this.buildWorkerSuspensionResumeContext({
+    const resume = buildWorkerSuspensionResumeContext({
       worker: input.worker,
       request: input.request,
       target: input.target,
@@ -3591,57 +3528,6 @@ export class WorkerManager {
       nowMs,
       expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
     });
-  }
-
-  private buildWorkerSuspensionResumeContext(input: {
-    worker: WorkerProcess;
-    request: WorkerMessageRequest;
-    target: ResolvedDelegatedTargetMetadata;
-    taskRunId: string;
-    approvalIds: string[];
-    expiresAt: number;
-  }): WorkerSuspensionResumeContext {
-    const delegation = input.request.delegation;
-    const requestId = delegation?.requestId?.trim() || input.request.message.id;
-    const originChannel = delegation?.originChannel?.trim() || input.request.message.channel;
-    const originSurfaceId = delegation?.originSurfaceId?.trim() || input.request.message.surfaceId?.trim();
-    const continuityKey = delegation?.continuityKey?.trim();
-    const pendingActionId = delegation?.pendingActionId?.trim();
-    const codeSessionId = delegation?.codeSessionId?.trim();
-    const activeExecutionRefs = delegation?.activeExecutionRefs?.length
-      ? [...delegation.activeExecutionRefs]
-      : undefined;
-    const agentName = input.target.agentName?.trim();
-    const orchestration = cloneOrchestrationRoleDescriptor(input.target.orchestration);
-    return {
-      workerId: input.worker.id,
-      workerSessionKey: input.worker.workerSessionKey,
-      sessionId: input.worker.sessionId,
-      agentId: input.worker.agentId,
-      userId: input.request.userId,
-      ...(input.request.message.surfaceId ? { surfaceId: input.request.message.surfaceId } : {}),
-      ...(input.request.message.content ? { originalUserContent: input.request.message.content } : {}),
-      requestId,
-      messageId: input.request.message.id,
-      ...(delegation?.executionId ? { executionId: delegation.executionId } : {}),
-      ...(delegation?.rootExecutionId ? { rootExecutionId: delegation.rootExecutionId } : {}),
-      originChannel,
-      ...(originSurfaceId ? { originSurfaceId } : {}),
-      ...(continuityKey ? { continuityKey } : {}),
-      ...(activeExecutionRefs ? { activeExecutionRefs } : {}),
-      ...(pendingActionId ? { pendingActionId } : {}),
-      ...(codeSessionId ? { codeSessionId } : {}),
-      ...(delegation?.runClass ? { runClass: delegation.runClass } : {}),
-      taskRunId: input.taskRunId,
-      ...(agentName ? { agentName } : {}),
-      ...(orchestration ? { orchestration } : {}),
-      ...(input.request.executionProfile ? { executionProfile: cloneSelectedExecutionProfile(input.request.executionProfile) } : {}),
-      principalId: input.request.message.principalId ?? input.request.userId,
-      principalRole: input.request.message.principalRole ?? 'owner',
-      channel: originChannel,
-      approvalIds: [...new Set(input.approvalIds)],
-      expiresAt: input.expiresAt,
-    };
   }
 
   private recordDelegatedPendingApprovalAction(input: {
