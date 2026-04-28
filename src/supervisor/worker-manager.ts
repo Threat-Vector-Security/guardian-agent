@@ -86,9 +86,8 @@ import {
   resolveDelegatedWorkerLifecycle,
 } from '../runtime/execution-graph/delegated-worker-handoff.js';
 import {
-  isDelegatedWorkerBudgetExhausted,
   isDelegatedJobInFlight,
-  shouldExtendDelegatedEvidenceDrain,
+  runDelegatedEvidenceDrainExtension,
   verifyDelegatedWorkerResult,
   type DelegatedJobSnapshot,
 } from '../runtime/execution-graph/delegated-worker-verification.js';
@@ -1955,26 +1954,19 @@ export class WorkerManager {
           ? { verifiedResult, insufficiency, jobSnapshots }
           : null
       );
-      const extendedFirstDrain = await awaitExtendedDelegatedEvidenceDrain({
-        tools: this.tools,
+      const extendedFirstDrain = await runDelegatedEvidenceDrainExtension({
         requestId,
+        taskRunId: delegatedTaskRunId,
         metadata: result.metadata,
         intentDecision: effectiveIntentDecision ?? undefined,
         executionProfile: effectiveExecutionProfile,
         taskContract: effectiveTaskContract,
         decision: verifiedResult.decision,
         jobSnapshots,
+        drainPendingJobs: (deadlineMs) => awaitPendingDelegatedJobs(this.tools, requestId, deadlineMs),
+        trace: (event) => this.recordDelegatedWorkerTrace(event.stage, input, delegatedTarget, event.details),
       });
       if (extendedFirstDrain) {
-        if (extendedFirstDrain.inFlightRemaining > 0) {
-          this.recordDelegatedWorkerTrace('delegated_job_wait_expired', input, delegatedTarget, {
-            requestId,
-            taskRunId: delegatedTaskRunId,
-            lifecycle: 'running',
-            taskContract: effectiveTaskContract,
-            reason: `${extendedFirstDrain.inFlightRemaining} delegated evidence job(s) remained in flight after ${extendedFirstDrain.waitedMs}ms extended drain`,
-          });
-        }
         jobSnapshots = extendedFirstDrain.jobSnapshots;
         verifiedResult = extendedFirstDrain.verifiedResult;
         if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
@@ -2085,26 +2077,20 @@ export class WorkerManager {
             effectiveTaskContract = verifiedResult.envelope.taskContract;
           }
           insufficiency = buildDelegatedRetryableFailure(verifiedResult.decision, verifiedResult.envelope);
-          const extendedRetryDrain = await awaitExtendedDelegatedEvidenceDrain({
-            tools: this.tools,
+          const extendedRetryDrain = await runDelegatedEvidenceDrainExtension({
             requestId,
+            taskRunId: delegatedTaskRunId,
             metadata: result.metadata,
             intentDecision: effectiveIntentDecision ?? undefined,
             executionProfile: effectiveExecutionProfile,
             taskContract: effectiveTaskContract,
             decision: verifiedResult.decision,
             jobSnapshots,
+            attemptLabel: 'retry',
+            drainPendingJobs: (deadlineMs) => awaitPendingDelegatedJobs(this.tools, requestId, deadlineMs),
+            trace: (event) => this.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
           });
           if (extendedRetryDrain) {
-            if (extendedRetryDrain.inFlightRemaining > 0) {
-              this.recordDelegatedWorkerTrace('delegated_job_wait_expired', effectiveInput, delegatedTarget, {
-                requestId,
-                taskRunId: delegatedTaskRunId,
-                lifecycle: 'running',
-                taskContract: effectiveTaskContract,
-                reason: `${extendedRetryDrain.inFlightRemaining} delegated evidence job(s) remained in flight after ${extendedRetryDrain.waitedMs}ms extended drain (retry)`,
-              });
-            }
             jobSnapshots = extendedRetryDrain.jobSnapshots;
             verifiedResult = extendedRetryDrain.verifiedResult;
             if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
@@ -4282,50 +4268,7 @@ function uniqueStrings(values: string[]): string[] {
 }
 
 const DELEGATED_JOB_DRAIN_DEADLINE_MS = 2500;
-const DELEGATED_EVIDENCE_DRAIN_DEADLINE_MS = 60_000;
 const DELEGATED_JOB_DRAIN_POLL_MS = 50;
-
-async function awaitExtendedDelegatedEvidenceDrain(input: {
-  tools: ToolExecutor;
-  requestId: string;
-  metadata: Record<string, unknown> | undefined;
-  intentDecision: IntentGatewayDecision | undefined;
-  executionProfile: SelectedExecutionProfile | undefined;
-  taskContract: DelegatedResultEnvelope['taskContract'];
-  decision: VerificationDecision;
-  jobSnapshots: DelegatedJobSnapshot[];
-}) {
-  const workerExecution = readWorkerExecutionMetadata(input.metadata);
-  if (isDelegatedWorkerBudgetExhausted(workerExecution?.terminationReason)) {
-    return null;
-  }
-  if (!shouldExtendDelegatedEvidenceDrain({
-    taskContract: input.taskContract,
-    decision: input.decision,
-    jobSnapshots: input.jobSnapshots,
-  })) {
-    return null;
-  }
-  const drain = await awaitPendingDelegatedJobs(
-    input.tools,
-    input.requestId,
-    DELEGATED_EVIDENCE_DRAIN_DEADLINE_MS,
-  );
-  const verifiedResult = verifyDelegatedWorkerResult({
-    metadata: input.metadata,
-    intentDecision: input.intentDecision,
-    executionProfile: input.executionProfile,
-    taskContract: input.taskContract,
-    jobSnapshots: drain.snapshots,
-  });
-  return {
-    jobSnapshots: drain.snapshots,
-    waitedMs: drain.waitedMs,
-    inFlightRemaining: drain.inFlightRemaining,
-    verifiedResult,
-    insufficiency: buildDelegatedRetryableFailure(verifiedResult.decision, verifiedResult.envelope),
-  };
-}
 
 async function awaitPendingDelegatedJobs(
   tools: ToolExecutor,
