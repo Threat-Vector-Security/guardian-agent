@@ -1472,6 +1472,17 @@ Checkpoint after the graph-controlled failure metadata cleanup:
 - Focused coverage passed: `npx vitest run src/runtime/execution-graph/graph-controller.test.ts src/supervisor/worker-manager.test.ts` reported 52 passing tests.
 - Local gates passed after the cleanup: `npm run check` and `npm run build`.
 
+Checkpoint after the delegated operator-metadata redaction cleanup:
+
+- `src/runtime/execution/metadata.ts` now owns delegated execution event sanitization for operator/API metadata. `sanitizeExecutionEventsForOperator` removes raw tool `args`, `rawOutput`, and `traceResultPreview` fields while preserving safe event identity, status, and summary fields.
+- `WorkerManager` now builds `delegatedResult`, `executionEvents`, routing-trace details, and run-timeline projections from the sanitized delegated envelope. The verifier still receives the internal envelope with full evidence, but authenticated operator/API metadata no longer exposes raw delegated tool payloads.
+- This is an observability-safety cleanup only. It does not change Intent Gateway routing, delegated worker authority, broker dispatch, provider/profile selection, tool execution, approval policy, or final answer synthesis.
+- Focused coverage passed: `npx vitest run src/runtime/execution/metadata.test.ts src/supervisor/worker-manager.test.ts` reported 51 passing tests.
+- Local gates passed after the cleanup: `npm run check`, `npm run build`, and full `npm test` (316 files, 3421 tests).
+- Cross-domain regression coverage passed after the cleanup: `node scripts/test-cross-domain-orchestration-stress.mjs`.
+- The rebuilt app was restarted with `scripts/start-dev-windows.ps1 -StartOnly`; `GET http://localhost:3000/api/status` confirmed the live API was running. Startup still reports the known local Ollama unavailable warning and host-runtime Google Second Brain 404 / scheduled-task integrity warnings.
+- Live API replay with request id `codex-live-redaction-42808` proved the mixed web + repo + memory delegated graph path still completed with `executionGraph.status=completed`, returned the expected three-source answer, and returned metadata containing no `rawOutput`, `traceResultPreview`, or `args` fields.
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.

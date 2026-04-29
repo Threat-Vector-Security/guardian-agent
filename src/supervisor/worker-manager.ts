@@ -137,6 +137,7 @@ import { readWorkerExecutionMetadata } from '../runtime/worker-execution-metadat
 import {
   buildDelegatedExecutionMetadata,
   readExecutionEvents,
+  sanitizeDelegatedEnvelopeForOperator,
 } from '../runtime/execution/metadata.js';
 import { buildDelegatedTaskContract } from '../runtime/execution/verifier.js';
 import type { RecoveryAdvisorRequest } from '../runtime/execution/recovery-advisor.js';
@@ -2155,7 +2156,7 @@ export class WorkerManager {
         requestId,
         delegatedTaskRunId,
         normalizedResult.metadata,
-        verifiedEnvelope.events,
+        sanitizedVerifiedEnvelope.events,
       );
       if (handoff.reportingMode === 'held_for_operator') {
         this.delegatedFollowUpPayloads.set(delegatedJob.id, {
@@ -4058,24 +4059,6 @@ function uniqueStrings(values: string[]): string[] {
     unique.push(normalized);
   }
   return unique;
-}
-
-function sanitizeDelegatedEnvelopeForOperator(
-  envelope: DelegatedResultEnvelope,
-): DelegatedResultEnvelope {
-  return {
-    ...envelope,
-    events: envelope.events.map((event) => {
-      if (!('traceResultPreview' in event.payload)) {
-        return event;
-      }
-      const { traceResultPreview: _traceResultPreview, ...payload } = event.payload;
-      return {
-        ...event,
-        payload,
-      };
-    }),
-  };
 }
 
 function appendPromptAdditionalSection(

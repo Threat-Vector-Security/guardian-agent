@@ -22,6 +22,32 @@ export function buildDelegatedExecutionMetadata(
   };
 }
 
+export function sanitizeExecutionEventsForOperator(
+  events: readonly ExecutionEvent[],
+): ExecutionEvent[] {
+  return events.map((event) => {
+    const {
+      args: _args,
+      rawOutput: _rawOutput,
+      traceResultPreview: _traceResultPreview,
+      ...payload
+    } = event.payload;
+    return {
+      ...event,
+      payload,
+    };
+  });
+}
+
+export function sanitizeDelegatedEnvelopeForOperator(
+  envelope: DelegatedResultEnvelope,
+): DelegatedResultEnvelope {
+  return {
+    ...envelope,
+    events: sanitizeExecutionEventsForOperator(envelope.events),
+  };
+}
+
 export function readDelegatedResultEnvelope(
   metadata: Record<string, unknown> | undefined,
 ): DelegatedResultEnvelope | undefined {
