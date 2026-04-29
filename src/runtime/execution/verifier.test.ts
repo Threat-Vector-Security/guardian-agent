@@ -410,6 +410,199 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('rejects mixed-domain answers that conclude no repo matches for implementation-location requests without repo file evidence', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Search web, repo, and memory evidence before answering.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the web for the title of https://example.com.', expectedToolCategories: ['web_search'], required: true },
+        { kind: 'search', summary: 'Search this workspace for where execution graph mutation approval resume events are emitted.', expectedToolCategories: ['fs_search'], required: true },
+        { kind: 'search', summary: 'Search memory for SMOKE-MEM-42801.', expectedToolCategories: ['memory_search'], required: true },
+        { kind: 'answer', summary: 'Return three short bullets with what each source found.', required: true, dependsOn: ['step_1', 'step_2', 'step_3'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = [
+      '- Web: https://example.com title is "Example Domain".',
+      '- Repo: No content matches found for "mutation approval resume" across 20k+ scanned files; emission site may use different phrasing.',
+      '- Memory: SMOKE-MEM-42801 found.',
+    ].join('\n');
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+        stepReceipts: [
+          {
+            stepId: 'step_1',
+            status: 'satisfied',
+            evidenceReceiptIds: ['receipt-web'],
+            summary: 'Found title Example Domain.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            stepId: 'step_2',
+            status: 'satisfied',
+            evidenceReceiptIds: ['receipt-repo'],
+            summary: 'No content matches found for mutation approval resume.',
+            startedAt: 3,
+            endedAt: 4,
+          },
+          {
+            stepId: 'step_3',
+            status: 'satisfied',
+            evidenceReceiptIds: ['receipt-memory'],
+            summary: 'Found SMOKE-MEM-42801.',
+            startedAt: 5,
+            endedAt: 6,
+          },
+          {
+            stepId: 'step_4',
+            status: 'satisfied',
+            evidenceReceiptIds: ['answer:1'],
+            summary: finalAnswer,
+            startedAt: 7,
+            endedAt: 8,
+          },
+        ],
+        evidenceReceipts: [
+          {
+            receiptId: 'receipt-web',
+            sourceType: 'tool_call',
+            toolName: 'web_search',
+            status: 'succeeded',
+            refs: ['https://example.com/'],
+            summary: 'Found title Example Domain.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            receiptId: 'receipt-repo',
+            sourceType: 'tool_call',
+            toolName: 'fs_search',
+            status: 'succeeded',
+            refs: [],
+            summary: 'No content matches found for "mutation approval resume".',
+            startedAt: 3,
+            endedAt: 4,
+          },
+          {
+            receiptId: 'receipt-memory',
+            sourceType: 'tool_call',
+            toolName: 'memory_search',
+            status: 'succeeded',
+            refs: ['memory:smoke'],
+            summary: 'Found SMOKE-MEM-42801.',
+            startedAt: 5,
+            endedAt: 6,
+          },
+        ],
+        claims: [{
+          claimId: 'answer:1:answer',
+          kind: 'answer',
+          subject: 'final_answer',
+          value: finalAnswer,
+          evidenceReceiptIds: ['answer:1'],
+          confidence: 1,
+        }],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['repo_evidence'],
+      unsatisfiedStepIds: ['step_2', 'step_4'],
+    });
+    expect(decision.requiredNextAction).toContain('targeted repo inspection');
+  });
+
+  it('allows no-match repo searches when the request is not asking for an implementation location', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Search the repo for an arbitrary smoke marker and answer.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search this workspace for SMOKE-ABSENT-00000.', expectedToolCategories: ['fs_search'], required: true },
+        { kind: 'answer', summary: 'Say whether the marker exists.', required: true, dependsOn: ['step_1'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = 'No content matches found for SMOKE-ABSENT-00000.';
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+        stepReceipts: [
+          {
+            stepId: 'step_1',
+            status: 'satisfied',
+            evidenceReceiptIds: ['receipt-repo'],
+            summary: finalAnswer,
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            stepId: 'step_2',
+            status: 'satisfied',
+            evidenceReceiptIds: ['answer:1'],
+            summary: finalAnswer,
+            startedAt: 3,
+            endedAt: 4,
+          },
+        ],
+        evidenceReceipts: [{
+          receiptId: 'receipt-repo',
+          sourceType: 'tool_call',
+          toolName: 'fs_search',
+          status: 'succeeded',
+          refs: [],
+          summary: finalAnswer,
+          startedAt: 1,
+          endedAt: 2,
+        }],
+        claims: [{
+          claimId: 'answer:1:answer',
+          kind: 'answer',
+          subject: 'final_answer',
+          value: finalAnswer,
+          evidenceReceiptIds: ['answer:1'],
+          confidence: 1,
+        }],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'satisfied',
+      retryable: false,
+    });
+  });
+
   it('adds a required answer step when repo-grounded gateway plans omit synthesis', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'coding_task',
