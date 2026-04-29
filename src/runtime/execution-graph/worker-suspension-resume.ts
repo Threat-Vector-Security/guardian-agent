@@ -6,6 +6,7 @@ import type { OrchestrationRoleDescriptor } from '../orchestration-role-descript
 import type { PendingActionRecord } from '../pending-actions.js';
 import type {
   PendingActionApprovalSummary,
+  PendingActionIntent,
   PendingActionStore,
 } from '../pending-actions.js';
 import type {
@@ -22,6 +23,7 @@ import {
   createExecutionGraphEvent,
   type ExecutionGraphEvent,
 } from './graph-events.js';
+import type { ExecutionArtifactRef } from './types.js';
 
 export interface WorkerSuspensionGraphResumeContext {
   graphId: string;
@@ -127,6 +129,26 @@ export interface WorkerSuspensionContinuationApprovalMetadata {
   approvalIds: string[];
   approvalSummaries: PendingActionApprovalSummary[];
   prompt: string;
+}
+
+export interface DelegatedWorkerGraphPendingApprovalGraphCompletion {
+  metadata: {
+    nodeId: string;
+  };
+  interruptEvent?: ExecutionGraphEvent;
+  verificationArtifactRef?: ExecutionArtifactRef;
+}
+
+export interface DelegatedWorkerGraphPendingApprovalRequest {
+  agentId: string;
+  userId: string;
+  message: Pick<UserMessage, 'id' | 'content' | 'surfaceId' | 'channel' | 'principalId' | 'principalRole'>;
+  delegation?: WorkerSuspensionResumeRequestInput['delegation'];
+  executionProfile?: WorkerSuspensionResumeRequestInput['executionProfile'];
+}
+
+export interface WorkerSuspensionPendingActionIntentInput extends Omit<Partial<PendingActionIntent>, 'entities'> {
+  entities?: unknown;
 }
 
 export function buildWorkerSuspensionResumeContext(input: {
@@ -237,6 +259,81 @@ export function recordWorkerSuspensionGraphContinuationPendingAction(input: {
     originalUserContent: input.previousPendingAction.intent.originalUserContent,
     intent: input.previousPendingAction.intent,
     artifactRefs: [artifactRefFromArtifact(artifact)],
+    approvalSummaries: input.approvalMetadata.approvalSummaries,
+    nowMs,
+    expiresAt,
+  });
+}
+
+export function recordDelegatedWorkerGraphPendingApprovalAction(input: {
+  store?: Pick<PendingActionStore, 'replaceActive'> | null;
+  graphStore?: WorkerSuspensionContinuationGraphStore | null;
+  worker: WorkerSuspensionResumeWorkerInput;
+  request: DelegatedWorkerGraphPendingApprovalRequest;
+  target: WorkerSuspensionResumeTargetInput;
+  taskRunId: string;
+  graphCompletion?: DelegatedWorkerGraphPendingApprovalGraphCompletion | null;
+  approvalMetadata: WorkerSuspensionContinuationApprovalMetadata;
+  workerSuspension: SerializedWorkerSuspensionSession | null;
+  intentDecision?: WorkerSuspensionPendingActionIntentInput | null;
+  now?: () => number;
+  ttlMs?: number;
+}): PendingActionRecord | null {
+  const interruption = input.graphCompletion?.interruptEvent;
+  if (!input.store || !input.graphStore || !input.graphCompletion || !interruption || !input.workerSuspension) {
+    return null;
+  }
+  const originChannel = input.request.delegation?.originChannel?.trim()
+    || input.request.message.channel;
+  const surfaceId = input.request.message.surfaceId?.trim()
+    || input.request.delegation?.originSurfaceId?.trim()
+    || input.request.message.channel;
+  const nowMs = input.now?.() ?? Date.now();
+  const expiresAt = nowMs + (input.ttlMs ?? 30 * 60_000);
+  const resume = buildWorkerSuspensionResumeContext({
+    worker: input.worker,
+    request: input.request,
+    target: input.target,
+    taskRunId: input.taskRunId,
+    approvalIds: input.approvalMetadata.approvalIds,
+    expiresAt,
+  });
+  const suspensionArtifact = buildWorkerSuspensionArtifact({
+    graphId: interruption.graphId,
+    nodeId: interruption.nodeId ?? input.graphCompletion.metadata.nodeId,
+    envelope: buildWorkerSuspensionEnvelope({
+      resume,
+      session: input.workerSuspension,
+    }),
+    createdAt: nowMs,
+  });
+  input.graphStore.writeArtifact(suspensionArtifact);
+  const artifactRefs = [
+    ...(input.graphCompletion.verificationArtifactRef ? [input.graphCompletion.verificationArtifactRef] : []),
+    artifactRefFromArtifact(suspensionArtifact),
+  ];
+  return recordGraphPendingActionInterrupt({
+    store: input.store,
+    scope: {
+      agentId: input.request.agentId,
+      userId: input.request.userId,
+      channel: originChannel,
+      surfaceId,
+    },
+    event: interruption,
+    originalUserContent: input.request.message.content,
+    intent: {
+      ...(input.intentDecision?.route ? { route: input.intentDecision.route } : {}),
+      ...(input.intentDecision?.operation ? { operation: input.intentDecision.operation } : {}),
+      ...(input.intentDecision?.summary ? { summary: input.intentDecision.summary } : {}),
+      ...(input.intentDecision?.turnRelation ? { turnRelation: input.intentDecision.turnRelation } : {}),
+      ...(input.intentDecision?.resolution ? { resolution: input.intentDecision.resolution } : {}),
+      ...(input.intentDecision?.missingFields?.length ? { missingFields: input.intentDecision.missingFields } : {}),
+      ...(input.intentDecision?.resolvedContent ? { resolvedContent: input.intentDecision.resolvedContent } : {}),
+      ...(input.intentDecision?.provenance ? { provenance: input.intentDecision.provenance } : {}),
+      ...(input.intentDecision?.entities ? { entities: input.intentDecision.entities as Record<string, unknown> } : {}),
+    },
+    artifactRefs,
     approvalSummaries: input.approvalMetadata.approvalSummaries,
     nowMs,
     expiresAt,
