@@ -97,6 +97,10 @@ export function verifyDelegatedResult(input: {
     if (ongoingAnswerFailure) {
       return ongoingAnswerFailure;
     }
+    const mixedDomainAnswerFailure = verifyMixedDomainAnswerCoverage(input.envelope);
+    if (mixedDomainAnswerFailure) {
+      return mixedDomainAnswerFailure;
+    }
     const repoEvidenceFailure = verifyRepoEvidenceQuality(input.envelope);
     if (repoEvidenceFailure) {
       return repoEvidenceFailure;
@@ -206,6 +210,172 @@ function verifyFinalAnswerIsTerminal(
     reasons: ['Delegated worker returned an in-progress status message instead of a terminal user-facing answer.'],
     retryable: true,
     requiredNextAction: 'Complete the delegated task and return the final answer, not a progress promise.',
+    missingEvidenceKinds: ['answer'],
+    ...(answerStepIds.length > 0 ? { unsatisfiedStepIds: answerStepIds } : {}),
+  };
+}
+
+type MixedDomainAnswerSource = 'web' | 'repo' | 'memory';
+
+const MIXED_DOMAIN_SOURCE_ORDER: MixedDomainAnswerSource[] = ['web', 'repo', 'memory'];
+
+const MIXED_DOMAIN_SOURCE_LABELS: Record<MixedDomainAnswerSource, string[]> = {
+  web: ['web', 'website', 'browser', 'internet'],
+  repo: ['repo', 'repository', 'workspace', 'codebase', 'code'],
+  memory: ['memory', 'memories'],
+};
+
+function verifyMixedDomainAnswerCoverage(
+  envelope: DelegatedResultEnvelope,
+): VerificationDecision | null {
+  const finalAnswer = envelope.finalUserAnswer?.trim();
+  if (!finalAnswer) {
+    return null;
+  }
+
+  const expectedSources = collectExpectedMixedAnswerSources(envelope);
+  if (expectedSources.length < 2 || !answerPlanRequestsSourceSeparatedBullets(envelope)) {
+    return null;
+  }
+
+  const answerStepIds = findAnswerStepIds(envelope.taskContract.plan);
+  const bulletLines = extractAnswerBulletLines(finalAnswer);
+  if (bulletLines.length < expectedSources.length) {
+    return buildMixedDomainAnswerFailure(
+      'Delegated worker did not return one source-labeled bullet for each requested evidence domain.',
+      answerStepIds,
+    );
+  }
+
+  const seenSources = new Set<MixedDomainAnswerSource>();
+  for (const line of bulletLines) {
+    const lineSources = classifySourceLabeledBullet(line, expectedSources);
+    if (lineSources.length > 1) {
+      return buildMixedDomainAnswerFailure(
+        'Delegated worker combined multiple requested evidence domains into one bullet instead of keeping one result per source.',
+        answerStepIds,
+      );
+    }
+    if (lineSources.length === 1) {
+      seenSources.add(lineSources[0]);
+    }
+  }
+
+  const missingSources = expectedSources.filter((source) => !seenSources.has(source));
+  if (missingSources.length <= 0) {
+    return null;
+  }
+  return buildMixedDomainAnswerFailure(
+    `Delegated worker omitted source-labeled final answer bullets for: ${missingSources.join(', ')}.`,
+    answerStepIds,
+  );
+}
+
+function collectExpectedMixedAnswerSources(envelope: DelegatedResultEnvelope): MixedDomainAnswerSource[] {
+  const sources = new Set<MixedDomainAnswerSource>();
+  for (const step of envelope.taskContract.plan.steps) {
+    if (step.kind === 'answer' || step.required === false) {
+      continue;
+    }
+    for (const category of step.expectedToolCategories ?? []) {
+      const source = sourceForExpectedToolCategory(category);
+      if (source) {
+        sources.add(source);
+      }
+    }
+  }
+  return MIXED_DOMAIN_SOURCE_ORDER.filter((source) => sources.has(source));
+}
+
+function sourceForExpectedToolCategory(category: string | undefined): MixedDomainAnswerSource | null {
+  const normalized = category?.trim().toLowerCase();
+  switch (normalized) {
+    case 'web':
+    case 'web_search':
+    case 'browser':
+    case 'browser_read':
+      return 'web';
+    case 'repo':
+    case 'repository':
+    case 'repo_inspect':
+    case 'repo_inspection':
+    case 'fs_search':
+    case 'fs_read':
+    case 'fs_list':
+    case 'code_symbol_search':
+      return 'repo';
+    case 'memory':
+    case 'memory_search':
+    case 'memory_recall':
+      return 'memory';
+    default:
+      return null;
+  }
+}
+
+function answerPlanRequestsSourceSeparatedBullets(envelope: DelegatedResultEnvelope): boolean {
+  return envelope.taskContract.plan.steps
+    .filter((step) => step.kind === 'answer' && step.required !== false)
+    .some((step) => {
+      const summary = step.summary.trim().toLowerCase();
+      return /\bbullets?\b/u.test(summary)
+        && /\b(?:source|sources|each|per)\b/u.test(summary);
+    });
+}
+
+function extractAnswerBulletLines(answer: string): string[] {
+  return answer
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => /^(?:[-*]\s+|\d+[.)]\s+)/u.test(line));
+}
+
+function classifySourceLabeledBullet(
+  line: string,
+  expectedSources: MixedDomainAnswerSource[],
+): MixedDomainAnswerSource[] {
+  const label = extractBulletLabel(line);
+  if (!label) {
+    return [];
+  }
+  return expectedSources.filter((source) => (
+    MIXED_DOMAIN_SOURCE_LABELS[source].some((alias) => labelHasSourceAlias(label, alias))
+  ));
+}
+
+function extractBulletLabel(line: string): string {
+  const content = line
+    .replace(/^(?:[-*]\s+|\d+[.)]\s+)/u, '')
+    .replace(/^\*{1,2}/u, '')
+    .trim();
+  const colonIndex = content.indexOf(':');
+  const dashIndex = content.indexOf(' - ');
+  const separatorIndexes = [colonIndex, dashIndex].filter((index) => index >= 0);
+  const separatorIndex = separatorIndexes.length > 0 ? Math.min(...separatorIndexes) : -1;
+  const label = separatorIndex >= 0 ? content.slice(0, separatorIndex) : content.slice(0, 40);
+  return label
+    .replace(/\*{1,2}$/u, '')
+    .trim()
+    .toLowerCase();
+}
+
+function labelHasSourceAlias(label: string, alias: string): boolean {
+  return new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(alias)}(?:$|[^a-z0-9])`, 'u').test(label);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildMixedDomainAnswerFailure(
+  reason: string,
+  answerStepIds: string[],
+): VerificationDecision {
+  return {
+    decision: 'insufficient',
+    reasons: [reason],
+    retryable: true,
+    requiredNextAction: 'Return one concise source-labeled bullet for each requested source domain.',
     missingEvidenceKinds: ['answer'],
     ...(answerStepIds.length > 0 ? { unsatisfiedStepIds: answerStepIds } : {}),
   };
