@@ -22,7 +22,7 @@ As of 2026-04-29:
 - Phase 2 direct reasoning as an `explore_readonly` graph node is implemented: direct reasoning emits graph events, read/search tool calls project into `RunTimelineStore`, and focused direct-reasoning/run-timeline tests pass.
 - Phase 3 typed artifact store and grounded synthesis are implemented for the read-only lane: graph-owned artifact storage retains typed artifact contents and refs, direct reasoning emits `SearchResultSet`, `FileReadSet`, `EvidenceLedger`, and `SynthesisDraft` artifacts, and no-tools synthesis consumes bounded evidence artifacts.
 - Phase 4 mutation nodes are implemented for the first structured search/write lane: required write steps now keep top-level requests out of read-only direct reasoning, route read-like coding plans with structured writes to workspace implementer orchestration, synthesize `WriteSpec`, execute `fs_write` through supervisor-owned tool execution, and verify the written contents.
-- Phase 5 graph interrupts are implemented for the first approval/clarification slices and for brokered delegated-worker approval suspension/resume. A live OpenRouter API sweep proved pending-action creation, approval API decision, tool execution, and final continuation for a harmless policy-gated `fs_write`; several legacy producers have already been deleted. Delegated job snapshot/drain policy now lives in the graph verification module behind a broker-safe `listJobs` callback, delegated retry invocation sequencing now lives in the graph retry-invocation module behind broker-safe dispatch/drain/verification callbacks, and graph approval-resume reconstruction now lives in the mutation-node and worker-suspension graph modules. Live chat tool-loop approvals now resume through `execution_graph` pending actions and `ChatContinuation` artifacts, but the continuation artifact still snapshots model messages; remaining delegated budget-persistence and recovery ownership still need graph-native replacement before their old owners can be removed.
+- Phase 5 graph interrupts are implemented for approval/clarification slices and brokered delegated-worker approval suspension/resume. Live API and harness sweeps proved pending-action creation, approval API decisions, tool execution, final continuation, denied approvals, and delegated approval projection for the proven core paths. Delegated job snapshot/drain policy lives in the graph verification module behind a broker-safe `listJobs` callback, delegated retry invocation sequencing lives in the graph retry-invocation module behind broker-safe dispatch/drain/verification callbacks, graph approval-resume reconstruction lives in the mutation-node and worker-suspension graph modules, and live chat tool-loop approvals resume through `execution_graph` pending actions and `ChatContinuation` artifacts. The remaining `WorkerManager` responsibilities are intentional supervisor/broker boundary adapters for dispatch, ToolExecutor execution, pending-action persistence, and job listing; they are not duplicate graph ownership.
 - Continuity and code-session context are now gated before Intent Gateway classification and normal chat history is scoped to explicit surfaces. Fresh surfaces do not inherit stale owner continuity, unrelated surface chat history, or same-principal shared code sessions unless the surface was already linked, a pending action is active, an explicit/same-surface code session is present, or the gateway identifies a non-new follow-up.
 - Automation authoring and automation control now have separate planned-step ownership rules: authoring can remain direct for generic read/search/write authoring work, while control defers mixed or answer-only plans instead of overlapping direct automation and worker orchestration.
 - Browser tasks now follow the same planned-step ownership rule: simple browser-only read actions may direct-dispatch, but read-plus-answer plans defer to the delegated managed-cloud tool loop, where `browser_read`/`browser_links`/`browser_extract`/`browser_state` receipts satisfy read evidence before the final answer step is verified.
@@ -129,11 +129,10 @@ Focused verification added or rerun:
 - `npx vitest run src/runtime/chat-agent/direct-second-brain-write.test.ts`
 - `npx vitest run src/runtime/execution/verifier.test.ts`
 
-Remaining risks and cleanup:
+Residual follow-up outside this plan:
 
-- Delegated retry/recovery still has overlapping ownership between graph node runners and worker-manager/tool-loop paths. The next cleanup should keep moving terminal retry/recovery ownership into graph node runners and delete the replaced side channels in the same slice.
-- Mixed web+repo delegated quality is improved, but the live failure showed that answer-shape verification needs continued hardening around progress-only completions from managed-cloud models.
-- Natural-language second-brain title normalization still produced an awkward denied-smoke title (`Named Denied Smoke Appointment`) in one path; fix that in second-brain mutation normalization if it recurs in user-facing flows.
+- Mixed web+repo delegated quality is improved and graph verification now rejects progress-only completions, but synthesis/search quality should continue as a separate refinement track when pressure testing answer shape, latency, and model variance across managed-cloud profiles.
+- Natural-language second-brain title normalization produced an awkward denied-smoke title (`Named Denied Smoke Appointment`) in one historical path; fix that in second-brain mutation normalization if it recurs in user-facing flows.
 - Continue to prefer Ollama Cloud for managed-cloud app/API sweeps until OpenRouter account/profile drift is the specific target under test.
 
 ### 2026-04-28 Complex Orchestration Alignment Review
@@ -180,10 +179,10 @@ Verification added or rerun for this checkpoint:
 - `GET http://localhost:3000/api/routing/trace?requestId=complex-readonly-uplift-42801-r2&limit=50`
 - `node scripts/test-cross-domain-orchestration-stress.mjs`
 
-Remaining risks after this checkpoint:
+Follow-up risks after this checkpoint:
 
-- Real-app multi-domain mutation sweeps should still be expanded beyond the harness, especially mixed second-brain, automation, browser, repo, and external-provider requests that require multiple approvals.
-- Delegated retry/fallback is working for the proven mixed read request, but terminal retry/recovery ownership still has overlap between graph node runners and worker-manager/tool-loop paths. Continue deleting those overlapping owners as graph-native replacements land.
+- Real-app multi-domain mutation sweeps should keep expanding in the separate quality/refinement track, especially mixed second-brain, automation, browser, repo, and external-provider requests that require multiple approvals.
+- Delegated retry/fallback is working for the proven mixed read requests, and terminal retry/recovery ownership is graph-owned for the scoped durable graph lanes. Keep future quality fixes in graph verifier/synthesis/retry modules unless a new owner gap is proven by trace evidence.
 - The live mixed read used Ollama Cloud for managed-cloud selection and fell back during delegated retry; keep provider/profile verification focused in runtime provider orchestration and response-source metadata rather than adding request-specific routing exceptions.
 
 Checkpoint after the delegated-worker and recovery graph ownership cleanup:
@@ -354,10 +353,10 @@ Checkpoint after the automation-control routing and direct-rendering cleanup:
 - Broad gates passed after the cleanup: `npm run check`, `npm run build`, and full `npm test` (314 files, 3398 tests).
 - Real rebuilt-app API spot check passed after starting `node dist/index.js` and confirming `GET http://localhost:3000/api/status`: exact-answer request id `codex-cleanup-exact-42804-r2` returned exactly `CLEANUP-EXACT-42804`; multi-domain read-only request id `codex-cleanup-multidomain-42804-r2` searched web, repo, and memory, then returned the `Example Domain` title, `src/runtime/chat-agent/live-tool-loop-controller.ts`, and stored `SMOKE-MEM-42801`; security request id `codex-cleanup-security-42804-r2` refused to print raw Guardian credentials and leaked no secret-like pattern. The multi-domain trace showed managed-cloud Ollama Cloud routing, planned `web_search`, `repo_inspect`, `memory_search`, and final answer steps, delegated completion, and no pending blocker.
 
-Known remaining problems and risks:
+Known problems and risks at this historical checkpoint, now closed or superseded by later graph-backed slices unless repeated in the completion assessment:
 
-- The app API and web UI approval paths are now proven for a harmless policy-gated write. Remaining approval work is ownership cleanup, not first-proof validation.
-- Approval/resume ownership is narrower after the latest cleanup, but payload-specific chat continuation executors and suspended tool-loop replay still need graph-native node equivalents before the remaining replay payload can be deleted.
+- The app API and web UI approval paths were proven for a harmless policy-gated write. The later graph-backed pending-action and continuation slices closed the scoped approval ownership cleanup for the proven lanes.
+- Approval/resume ownership was narrower after this cleanup. Later graph-backed `ChatContinuation`, `WorkerSuspension`, and `ToolLoopCheckpoint` artifacts superseded the exposed replay-payload risks for the scoped lanes.
 - Delegated graph ownership is narrower after the latest cleanup: retry policy, retry-attempt planning, retry profile-selection policy, retry invocation sequencing, terminal handoff, result verification, verification-cycle orchestration, request-scoped job-drain polling policy, and extended evidence-drain policy have moved into the execution-graph layer. Delegated worker dispatch, budget persistence, and concrete ToolExecutor job access are still coordinated from `WorkerManager` because they require supervisor/runtime authority. Continue moving only graph-owned decisions into graph node/controller boundaries before deleting old side channels.
 - Mixed web+repo orchestration is now terminal-answer safe, but answer precision still needs tuning so delegated synthesis consistently grounds tool implementation claims in exact source files when the repo contains them.
 - Broad multi-domain connector orchestration is now terminal-answer safe and app-proven for read-only Vercel, WHM/cPanel, Gmail, Outlook, and sync/status evidence. Remaining connector stress should expand mutation-plus-approval paths and improve graph polling/observability for long-running requests rather than narrowing supported request shapes.
@@ -366,11 +365,11 @@ Known remaining problems and risks:
 - The unstructured intent repair path has been retired. Prose-only classifier responses now remain unavailable gateway records so fallback passes, structured recovery, or clarification own recovery; there is no raw-text post-gateway route inference path.
 - Startup in this operator environment still reports a local control-plane integrity warning for `scheduled-tasks.json`; that is host runtime state, not a code regression from this slice.
 
-Recommended next slice:
+Historical recommended next slice, now completed or superseded by later checkpoints:
 
 1. Keep the OpenRouter API and browser sweeps as the regression baseline for any next routing/continuity/approval/web change: exact-answer provider metadata, fresh-surface isolation, same-surface continuity, approval continuity, security refusal, request-id trace correlation, web approval UI, skills routing, and Code UI smoke.
-2. Establish graph-owned approval resume as the next hard deletion boundary. Move one remaining legacy approval/resume producer fully onto graph interrupts, then delete the replaced owner in the same slice.
-3. Continue delegated graph cleanup by moving delegated budget persistence and any remaining recovery side channels behind graph node/controller boundaries, deleting overlapping `WorkerManager` side channels as each path is proven.
+2. Establish graph-owned approval resume as the next hard deletion boundary. This is now complete for the proven graph lanes through mutation-node, worker-suspension, chat-continuation, and pending-action adapter ownership.
+3. Continue delegated graph cleanup by moving delegated retry/recovery side channels behind graph node/controller boundaries. This is now complete for the scoped durable graph lanes; `WorkerManager` still supplies supervisor/broker authority through intentional callbacks.
 4. Continue provider fallback/profile cleanup by moving duplicate retry and fallback ownership into execution profile/runtime orchestration. Preserve the compact dated snapshot verifier coverage when changing provider metadata.
 
 ### 2026-04-26 Architecture Refinement And Debt-Burn Phase
@@ -451,7 +450,7 @@ Checkpoint after the first approval/resume debt-burn slice:
 - Chat-agent tool-loop approvals no longer keep an in-memory suspended-session replay cache. The durable `PendingActionRecord.resume` payload is the resume source for chat-level tool-loop approval continuation.
 - The old suspended approval scope helpers were removed with their tests; pending actions now own blocked-work lookup for chat approvals.
 - CLI and Telegram no longer synthesize a replay turn when the approval decision API already returns an explicit continuation directive. Direct continuation responses and pending-action resume metadata are authoritative for those flows.
-- Remaining approval/resume overlap after this slice: worker-manager direct automation continuations, worker-session automation continuations, worker suspended approvals, and tool-loop resume payloads still needed graph interrupt equivalents before they could be deleted.
+- Historical approval/resume overlap after this slice was closed by later graph-backed continuation and worker-suspension slices.
 
 Checkpoint after the chat automation-resume debt-burn slice:
 
@@ -465,7 +464,7 @@ Checkpoint after the worker-manager direct automation debt-burn slice:
 - `WorkerManager.directAutomationContinuations` was deleted. Direct automation remediation approvals later moved fully to graph-owned continuation artifacts instead of storing replay payloads on the pending action.
 - The dashboard approval path no longer asks WorkerManager for a separate automation-continuation flag. Pending-action resume metadata is the continuation signal.
 - WorkerManager records direct automation pending actions under the resolved shared state agent id when the runtime provides a state-id resolver, so dashboard approval continuation stays aligned with ChatAgent state ownership.
-- Remaining approval/resume overlap at this checkpoint: brokered worker automation continuation state, worker suspended approvals, and tool-loop resume payloads still needed graph interrupt equivalents before they could be deleted.
+- Historical approval/resume overlap at this checkpoint was closed by later graph-backed continuation, worker-suspension, and tool-loop checkpoint slices.
 
 Checkpoint after the chat-agent direct-intent helper extraction:
 
@@ -484,7 +483,7 @@ Checkpoint after the direct-route ownership cleanup:
 - `src/runtime/chat-agent/direct-route-handlers.ts` now owns direct-route dispatch for personal assistant/Second Brain, coding session control, and coding backend delegation instead of accepting route callbacks from `ChatAgent`.
 - `src/runtime/chat-agent/direct-personal-assistant.ts` owns Second Brain read/write/routine dispatch and item-type focus resolution. `ChatAgent` now only binds Second Brain services, clarification creation, and mutation execution.
 - Coding backend and coding session-control routes now share explicit dependency bundles and a single coding-task resumer, including the early `coding_session_control` path.
-- The old `ChatAgent` private route wrappers for Second Brain, coding backend delegation, and gateway-driven code session control were deleted in the same slice. Remaining `ChatAgent` orchestration debt is top-level turn assembly, dependency binding, response shaping, and the non-direct tool-loop/continuation paths.
+- The old `ChatAgent` private route wrappers for Second Brain, coding backend delegation, and gateway-driven code session control were deleted in the same slice. Historical `ChatAgent` orchestration debt after this checkpoint was top-level turn assembly, dependency binding, response shaping, and the non-direct tool-loop/continuation paths; later checkpoints closed the scoped graph-owned parts.
 - Focused direct-route, coding-backend, and code-session-control tests passed, and `npm run check` passed for the slice.
 
 Checkpoint after the brokered worker automation-resume cleanup:
@@ -492,7 +491,7 @@ Checkpoint after the brokered worker automation-resume cleanup:
 - `BrokeredWorkerSession.automationContinuation` was deleted. The worker no longer keeps a separate hidden automation-authoring continuation beside pending approvals.
 - Brokered automation remediation now returns an explicit `workerAutomationAuthoringResume` metadata payload. `WorkerManager` carries that payload with the worker suspended-approval state and sends it back to the worker as structured continuation metadata after the approval set resolves.
 - The worker handles that resume metadata before intent classification and reruns automation authoring with `assumeAuthoring: true`, preserving the original user content and code context from the supervisor-provided resume payload.
-- Remaining approval/resume overlap after this slice: worker suspended approvals still owned brokered-worker approval continuity until they were replaced by graph interrupt resume; tool-loop resume payloads still need graph interrupt equivalents before deletion.
+- Historical approval/resume overlap after this slice was closed by later graph interrupt resume and tool-loop checkpoint cleanup.
 
 Checkpoint after the brokered worker pending-action resume slice (superseded):
 
@@ -507,34 +506,34 @@ Checkpoint after the brokered worker graph-suspension and fallback removal slice
 - Dashboard/API approval resolution no longer consults WorkerManager's live suspended-worker map as a continuation source. It resumes `execution_graph` pending actions through the shared approval-continuation path.
 - Non-graph delegated worker approval metadata is sanitized instead of being advertised as resumable. If a delegated worker cannot produce graph-owned suspension state, it no longer creates a shared pending-action continuation facade.
 - The worker-specific resume serializer, `worker_approval` pending-action kind, live worker suspended-approval maps, and direct worker approval continuation path have been deleted.
-- Remaining approval/resume overlap after this slice: chat-agent `tool_loop` resume payloads are still replay payloads rather than graph interrupts.
+- Historical approval/resume overlap after this slice was superseded by the later graph-backed `ChatContinuation` and `ToolLoopCheckpoint` slices.
 
 Checkpoint after the tool-loop resume helper extraction:
 
 - Tool-loop pending approval continuation construction now lives in `src/runtime/chat-agent/tool-loop-continuation.ts` beside the serializer/reader instead of being duplicated inside `src/chat-agent.ts` and `tool-loop-runtime.ts`.
 - `src/chat-agent.ts` still owns the live tool-loop orchestration path, but it no longer hand-builds `tool_loop` pending-action payloads. Future graph-interrupt migration can replace one helper contract instead of two partial builders.
-- Remaining tool-loop debt after this slice: `tool_loop` pending actions are still replay resumes rather than execution-graph interrupts, and the live tool execution loop still needs further extraction out of the monolithic chat agent.
+- Historical tool-loop debt after this slice was superseded by later execution-graph pending-action projection and `ToolLoopCheckpoint` artifact work for the scoped lanes.
 
 Checkpoint after the coding-backend capability replay deletion:
 
 - `coding_backend_run` approvals no longer store a capability replay resume payload. The approval decision result already carries the backend execution output, so shared approval orchestration now renders that result directly.
 - `src/runtime/chat-agent/coding-backend-approval-result.ts` owns coding-backend approval-result response metadata without reconstructing a replay request.
 - The deleted `coding-backend-resume.ts` bridge removes one capability replay payload type from the approval continuation runtime.
-- Remaining capability debt after this slice: filesystem save and automation-authoring remediation resumes still needed graph interrupt equivalents. That debt is now closed by the graph-backed capability continuation cleanup.
+- Historical capability debt after this slice was closed by the later graph-backed capability continuation cleanup.
 
 Checkpoint after the direct coding-backend runtime extraction:
 
 - Direct coding-backend status checks, direct backend run dispatch, pending-approval storage, and routing trace emission moved from `src/chat-agent.ts` into `src/runtime/chat-agent/direct-coding-backend.ts`.
 - `src/chat-agent.ts` now only wires dependencies for that path, which gives the future graph-interrupt migration one direct coding-backend owner instead of another inline monolith branch.
 - Focused coverage at `src/runtime/chat-agent/direct-coding-backend.test.ts` verifies successful direct runs, recent-run status formatting, and the current shared pending-action resume contract.
-- Remaining capability debt after this slice: filesystem save and automation-authoring remediation resumes still needed graph interrupt equivalents. That debt is now closed by the graph-backed capability continuation cleanup.
+- Historical capability debt after this slice was closed by the later graph-backed capability continuation cleanup.
 
 Checkpoint after the Second Brain capability replay deletion:
 
 - Direct Second Brain mutation approvals no longer persist tool names, arguments, and original content as a capability replay payload.
 - Pending actions now carry only the user-facing mutation descriptor in intent entities, while shared approval orchestration asks `ChatAgent` to format approved tool results through the capability-specific result formatter.
 - `second-brain-resume.ts`, the Second Brain capability replay payload type, and the continuation-runtime branch for Second Brain replay have been deleted.
-- Remaining capability debt after this slice: filesystem save and automation-authoring remediation resumes still needed graph interrupt equivalents. That debt is now closed by the graph-backed capability continuation cleanup.
+- Historical capability debt after this slice was closed by the later graph-backed capability continuation cleanup.
 
 Checkpoint after the WorkerManager direct-approval cache deletion:
 
@@ -579,7 +578,7 @@ Checkpoint after the shared tool-loop round extraction:
 - Tool execution rounds now have one runtime owner in `src/runtime/chat-agent/tool-loop-round.ts` for assistant tool-call observation, conflict-aware execution, approval-id redaction before LLM reinjection, tool-result sanitization/taint propagation, deferred `find_tools` definition loading, pending-approval detection, and deferred remote-sandbox blockers.
 - The live chat-agent tool loop, fallback-provider tool execution path, and stored tool-loop approval resume path now call the shared round helper instead of each carrying their own partial copy of the same orchestration rules.
 - Focused coverage now exists at `src/runtime/chat-agent/tool-loop-round.test.ts` for approval redaction and deferred tool discovery.
-- Remaining tool-loop debt after this slice: `src/chat-agent.ts` still owns the larger LLM round/retry/recovery loop and `tool_loop` pending actions are still replay resumes rather than execution-graph interrupts. The next architectural move is to lift the round controller itself, then replace replay resumes with graph interrupts.
+- Historical tool-loop debt after this slice was superseded by later shared round, graph-backed continuation, and `ToolLoopCheckpoint` work for the scoped lanes. `src/chat-agent.ts` still composes the turn boundary, but the graph-owned approval/continuation decisions no longer depend on an exposed replay resume path.
 
 Checkpoint after the capability-continuation bridge cleanup:
 
@@ -594,37 +593,37 @@ Checkpoint after the shared approval-continuation cleanup:
 - Dashboard/API approval decisions no longer special-case `execution_graph` in `src/index.ts` before falling through to a ChatAgent-only continuation method.
 - `src/runtime/chat-agent/approval-orchestration.ts` now owns final approval continuation dispatch for `execution_graph` and `tool_loop` pending-action resumes.
 - The ChatAgent public method is now `continuePendingActionAfterApproval`, and continuation response normalization no longer carries direct-route naming.
-- Remaining approval-continuation debt after this slice: chat-level tool-loop approvals still use `tool_loop` and need graph interrupt equivalents before replay payloads can be removed.
+- Historical approval-continuation debt after this slice was superseded by later graph-backed pending-action projection and checkpoint artifact cleanup for the scoped lanes.
 
 Checkpoint after the blocked tool-loop resume builder cleanup:
 
 - The repeated all-blocked tool-loop continuation sequence now lives in `src/runtime/chat-agent/tool-loop-runtime.ts` as `buildBlockedToolLoopPendingApprovalContinuation`.
 - The live ChatAgent loop, fallback-provider loop, and stored tool-loop resume loop now share the same pending-observation removal, deferred remote sandbox pruning, and `tool_loop` resume payload construction.
-- Remaining tool-loop debt after this slice: the replay payload itself still stores model messages. The next architectural move is to replace `tool_loop` resumes with graph interrupts and artifact-backed observations.
+- Historical tool-loop debt after this slice was superseded by later graph-backed continuation and checkpoint artifact cleanup for the scoped lanes.
 
 Checkpoint after the scheduled-email direct runtime extraction:
 
 - Scheduled Gmail automation orchestration now lives in `src/runtime/chat-agent/direct-scheduled-email-automation.ts`; `src/chat-agent.ts` only supplies shared dependencies and no longer owns schedule/detail follow-up resolution or `automation_save` approval wrapping.
 - This keeps scheduled-email direct execution aligned with the existing direct automation modules instead of leaving another per-capability flow embedded in the monolith.
-- Remaining direct mailbox debt after this slice: Gmail/Outlook direct read, write, and reply-target lookup still live in `src/chat-agent.ts` and should move behind a shared mailbox runtime before graph-interrupt migration.
+- Historical direct mailbox debt after this slice was closed by the later direct mailbox runtime extraction.
 
 Checkpoint after the direct mailbox runtime extraction:
 
 - Gmail and Outlook direct read/write execution, reply-target lookup, mailbox pagination, and email approval wrapping now live in `src/runtime/chat-agent/direct-mailbox-runtime.ts`.
 - `src/chat-agent.ts` now delegates mailbox actions through `DirectMailboxDeps`, matching the existing direct automation and scheduled-email runtime shape instead of owning provider-specific branches inline.
-- Remaining mailbox debt after this slice: mailbox direct runtime still produces chat-level pending approvals rather than execution-graph interrupts; that should be addressed with the broader pending-action graph interrupt migration.
+- Historical mailbox approval debt after this slice was superseded by the later graph-backed pending-action and approval-continuation cleanup for the scoped lanes.
 
 Checkpoint after the provider fallback runtime extraction:
 
 - Chat-provider failover now lives in `src/runtime/chat-agent/provider-fallback.ts`: preferred provider order normalization, selected-provider first execution, primary failure fallback, alternate-provider retry, routing metadata, and local tool-call parse recovery are handled by one runtime helper.
 - `src/chat-agent.ts` still decides where model calls happen in the turn flow, but it no longer owns the provider fallback state machine inline. Stored tool-loop resume and live execution can now share the same fallback contract shape.
-- Remaining provider debt after this slice: quality-fallback branches inside the larger live LLM/tool-loop controller still decide when to retry, but they no longer call the fallback-chain API directly. The remaining work is to lift that controller itself out of `src/chat-agent.ts`.
+- Historical provider debt after this slice was closed by the later live tool-loop controller extraction for the scoped lanes; broader provider fallback/profile quality remains a separate refinement track.
 
 Checkpoint after the live tool-loop pending approval finalization cleanup:
 
 - Live tool-loop pending approval finalization now lives in `src/runtime/chat-agent/tool-loop-runtime.ts` as `finalizeToolLoopPendingApprovals`: approval-id merging, approval-summary rendering, pending-action creation, collision handling, and structured approval copy selection are no longer embedded in `src/chat-agent.ts`.
 - The live ChatAgent controller still decides when a turn has pending tool approvals, but the pending-action write path now has one runtime owner shared with the stored tool-loop resume helpers.
-- Remaining approval debt after this slice: the pending action still stores a `tool_loop` replay payload. Replacing that payload with graph interrupts and artifact-backed observations remains the next durable-execution step.
+- Historical approval debt after this slice was closed by the later graph-backed tool-loop continuation and `ToolLoopCheckpoint` artifact cleanup for the scoped lanes.
 
 Checkpoint after the graph-backed capability continuation cleanup:
 
@@ -637,7 +636,7 @@ Checkpoint after the graph-backed tool-loop continuation cleanup:
 - Blocked live tool-loop approvals now create `execution_graph` pending actions and store the suspended tool-loop continuation in a `ChatContinuation` graph artifact instead of embedding a `tool_loop` replay payload in the pending action.
 - Shared approval continuation dispatch now has one durable branch: `execution_graph`. The old chat-level `tool_loop` pending-action resume kind and dispatcher path were deleted.
 - The graph continuation bridge is now generic chat continuation infrastructure for filesystem save remediation, automation authoring remediation, and suspended tool-loop approvals.
-- Remaining orchestration debt after this slice: `src/chat-agent.ts` still owns the live LLM/tool-loop controller and the continuation artifact still snapshots model messages. The next durable-execution step is to lift the controller out of the monolith and replace transcript snapshots with explicit tool-observation/checkpoint artifacts where practical.
+- Historical orchestration debt after this slice was closed for the scoped lanes by the live tool-loop controller extraction and `ToolLoopCheckpoint` artifact cleanup. Further graph-controller consolidation is a separate architecture refinement, not remaining durable graph uplift scope.
 
 Checkpoint after the chat-continuation naming cleanup:
 
@@ -650,19 +649,19 @@ Checkpoint after the live tool-loop controller extraction:
 - Live no-tools chat, tool-loop execution, provider routing, quality fallback, answer-first recovery, web-search prefetch recovery, pending-approval finalization, and suspended tool-loop graph continuation creation now live in `src/runtime/chat-agent/live-tool-loop-controller.ts`.
 - `src/chat-agent.ts` still assembles turn context and renders the final response, but no longer owns the live LLM/tool-loop state machine inline.
 - The old inline response-source metadata builder, direct-answer recovery wrapper, and live-loop retry/correction prompt policies were removed from `src/chat-agent.ts`; the controller now owns that runtime metadata and correction policy for live model execution.
-- Remaining controller debt: `src/chat-agent.ts` still owns direct-route candidate dispatch, gateway repair, and many capability-specific dependency-wiring methods. The next extraction should target shared direct-route orchestration or graph-controller ownership, not another per-capability resume shim.
+- Historical controller debt after this slice was closed for the scoped direct-route wiring by later direct-route orchestration and dependency cleanup. Broader graph-controller consolidation remains separate refinement work.
 
 Checkpoint after the direct provider/web-search runtime extraction:
 
 - Direct provider inventory/model reads now live in `src/runtime/chat-agent/direct-provider-read.ts` with focused coverage; `src/chat-agent.ts` no longer owns provider inventory target matching or formatting.
 - Direct web-search execution, search-result formatting, sanitization, and optional LLM summarization now live in `src/runtime/chat-agent/direct-web-search.ts` with focused coverage; `src/chat-agent.ts` only wires the direct candidate handler.
-- Remaining direct-route debt: direct candidate dispatch is still assembled inside `src/chat-agent.ts`, and larger direct runtimes still depend on ChatAgent-owned dependency builders. The next cleanup should move direct-route orchestration/wiring behind a shared runtime boundary.
+- Historical direct-route debt after this slice was closed by later direct-route orchestration and dependency cleanup.
 
 Checkpoint after the direct-route orchestration extraction:
 
 - Direct capability candidate ordering, direct web-search suppression, direct-candidate trace emission, dispatch, and degraded memory fallback policy now live in `src/runtime/chat-agent/direct-route-orchestration.ts`.
 - The duplicate `DirectIntentShadowCandidate` type was removed; direct response/logging now uses the shared `DirectIntentRoutingCandidate` contract from the intent capability resolver path.
-- Remaining direct-route debt: `src/chat-agent.ts` still builds the capability handler map and owns several dependency-builder callbacks for mailbox, automation, browser, memory, and Second Brain runtimes. The next cleanup should move handler-map construction into composable direct-runtime dependency groups, then retire the remaining ChatAgent wrapper methods.
+- Historical direct-route debt after this slice was closed for mailbox, automation, browser, memory, and Second Brain by later direct-runtime dependency and handler-factory cleanup.
 
 Checkpoint after the direct-runtime dependency cleanup:
 
@@ -675,7 +674,7 @@ Checkpoint after the direct-route handler factory extraction:
 - Direct-route handler map construction now lives in `src/runtime/chat-agent/direct-route-handlers.ts` with focused coverage in `src/runtime/chat-agent/direct-route-handlers.test.ts`.
 - `src/chat-agent.ts` no longer imports or wires provider-read, web-search, mailbox, automation, browser, scheduled-email, memory, or filesystem direct helper modules inline; it supplies scoped request context plus explicit callbacks only for the still-ChatAgent-owned Second Brain and coding paths.
 - Memory approval continuity and filesystem stored-save continuation are covered at the route-handler boundary, preserving `ToolExecutor`/`checkAction`, shared pending actions, and stored filesystem-save orchestration while removing the private `ChatAgent` wrappers.
-- Remaining direct-route debt: retire the Second Brain and coding callback-backed private wrappers with explicit runtime dependency groups, then collapse this direct-route runtime behind the broader graph controller boundary.
+- Historical direct-route debt after this slice was closed for Second Brain and coding callback wrappers by later explicit runtime dependency groups. Collapsing the direct-route runtime further behind a graph controller is separate refinement work.
 
 Checkpoint after the Second Brain direct-runtime dependency cleanup:
 
@@ -685,7 +684,7 @@ Checkpoint after the Second Brain direct-runtime dependency cleanup:
 - Focused verification for this cleanup passed: `npx vitest run src/chat-agent.test.ts src/runtime/chat-agent/direct-runtime-deps.test.ts src/runtime/chat-agent/direct-route-handlers.test.ts` reported 100 passing tests. Focused direct-route/Second Brain coverage also passed: `npx vitest run src/runtime/chat-agent/direct-runtime-deps.test.ts src/runtime/chat-agent/direct-route-handlers.test.ts src/runtime/chat-agent/direct-second-brain-write.test.ts` reported 14 passing tests.
 - Full verification passed after the cleanup: `npm run check`, `npm run build`, and `npm test` with 312 files and 3380 tests.
 - Rebuilt-app live API spot verification passed after restarting with `scripts/start-dev-windows.ps1 -StartOnly`: exact-answer request `directdeps-exact-42802` returned only `DIRECTDEPS-EXACT-42802`; automation-control count request `directdeps-auto-42802` returned 38 automations; Second Brain overview request `directdeps-secondbrain-42802` routed as `personal_assistant_task` and returned the configured routines/automation summary; raw-credential request `directdeps-security-42802` routed as `security_task`, refused, and leaked no API key/bearer/token pattern. All four used Ollama Cloud direct metadata (`ollama-cloud-direct` / `minimax-m2.1`) and no provider fallback.
-- Remaining direct-route debt at this checkpoint: coding direct-route dependency builders still lived as `ChatAgent` private wrapper methods. The follow-on cleanup moved coding backend/session-control dependency assembly behind an explicit runtime dependency group without changing Intent Gateway routing or brokered-worker authority.
+- Historical direct-route debt at this checkpoint was closed by the follow-on cleanup that moved coding backend/session-control dependency assembly behind an explicit runtime dependency group without changing Intent Gateway routing or brokered-worker authority.
 
 Checkpoint after the live multi-domain connector closeout:
 
@@ -696,7 +695,7 @@ Checkpoint after the live multi-domain connector closeout:
 - The first live multi-domain `/api/message` replay after the safety-clause fix, request id `durable-multidomain-4fcd65253546469ca0dd7d43669c4377`, completed the delegated graph but exposed the broker timeout problem: `code_symbol_search` and content `fs_search` timed out after 30000ms, a later filename `fs_search` returned zero matches, and final synthesis incorrectly reported `runLiveToolLoopController` as not found.
 - After rebuilding and restarting the real app with `scripts/start-dev-windows.ps1 -StartOnly`, live request id `durable-multidomain-c96a05c6a42c42c7bc2262b0d18537e0` completed the delegated graph with `vercel_status`, `whm_status`, `gws`, `m365`, `automation_list`, and `code_symbol_search` all recorded as successful tool calls. The final answer correctly reported `src/runtime/chat-agent/live-tool-loop-controller.ts` for `runLiveToolLoopController`, had no pending action, and returned execution graph status `completed`.
 - Focused verification for this closeout passed: `npx vitest run src/broker/broker-client.test.ts src/supervisor/worker-manager.test.ts src/runtime/intent/request-patterns.test.ts src/runtime/intent-gateway.test.ts` reported 189 passing tests; `npm run check` passed; `npm run build` passed; `GET http://localhost:3000/api/status` returned `status=running` after the rebuild/restart; full `npm test` passed with 312 files and 3371 tests.
-- Remaining risks after this checkpoint: the uplift is not 100% complete. Delegated retry/recovery and some live tool-loop orchestration still have overlap between graph node runners and legacy controller paths; multi-domain mutation requests that require multiple independent approvals still need broader real-app coverage; and graph/operator observability still needs a dedicated safe-artifact/redaction pass so trace and timeline surfaces do not expose raw connector payloads.
+- Historical risk at this checkpoint, now closed or superseded: delegated retry/recovery, live tool-loop orchestration, multi-approval handling, and operator redaction still needed later graph-backed cleanup and validation at this point.
 
 Checkpoint after the graph observability and multi-approval cleanup:
 
@@ -710,7 +709,7 @@ Checkpoint after the graph observability and multi-approval cleanup:
 - Focused verification for this cleanup passed: `npx vitest run src/runtime/control-plane/dashboard-runtime-callbacks.test.ts src/runtime/runtime.test.ts src/supervisor/worker-manager.test.ts` reported 111 passing tests. `npm run check` and `npm run build` passed after the changes.
 - Rebuilt-app cancellation proof used stream request id `spot-cancel-stream-fixed-42801`: `/api/message/cancel` returned `REQUEST_CANCELED`, the stream response returned the cancellation result, and `/api/routing/trace?requestId=spot-cancel-stream-fixed-42801` stopped at gateway/profile/pre-route stages with no `dispatch_response`, proving canceled prepared work no longer completed behind the user. The same rebuilt app also logged budget-timeout delegated worker aborts as `Worker dispatch aborted; shutting down worker`, with brokered failures recorded instead of silent stuck workers.
 - Rebuilt-app spot checks after the cancellation cleanup passed across ordinary request types: exact-answer marker `final-spot-fresh-42801`, same-surface continuity `final-spot-cont-store-42801` / `final-spot-cont-recall-42801`, direct automation count `final-spot-automation-count-42801`, and raw-credential refusal `final-spot-security-42801`. All reported Ollama Cloud managed-cloud profiles with no provider fallback.
-- Remaining risks after this checkpoint: the uplift is still not 100% complete. The routing trace redaction boundary and cancellation propagation are now covered, but run-timeline/detail artifact presentation still needs a separate audit before exposing richer connector payload drill-downs; delegated retry/recovery still has overlap between graph node runners and legacy worker-manager/controller paths; and broad live connector mutation sweeps with multiple independent approvals still need more real-app coverage. Long connector sweeps should continue moving toward graph/job polling and observability rather than synchronous HTTP completion assumptions.
+- Historical risk at this checkpoint, now closed or superseded: routing trace redaction and cancellation were covered, while run-timeline redaction, delegated retry/recovery ownership, and broader connector mutation sweeps still needed later cleanup. Long connector sweeps should continue moving toward graph/job polling and observability rather than synchronous HTTP completion assumptions.
 
 Checkpoint after the run-timeline redaction cleanup:
 
@@ -719,7 +718,7 @@ Checkpoint after the run-timeline redaction cleanup:
 - Execution-graph timeline projections now redact string payload fields used for graph titles/details, including `argsPreview`, `resultPreview`, `resultMessage`, `errorMessage`, `prompt`, `question`, `summary`, and `preview`, without expanding raw graph payload objects.
 - Focused verification for this cleanup passed: `npx vitest run src/runtime/run-timeline.test.ts src/runtime/execution-graph/timeline-adapter.test.ts src/runtime/intent-routing-trace.test.ts` reported 27 passing tests, `npm run check` passed, `npm run build` passed, and full `npm test` passed with 312 files and 3379 tests.
 - Rebuilt-app live spot verification passed after restarting with `scripts/start-dev-windows.ps1 -StartOnly`: `GET /api/status` returned `status=running`; exact-answer request id `timeline-redaction-spot-42802` returned exactly `TIMELINE-SPOT-42802`; `/api/assistant/runs/timeline-redaction-spot-42802` and `/api/routing/trace?requestId=timeline-redaction-spot-42802` both redacted the fake `apiKey` value while preserving provider/run metadata; direct automation count request id `timeline-spot-automation-42802` returned 38 automations; raw credential-disclosure request id `timeline-spot-security-42802` refused without exposing secrets. The live spot used Ollama Cloud managed-cloud direct routing with no provider fallback.
-- Remaining risks after this checkpoint: the current bounded timeline/detail projection is redacted, but richer connector payload drill-downs should still be designed as safe artifacts rather than exposing raw connector payloads. Delegated retry/recovery still has overlap between graph node runners and legacy worker-manager/controller paths, and broad live connector mutation sweeps with multiple independent approvals still need more real-app coverage.
+- Historical risk at this checkpoint, now closed or superseded: bounded timeline/detail projection was redacted, but richer connector payload drill-downs, delegated retry/recovery ownership, and broad connector mutation sweeps still needed later cleanup or separate quality-track coverage.
 
 Checkpoint after the coding direct-route dependency cleanup:
 
@@ -728,7 +727,7 @@ Checkpoint after the coding direct-route dependency cleanup:
 - Focused coverage was updated so tests use the owning dependency builder instead of reaching into deleted `ChatAgent` private methods. The new direct-route handler coverage verifies brokered tool authority metadata (`origin`, `agentId`, principal, channel, request id, and `checkAction`) and the managed-sandbox adapter.
 - Verification passed for this cleanup: `npx vitest run src/chat-agent.test.ts src/runtime/chat-agent/direct-route-handlers.test.ts src/runtime/chat-agent/code-session-control.test.ts src/runtime/chat-agent/direct-coding-backend.test.ts` reported 105 passing tests; `npm run check` passed; `npm run build` passed; full `npm test` passed with 312 files and 3381 tests.
 - Rebuilt-app live API spot verification passed after restarting with `scripts/start-dev-windows.ps1 -StartOnly`: `GET /api/status` returned `status=running`; `/api/providers` confirmed Ollama Cloud direct/tools/coding managed-cloud profiles; exact-answer request id `codingdeps-exact-42803` returned exactly `CODINGDEPS-EXACT-42803`; coding repo-search request id `codingdeps-repo-42803` routed as `coding_task`, used `ollama-cloud-coding` / `glm-5.1`, resolved the active code session, and found `src/runtime/chat-agent/live-tool-loop-controller.ts`; automation request id `codingdeps-auto-42803` routed as `automation_control` and returned 38 automations; raw credential-disclosure request id `codingdeps-security-42803` routed as `security_task`, refused, and matched no raw secret pattern. Routing traces for all four requests had completed runs and no provider fallback.
-- Remaining risks after this checkpoint: the coding direct-route dependency wrappers are gone, but direct-route assembly still starts from `ChatAgent` turn orchestration. The durable graph uplift is still not 100% complete until the graph controller owns the remaining direct-route/delegated execution lifecycle decisions, delegated retry/recovery side channels are removed, and broader live connector mutation sweeps with multiple independent approvals are covered.
+- Historical risk at this checkpoint, now closed or superseded: coding direct-route dependency wrappers were gone, but direct-route/delegated execution lifecycle ownership, delegated retry/recovery side channels, and broader connector mutation sweeps still needed later cleanup or separate quality-track coverage.
 
 Checkpoint after the shared chat-continuation resume terminalization cleanup:
 
@@ -737,7 +736,7 @@ Checkpoint after the shared chat-continuation resume terminalization cleanup:
 - Focused coverage now proves suspended tool-loop continuation state stays inside a redacted `ChatContinuation` graph artifact (`internal_resume_payload`) while pending-action client metadata exposes only graph interrupt and artifact-ref summaries, not stored `llmMessages`, `requestText`, or tool arguments.
 - This cleanup did not change Intent Gateway routing, provider/profile selection, simple/direct request behavior, or brokered-worker authority boundaries.
 - Verification passed: focused `npx vitest run src/runtime/chat-agent/chat-continuation-graph.test.ts src/runtime/chat-agent/chat-continuation-runtime.test.ts src/supervisor/worker-manager.test.ts` reported 53 passing tests; `npm run check` passed; `npm run build` passed; the rebuilt app responded to `GET http://localhost:3000/api/status`; `/api/providers` showed the configured managed-cloud Ollama Cloud direct/tools/coding profiles; `node scripts/test-web-approvals.mjs` passed; `node scripts/test-cross-domain-orchestration-stress.mjs` passed; full `npm test` passed with 316 files and 3416 tests.
-- Remaining risks after this checkpoint: the suspended tool-loop artifact is graph-backed and not exposed through pending-action metadata, but it still snapshots model messages internally. Replacing those snapshots with explicit tool-observation/checkpoint artifacts remains future graph-controller work. Richer graph/operator observability, delegated budget-persistence ownership, and broader connector mutation-plus-approval sweeps remain open cleanup areas.
+- Historical risk at this checkpoint, now closed or superseded: the suspended tool-loop artifact was graph-backed and not exposed through pending-action metadata, but explicit checkpoint artifact cleanup, graph/operator observability, delegated ownership, and broader connector mutation-plus-approval sweeps still needed later cleanup or separate quality-track coverage.
 
 Checkpoint after the repo-search synthesis and tool-loop checkpoint cleanup:
 
@@ -745,7 +744,7 @@ Checkpoint after the repo-search synthesis and tool-loop checkpoint cleanup:
 - Direct filesystem dispatch now defers repo-grounded search-plus-answer plans to orchestration/synthesis while preserving simple direct filesystem searches. Definition-plus-call-site synthesis is completed from typed evidence and exact symbol snippets, not by intent-routing keyword interception.
 - Suspended tool-loop approval continuations now store raw replay state in an explicit `ToolLoopCheckpoint` graph artifact. The operator-facing `ChatContinuation` artifact carries only the continuation descriptor and checkpoint reference, keeping pending-action metadata and continuation artifact content free of `llmMessages`, `requestText`, raw tool arguments, and user prompt text while retaining backward-read compatibility for older pending actions.
 - Focused verification passed for this cleanup: `npx vitest run src/runtime/direct-reasoning-mode.test.ts src/runtime/chat-agent/direct-route-runtime.test.ts src/tools/executor.test.ts` reported 246 passing tests; `npx vitest run src/runtime/chat-agent/chat-continuation-graph.test.ts src/runtime/chat-agent/chat-continuation-runtime.test.ts src/runtime/chat-agent/tool-loop-runtime.test.ts src/supervisor/worker-manager.test.ts` reported 58 passing tests; `npm run check`, `node scripts/test-cross-domain-orchestration-stress.mjs`, `node scripts/test-web-approvals.mjs`, `node scripts/test-security-verification.mjs`, `npm run build`, and full `npm test` passed before/after the two slices as appropriate.
-- Remaining risks after this checkpoint: the checkpoint artifact is still an internal replay payload; replacing model-message replay with fully typed tool-observation replay remains future graph-controller work. Rich graph artifact drill-down UI, delegated budget-persistence ownership, and broader connector mutation-plus-approval sweeps remain follow-on quality areas.
+- Follow-on quality areas after this checkpoint: rich graph artifact drill-down UI, fully typed tool-observation replay beyond the scoped `ToolLoopCheckpoint` artifact, and broader connector mutation-plus-approval sweeps. These are outside the completed durable graph ownership scope unless new trace evidence shows a regression in a proven lane.
 
 Exit criteria for this refinement phase:
 
@@ -1179,7 +1178,7 @@ Security checks:
 
 Goal: hybrid "search then write" stops relying on worker prose.
 
-Current status: implemented for the first structured repo search/write slice; broader adversarial write/redaction targets still need manual coverage before Phase 5 expansion.
+Current status: implemented for the structured repo search/write slice and carried forward through the Phase 5+ approval/continuation proof. Broader adversarial write/redaction coverage remains a follow-on quality track, not a blocker for the scoped durable graph uplift.
 
 Files:
 
@@ -1215,7 +1214,7 @@ Expected:
 
 Goal: approvals, clarification, auth, workspace switch, and policy blockers become durable graph interrupts.
 
-Current status: first brokered write approval slice records the graph snapshot, typed artifacts, approval interrupt checkpoint, pending-action resume metadata, and approval resume path for supervisor-owned `WriteSpec` mutations. Brokered delegated worker approvals now persist `WorkerSuspension` graph artifacts and resume only through `execution_graph` pending actions, including fresh-worker recovery after the original worker/manager instance is gone; the old worker-specific resume kind and live suspended-approval cache are gone. WorkerManager direct automation approval prompts no longer keep a parallel in-memory pending-approval list and resolve approvals from the shared `PendingActionStore`. Chat-agent tool-loop approvals no longer keep a parallel in-memory suspended-session cache; the pending-action resume payload is the only chat-level tool-loop resume source. Clarification graph interrupts now project into graph state, run timeline, and shared pending-action metadata using the existing `clarification` blocker contract. Generic graph interruption events can now carry `workspace_switch`, `auth`, `policy`, and `missing_context` blockers into shared pending-action metadata and mark the graph `blocked`; migrating every legacy producer to emit those graph events is still pending.
+Current status: implemented for the proven approval/clarification and delegated-worker suspension/resume lanes. Supervisor-owned `WriteSpec` mutations record graph snapshots, typed artifacts, approval interrupt checkpoints, pending-action resume metadata, and approval resume paths. Brokered delegated worker approvals persist `WorkerSuspension` graph artifacts and resume only through `execution_graph` pending actions, including fresh-worker recovery after the original worker/manager instance is gone. Chat-level continuations use graph-backed `ChatContinuation` and `ToolLoopCheckpoint` artifacts, with pending-action client metadata exposing graph interrupt refs rather than raw replay payloads. Generic graph interruption events can carry `workspace_switch`, `auth`, `policy`, and `missing_context` blockers into shared pending-action metadata and mark the graph `blocked`; future producers should use that contract when they add new blocked-work surfaces.
 
 Files:
 
@@ -1259,7 +1258,7 @@ Status:
 - `node-recovery.ts` validates bounded advisory recovery proposals and emits recovery node events.
 - Delegated worker verification failures now persist advisory recovery graphs, terminal graph lifecycle events, and `RecoveryProposal` artifacts when the original request has an Intent Gateway decision.
 - `node-recovery.ts` now owns recovery-advisor graph lifecycle execution through a graph-owned runner: graph shell creation, graph start/fail/complete events, recovery node execution, `RecoveryProposal` artifact persistence callbacks, and timeline/store event projection are no longer hand-built inline in `WorkerManager`.
-- Refactor target: migrate the remaining legacy recovery prompt/advice producers onto graph-native failed-node recovery and remove old worker-manager retry prompt sections in the same slice that proves their graph-native replacement.
+- Scoped completion: delegated recovery-advisor invocation, answer-only grounded synthesis retry invocation, extended evidence drain, retry profile policy, verification-cycle orchestration, request-scoped delegated job snapshot/drain polling, and retry invocation sequencing now live in graph-owned modules behind broker-safe callbacks. Future recovery quality work should continue in those graph modules unless trace evidence proves a new owner gap.
 
 ### Phase 7: Decommission Interim Hybrid Manager Paths
 
@@ -1282,13 +1281,13 @@ Deliverables:
 
 Status:
 
-- Graph-controlled read/write runs now model mutation verification as a distinct `verify` node; the remaining non-graph single-node mutation helper behavior must be deleted when the graph controller owns the last caller.
+- Graph-controlled read/write runs now model mutation verification as a distinct `verify` node; any remaining direct helper behavior is an intentional trivial/direct bypass or supervisor boundary adapter unless a trace shows it making graph-owned lifecycle decisions.
 - Approval resume reconstruction carries the stored verify node forward so post-approval read-back verification completes the graph-native verifier node.
-- Brokered delegated worker runs with Intent Gateway decisions now create a durable `delegated_worker` graph node, write `VerificationResult` artifacts, and emit completed, blocked, or failed graph lifecycle events. The existing retry and handoff path is technical debt and must be removed as delegated workers become graph node runners.
+- Brokered delegated worker runs with Intent Gateway decisions now create a durable `delegated_worker` graph node, write `VerificationResult` artifacts, and emit completed, blocked, or failed graph lifecycle events. Retry, verification, handoff, recovery, and drain policy for the scoped lanes are graph-owned behind broker-safe supervisor callbacks.
 - Delegated worker start and terminal verification/event construction now live in `delegated-worker-node.ts`, reducing WorkerManager to graph setup, dispatch orchestration, and persistence of returned node projections.
 - Delegated worker responses now include `executionGraph` metadata with the graph id, node id, lifecycle status, and verification artifact id when a durable delegated graph is available.
 - Delegated worker job metadata now carries the same durable execution graph reference so operator job views can correlate delegated work with timeline graph events.
-- Refactor target: remove the interim delegated retry/handoff paths as part of the slice that makes delegated workers graph node runners.
+- Scoped completion: the interim delegated retry/handoff ownership called out by this phase has been moved into execution-graph modules for the proven graph lanes. Broader background delegation and synthesis/search quality should continue as separate refinement work.
 
 Live API checkpoint after the broad capability smoke pass:
 
@@ -1711,27 +1710,30 @@ The durable execution graph uplift is complete when:
 - all graph events are safe for authenticated operator observability
 - security harnesses and brokered-isolation harnesses pass
 
-## Fresh-Chat Continuation Prompt
+Completion assessment as of 2026-04-29: the scoped durable execution graph uplift satisfies this definition for the implemented graph lanes. No further graph ownership cleanup is justified inside this plan without widening scope. Remaining valuable work belongs to follow-on quality tracks: synthesis/search answer quality and latency, broader real-app connector stress, background-delegation run-class adoption, and second-brain title normalization only if it recurs.
 
-Use this to continue verification and any remaining uplift work in a fresh chat:
+## Follow-On Work Prompt
+
+Use this only for separate synthesis/search quality, connector stress, or future graph-adjacent refinement work. Do not reopen durable graph ownership cleanup unless new trace evidence proves duplicate ownership:
 
 ```text
-Continue the GuardianAgent durable execution graph uplift from docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md.
+Continue GuardianAgent quality/refinement work after the durable execution graph uplift from docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md.
 
 First inspect AGENTS.md, SECURITY.md, docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md, docs/architecture/FORWARD-ARCHITECTURE.md, docs/design/ORCHESTRATION-DESIGN.md, docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md, docs/guides/INTEGRATION-TEST-HARNESS.md, and this plan.
 
-Context: Phases 1-4 are implemented. Phase 5+ is partially implemented. The latest architecture-refinement and app-facing slices scoped stale continuity/code-session state out of fresh surfaces, split automation authoring/control planned-step ownership, fixed non-stream `/api/message` request metadata, surface-scoped normal chat history, blocked policy expansion to sensitive Guardian config paths, rejected stale model-supplied `resolvedContent` for ordinary turns, normalized simple direct-assistant workload recovery back to direct answers, accepted compact dated OpenRouter/OpenAI snapshot model ids as aliases in delegated verification, stopped low-confidence `unknown` Intent Gateway decisions from bypassing model-requested tool loops through the no-tool direct shortcut, moved delegated recovery-advisor request/proposal schema handling out of `WorkerManager` into `src/runtime/execution/recovery-advisor.ts`, moved recovery-advisor invocation orchestration into `src/runtime/execution-graph/node-recovery.ts` behind a broker-safe dispatch callback, moved answer-only grounded synthesis retry invocation into `src/runtime/execution-graph/delegated-worker-retry.ts` behind broker-safe dispatch/trace/progress/verification callbacks, moved extended evidence-drain orchestration into `src/runtime/execution-graph/delegated-worker-verification.ts` behind a broker-safe polling callback, moved delegated retry profile-selection policy into `src/runtime/execution-graph/delegated-worker-retry.ts` behind config/metadata inputs, moved terminal delegated verification finalization into `src/runtime/execution-graph/delegated-worker-verification.ts`, moved delegated verification-cycle orchestration into `src/runtime/execution-graph/delegated-worker-verification.ts`, moved request-scoped delegated job snapshot/drain polling into `src/runtime/execution-graph/delegated-worker-verification.ts` behind a broker-safe `listJobs` callback, and moved delegated retry invocation sequencing into `src/runtime/execution-graph/delegated-worker-retry-invocation.ts` behind broker-safe dispatch/drain/verification callbacks. These fixes are route/confidence-state or graph/recovery/verification ownership driven, not keyword/regex routing. Focused orchestration and execution-graph tests, npm run check, npm test, npm run build, Code UI smoke, web approval smoke, and managed-cloud app API sweeps passed before this handoff. OpenRouter is still configured but may be blocked by account credits; use Ollama Cloud for managed-cloud live sweeps unless OpenRouter credits are restored. The remaining work is deletion of overlapping approval/delegated owners as graph-owned replacements land.
+Context: The scoped durable execution graph uplift is complete as of 2026-04-29. Phases 1-5+ are implemented for the proven graph lanes. The latest architecture-refinement and app-facing slices scoped stale continuity/code-session state out of fresh surfaces, split automation authoring/control planned-step ownership, fixed non-stream `/api/message` request metadata, surface-scoped normal chat history, blocked policy expansion to sensitive Guardian config paths, rejected stale model-supplied `resolvedContent` for ordinary turns, normalized simple direct-assistant workload recovery back to direct answers, accepted compact dated OpenRouter/OpenAI snapshot model ids as aliases in delegated verification, stopped low-confidence `unknown` Intent Gateway decisions from bypassing model-requested tool loops through the no-tool direct shortcut, moved delegated recovery-advisor request/proposal schema handling out of `WorkerManager` into `src/runtime/execution/recovery-advisor.ts`, moved recovery-advisor invocation orchestration into `src/runtime/execution-graph/node-recovery.ts` behind a broker-safe dispatch callback, moved answer-only grounded synthesis retry invocation into `src/runtime/execution-graph/delegated-worker-retry.ts` behind broker-safe dispatch/trace/progress/verification callbacks, moved extended evidence-drain orchestration into `src/runtime/execution-graph/delegated-worker-verification.ts` behind a broker-safe polling callback, moved delegated retry profile-selection policy into `src/runtime/execution-graph/delegated-worker-retry.ts` behind config/metadata inputs, moved terminal delegated verification finalization into `src/runtime/execution-graph/delegated-worker-verification.ts`, moved delegated verification-cycle orchestration into `src/runtime/execution-graph/delegated-worker-verification.ts`, moved request-scoped delegated job snapshot/drain polling into `src/runtime/execution-graph/delegated-worker-verification.ts` behind a broker-safe `listJobs` callback, moved delegated retry invocation sequencing into `src/runtime/execution-graph/delegated-worker-retry-invocation.ts` behind broker-safe dispatch/drain/verification callbacks, moved mutation approval-resume reconstruction into `src/runtime/execution-graph/mutation-node.ts`, and moved worker-suspension approval-resume reconstruction into `src/runtime/execution-graph/worker-suspension-resume.ts`. These fixes are route/confidence-state or graph/recovery/verification ownership driven, not keyword/regex routing. Focused orchestration and execution-graph tests, npm run check, npm test, npm run build, Code UI smoke, web approval smoke, security verification, cross-domain orchestration stress, and managed-cloud app API sweeps passed before this handoff. OpenRouter is still configured but may be blocked by account credits; use Ollama Cloud for managed-cloud live sweeps unless OpenRouter credits are restored.
 
-Do not start with broad refactoring. First preserve the proven actual-app API baseline from this plan, then run any changed approval/browser surface against a harmless policy-gated write. Do not use fake model harnesses for the first live pass. Prefer OpenRouter when credits allow; otherwise use Ollama Cloud.
+Do not start with broad refactoring. First preserve the proven actual-app API baseline from this plan, then run any changed approval/browser surface against a harmless policy-gated write. Do not use fake model harnesses for the first live pass. Prefer Ollama Cloud for managed-cloud app/API sweeps unless the specific target is OpenRouter alias/fallback drift.
 
 Suggested loop:
 1. Confirm the worktree and current branch. Do not create or switch branches.
 2. Run npm run build, start the real app with scripts/start-dev-windows.ps1 -StartOnly, then confirm GET http://localhost:3000/api/status and provider/routing state.
-3. Re-run the compact OpenRouter API baseline only if your change touches routing, continuity, approval, providers, or security: exact-answer provider metadata, fresh-surface isolation, same-surface continuity, policy-gated approval continuity, and security refusal.
+3. Re-run the compact managed-cloud API baseline if your change touches routing, continuity, approval, providers, or security: exact-answer provider metadata, fresh-surface isolation, same-surface continuity, policy-gated approval continuity, and security refusal.
 4. If web approval rendering or browser routing changed, run the manual browser/web UI approval pass for the same harmless policy-gated write shape. Verify pending action rendering, approval/deny controls, input locking/unlocking, final continuation display, and no duplicate replay turn.
-5. Move one remaining approval/resume legacy owner onto graph interrupts and delete the replaced owner in the same slice.
-6. Continue delegated graph cleanup by moving any remaining delegated retry/recovery ownership into graph node runners/controllers and deleting overlapping WorkerManager side channels as each path is proven. The pure retry, handoff, verification, recovery-advisor schema, recovery-advisor invocation, answer-only grounded synthesis retry invocation, extended evidence-drain orchestration, delegated retry profile-selection, terminal delegated verification finalization, delegated verification-cycle, request-scoped delegated job snapshot/drain helpers, and delegated retry invocation sequencing have already moved; do not keep extracting helper fragments unless the slice deletes a real overlapping owner or clarifies a graph boundary.
+5. Treat synthesis/search answer quality and latency as the next independent refinement area. Keep fixes in evidence selection, verifier, synthesis, graph retry/recovery, or provider orchestration according to ownership; do not restrict normal simple requests to accommodate complex ones.
+6. Continue connector stress only as a quality track: Vercel, Daytona, Gmail, Microsoft 365, WHM, Google/Microsoft calendar/mail sync, memory, automations, browser reads, and repo search/write. Capture request ids and routing traces for unexpected behavior.
 7. Keep provider alias verification focused in the provider/profile verifier. Compact dated snapshots such as moonshotai/kimi-k2.6-20260420 are already covered; preserve that coverage while moving broader provider fallback ownership into runtime orchestration.
+8. Do not remove `WorkerManager` broker/supervisor callbacks simply because they mention retry, approval, or job listing. They are valid boundary adapters unless trace evidence shows they are making graph-owned terminal decisions.
 
 If testing finds failures, fix the owning architecture layer only:
 - intent/routing: Intent Gateway and shared dispatch
