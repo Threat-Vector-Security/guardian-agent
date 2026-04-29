@@ -42,7 +42,8 @@ export type ExecutionArtifactType =
   | 'VerificationResult'
   | 'RecoveryProposal'
   | 'WorkerSuspension'
-  | 'ChatContinuation';
+  | 'ChatContinuation'
+  | 'ToolLoopCheckpoint';
 
 export interface ExecutionSecurityContext {
   agentId?: string;
