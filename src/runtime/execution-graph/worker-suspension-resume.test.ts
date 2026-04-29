@@ -5,6 +5,7 @@ import {
   buildWorkerSuspensionGraphEvent,
   buildWorkerSuspensionResumeContext,
   emitWorkerSuspensionGraphEvent,
+  recordWorkerSuspensionGraphContinuationPendingAction,
   reconstructWorkerSuspensionGraphResume,
   workerSuspensionResumeContextToTraceContext,
   type WorkerSuspensionGraphResumeContext,
@@ -213,6 +214,100 @@ describe('worker suspension resume graph helpers', () => {
       sequenceStart: 7,
       expiresAt: 4_000,
     });
+  });
+
+  it('records continuation approval pending actions from graph-owned suspension artifacts', () => {
+    const suspension = suspensionContext();
+    const appended: unknown[] = [];
+    const writtenArtifacts: unknown[] = [];
+    const replacements: unknown[] = [];
+    const pending = recordWorkerSuspensionGraphContinuationPendingAction({
+      suspension,
+      worker: {
+        id: 'worker-2',
+        workerSessionKey: 'session-1::default',
+      },
+      approvalMetadata: {
+        approvalIds: ['approval-2'],
+        approvalSummaries: [{
+          id: 'approval-2',
+          toolName: 'fs_write',
+          argsPreview: '{"path":"tmp/next.txt"}',
+        }],
+        prompt: 'Approve the next write.',
+      },
+      workerSuspension: suspension.session,
+      previousPendingAction: {
+        id: 'pending-1',
+        scope: {
+          agentId: 'default',
+          userId: 'owner',
+          channel: 'web',
+          surfaceId: 'surface-1',
+        },
+        intent: {
+          originalUserContent: 'Create the draft.',
+          route: 'coding_task',
+        },
+      } as never,
+      now: () => 10_000,
+      ttlMs: 2_000,
+      graphStore: {
+        getSnapshot: () => ({ events: [{ sequence: 7 }] }),
+        appendEvent: (event) => appended.push(event),
+        writeArtifact: (artifact) => writtenArtifacts.push(artifact),
+      },
+      store: {
+        replaceActive: (scope, replacement, nowMs) => {
+          replacements.push({ scope, replacement, nowMs });
+          return {
+            id: 'pending-2',
+            createdAt: nowMs,
+            updatedAt: nowMs,
+            scope,
+            ...replacement,
+          };
+        },
+      },
+    });
+
+    expect(pending).toMatchObject({
+      id: 'pending-2',
+      scope: {
+        agentId: 'default',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'surface-1',
+      },
+      blocker: {
+        kind: 'approval',
+        approvalIds: ['approval-2'],
+      },
+      resume: {
+        kind: 'execution_graph',
+        payload: {
+          graphId: suspension.graphId,
+          nodeId: suspension.nodeId,
+          artifactIds: [expect.any(String)],
+        },
+      },
+      expiresAt: 12_000,
+    });
+    expect(appended).toHaveLength(1);
+    expect(appended[0]).toMatchObject({
+      kind: 'interruption_requested',
+      payload: {
+        approvalIds: ['approval-2'],
+        resumeToken: `${suspension.graphId}:${suspension.nodeId}:approval:approval-2`,
+      },
+    });
+    expect(writtenArtifacts).toHaveLength(1);
+    expect(writtenArtifacts[0]).toMatchObject({
+      artifactType: 'WorkerSuspension',
+      graphId: suspension.graphId,
+      nodeId: suspension.nodeId,
+    });
+    expect(replacements).toHaveLength(1);
   });
 
   it('projects worker suspension resume context into trace context', () => {

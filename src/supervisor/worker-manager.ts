@@ -100,6 +100,7 @@ import {
 import {
   buildWorkerSuspensionResumeContext,
   emitWorkerSuspensionGraphEvent,
+  recordWorkerSuspensionGraphContinuationPendingAction,
   reconstructWorkerSuspensionGraphResume,
   workerSuspensionResumeContextToTraceContext,
   type WorkerApprovalContinuationTraceContext,
@@ -808,11 +809,17 @@ export class WorkerManager {
       options.approvalId,
       continuationResult.metadata,
     );
-    const pendingRecord = this.recordWorkerSuspensionGraphContinuationPendingAction({
+    const pendingRecord = recordWorkerSuspensionGraphContinuationPendingAction({
+      store: this.observability.pendingActionStore,
+      graphStore: this.observability.executionGraphStore,
+      runTimeline: this.observability.runTimeline,
       suspension,
       worker,
-      result: continuationResult,
+      approvalMetadata: readDelegatedPendingApprovalMetadata(continuationResult.metadata),
+      workerSuspension: readWorkerSuspensionMetadata(continuationResult.metadata),
       previousPendingAction: pendingAction,
+      now: this.observability.now,
+      ttlMs: PENDING_APPROVAL_TTL_MS,
     });
     if (pendingRecord) {
       return {
@@ -862,66 +869,6 @@ export class WorkerManager {
         },
       },
     };
-  }
-
-  private recordWorkerSuspensionGraphContinuationPendingAction(input: {
-    suspension: WorkerSuspensionGraphResumeContext;
-    worker: WorkerProcess;
-    result: { content: string; metadata?: Record<string, unknown> };
-    previousPendingAction: PendingActionRecord;
-  }): PendingActionRecord | null {
-    const store = this.observability.pendingActionStore;
-    const graphStore = this.observability.executionGraphStore;
-    const approvalMetadata = readDelegatedPendingApprovalMetadata(input.result.metadata);
-    const workerSuspension = readWorkerSuspensionMetadata(input.result.metadata);
-    if (!store || !graphStore || !approvalMetadata || !workerSuspension) {
-      return null;
-    }
-    const nowMs = this.observability.now?.() ?? Date.now();
-    const event = emitWorkerSuspensionGraphEvent({
-      suspension: input.suspension,
-      kind: 'interruption_requested',
-      payloadDetails: {
-        kind: 'approval',
-        prompt: approvalMetadata.prompt,
-        approvalIds: approvalMetadata.approvalIds,
-        approvalSummaries: approvalMetadata.approvalSummaries.map((summary) => ({ ...summary })),
-        resumeToken: `${input.suspension.graphId}:${input.suspension.nodeId}:approval:${approvalMetadata.approvalIds.join(',')}`,
-      },
-      eventKey: 'approval-continuation',
-      graphStore,
-      runTimeline: this.observability.runTimeline,
-      now: this.observability.now,
-    });
-    const resume = {
-      ...input.suspension.resume,
-      workerId: input.worker.id,
-      workerSessionKey: input.worker.workerSessionKey,
-      approvalIds: approvalMetadata.approvalIds,
-      pendingActionId: input.previousPendingAction.id,
-      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
-    };
-    const artifact = buildWorkerSuspensionArtifact({
-      graphId: input.suspension.graphId,
-      nodeId: input.suspension.nodeId,
-      envelope: buildWorkerSuspensionEnvelope({
-        resume,
-        session: workerSuspension,
-      }),
-      createdAt: nowMs,
-    });
-    graphStore.writeArtifact(artifact);
-    return recordGraphPendingActionInterrupt({
-      store,
-      scope: input.previousPendingAction.scope,
-      event,
-      originalUserContent: input.previousPendingAction.intent.originalUserContent,
-      intent: input.previousPendingAction.intent,
-      artifactRefs: [artifactRefFromArtifact(artifact)],
-      approvalSummaries: approvalMetadata.approvalSummaries,
-      nowMs,
-      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
-    });
   }
 
   private async resumeChatContinuationGraphPendingAction(

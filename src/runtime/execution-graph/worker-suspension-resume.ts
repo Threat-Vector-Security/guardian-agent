@@ -5,11 +5,19 @@ import type { SelectedExecutionProfile } from '../execution-profiles.js';
 import type { OrchestrationRoleDescriptor } from '../orchestration-role-descriptors.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 import type {
+  PendingActionApprovalSummary,
+  PendingActionStore,
+} from '../pending-actions.js';
+import type {
   SerializedWorkerSuspensionSession,
   WorkerSuspensionResumeContext,
 } from '../worker-suspension.js';
+import { buildWorkerSuspensionEnvelope } from '../worker-suspension.js';
 import type { ExecutionGraphResumePayload } from './pending-action-adapter.js';
+import { recordGraphPendingActionInterrupt } from './pending-action-adapter.js';
 import { readWorkerSuspensionArtifact } from './worker-suspension-artifact.js';
+import { buildWorkerSuspensionArtifact } from './worker-suspension-artifact.js';
+import { artifactRefFromArtifact } from './graph-artifacts.js';
 import {
   createExecutionGraphEvent,
   type ExecutionGraphEvent,
@@ -106,6 +114,21 @@ export interface WorkerSuspensionGraphResumeStore {
   getArtifact(graphId: string, artifactId: string): ExecutionArtifact | null | undefined;
 }
 
+export interface WorkerSuspensionContinuationGraphStore extends WorkerSuspensionGraphEventStore {
+  writeArtifact(artifact: ExecutionArtifact): unknown;
+}
+
+export interface WorkerSuspensionContinuationWorkerInput {
+  id: string;
+  workerSessionKey: string;
+}
+
+export interface WorkerSuspensionContinuationApprovalMetadata {
+  approvalIds: string[];
+  approvalSummaries: PendingActionApprovalSummary[];
+  prompt: string;
+}
+
 export function buildWorkerSuspensionResumeContext(input: {
   worker: WorkerSuspensionResumeWorkerInput;
   request: WorkerSuspensionResumeRequestInput;
@@ -155,6 +178,69 @@ export function buildWorkerSuspensionResumeContext(input: {
     approvalIds: [...new Set(input.approvalIds.map((id) => id.trim()).filter(Boolean))],
     expiresAt: input.expiresAt,
   };
+}
+
+export function recordWorkerSuspensionGraphContinuationPendingAction(input: {
+  store?: Pick<PendingActionStore, 'replaceActive'> | null;
+  graphStore?: WorkerSuspensionContinuationGraphStore | null;
+  runTimeline?: WorkerSuspensionGraphTimeline;
+  suspension: WorkerSuspensionGraphResumeContext;
+  worker: WorkerSuspensionContinuationWorkerInput;
+  approvalMetadata: WorkerSuspensionContinuationApprovalMetadata | null;
+  workerSuspension: SerializedWorkerSuspensionSession | null;
+  previousPendingAction: PendingActionRecord;
+  now?: () => number;
+  ttlMs?: number;
+}): PendingActionRecord | null {
+  if (!input.store || !input.graphStore || !input.approvalMetadata || !input.workerSuspension) {
+    return null;
+  }
+  const nowMs = input.now?.() ?? Date.now();
+  const expiresAt = nowMs + (input.ttlMs ?? 30 * 60_000);
+  const event = emitWorkerSuspensionGraphEvent({
+    suspension: input.suspension,
+    kind: 'interruption_requested',
+    payloadDetails: {
+      kind: 'approval',
+      prompt: input.approvalMetadata.prompt,
+      approvalIds: input.approvalMetadata.approvalIds,
+      approvalSummaries: input.approvalMetadata.approvalSummaries.map((summary) => ({ ...summary })),
+      resumeToken: `${input.suspension.graphId}:${input.suspension.nodeId}:approval:${input.approvalMetadata.approvalIds.join(',')}`,
+    },
+    eventKey: 'approval-continuation',
+    graphStore: input.graphStore,
+    runTimeline: input.runTimeline,
+    now: input.now,
+  });
+  const resume = {
+    ...input.suspension.resume,
+    workerId: input.worker.id,
+    workerSessionKey: input.worker.workerSessionKey,
+    approvalIds: input.approvalMetadata.approvalIds,
+    pendingActionId: input.previousPendingAction.id,
+    expiresAt,
+  };
+  const artifact = buildWorkerSuspensionArtifact({
+    graphId: input.suspension.graphId,
+    nodeId: input.suspension.nodeId,
+    envelope: buildWorkerSuspensionEnvelope({
+      resume,
+      session: input.workerSuspension,
+    }),
+    createdAt: nowMs,
+  });
+  input.graphStore.writeArtifact(artifact);
+  return recordGraphPendingActionInterrupt({
+    store: input.store,
+    scope: input.previousPendingAction.scope,
+    event,
+    originalUserContent: input.previousPendingAction.intent.originalUserContent,
+    intent: input.previousPendingAction.intent,
+    artifactRefs: [artifactRefFromArtifact(artifact)],
+    approvalSummaries: input.approvalMetadata.approvalSummaries,
+    nowMs,
+    expiresAt,
+  });
 }
 
 export function reconstructWorkerSuspensionGraphResume(input: {
