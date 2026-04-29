@@ -4556,6 +4556,7 @@ function renderSessionRunTimeline(session) {
           </summary>
           ${run.summary.subtitle ? `<div class="code-status-card__detail">${esc(run.summary.subtitle)}</div>` : ''}
           ${itemHighlightedRun ? '<div class="code-status-card__detail">Showing the requested event with nearby run context.</div>' : ''}
+          ${renderTimelineRunWorkflowRail(run)}
           <div class="code-status-list" style="margin-top:0.75rem">
             ${visibleItems.map((item) => `
               <article
@@ -4578,6 +4579,44 @@ function renderSessionRunTimeline(session) {
       }).join('')}
     </div>
   `;
+}
+
+function renderTimelineRunWorkflowRail(run) {
+  const workflow = inferTimelineRunWorkflow(run);
+  return workflow ? renderCodeWorkflowStageRail(workflow) : '';
+}
+
+function inferTimelineRunWorkflow(run) {
+  const items = Array.isArray(run?.items) ? run.items : [];
+  const workflowItem = [...items].reverse().find((item) => {
+    if (!item?.id || typeof item.id !== 'string') return false;
+    const segments = item.id.split(':');
+    return segments.length >= 3 && segments[0] === 'workflow' && CODE_WORKFLOW_STAGES.has(segments[segments.length - 1]);
+  });
+  if (!workflowItem) return null;
+  const segments = workflowItem.id.split(':');
+  const currentStage = segments[segments.length - 1];
+  return {
+    currentStage,
+    status: mapTimelineWorkflowStatus(workflowItem.status, run?.summary?.status),
+    verificationState: currentStage === 'verify' ? mapTimelineWorkflowVerificationState(workflowItem.status) : 'not_required',
+  };
+}
+
+function mapTimelineWorkflowStatus(itemStatus, runStatus) {
+  if (itemStatus === 'blocked' || runStatus === 'blocked' || runStatus === 'awaiting_approval') return 'blocked';
+  if (itemStatus === 'failed' || runStatus === 'failed') return 'blocked';
+  if (itemStatus === 'succeeded' || runStatus === 'completed') return 'completed';
+  if (itemStatus === 'running' || runStatus === 'running') return 'in_progress';
+  return 'ready';
+}
+
+function mapTimelineWorkflowVerificationState(itemStatus) {
+  if (itemStatus === 'failed') return 'failed';
+  if (itemStatus === 'succeeded') return 'passed';
+  if (itemStatus === 'running') return 'running';
+  if (itemStatus === 'blocked') return 'pending';
+  return 'not_required';
 }
 
 function mapTimelineRunTone(status) {
