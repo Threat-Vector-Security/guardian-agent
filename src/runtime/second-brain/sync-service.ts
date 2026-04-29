@@ -230,6 +230,7 @@ export class SyncService {
       let connectorCalls = 0;
       let eventsSynced = 0;
       let peopleSynced = 0;
+      let contactSyncError: string | undefined;
 
       if (service.isServiceEnabled('calendar')) {
         connectorCalls += 1;
@@ -290,39 +291,40 @@ export class SyncService {
           },
         });
         if (!contactsResult.success) {
-          throw new Error(contactsResult.error || 'Google contacts sync failed');
-        }
-
-        const connections = asArray<Record<string, unknown>>((contactsResult.data as { connections?: unknown })?.connections);
-        for (const person of connections) {
-          const names = asArray<Record<string, unknown>>(person.names);
-          const emails = asArray<Record<string, unknown>>(person.emailAddresses);
-          const phoneNumbers = asArray<Record<string, unknown>>(person.phoneNumbers);
-          const organizations = asArray<Record<string, unknown>>(person.organizations);
-          const biographies = asArray<Record<string, unknown>>(person.biographies);
-          const locations = asArray<Record<string, unknown>>(person.locations);
-          const email = textOrUndefined(emails[0]?.value);
-          const name = textOrUndefined(names[0]?.displayName) ?? email;
-          if (!name) continue;
-          this.secondBrainService.upsertPerson({
-            id: `google:person:${String(person.resourceName ?? person.etag ?? peopleSynced)}`,
-            name,
-            email,
-            phone: textOrUndefined(phoneNumbers[0]?.value),
-            title: textOrUndefined(organizations[0]?.title),
-            company: textOrUndefined(organizations[0]?.name),
-            location: textOrUndefined(locations[0]?.value),
-            notes: textOrUndefined(biographies[0]?.value),
-            relationship: 'work',
+          contactSyncError = contactsResult.error || 'Google contacts sync failed';
+          log.warn({ err: contactSyncError }, 'Google contacts Second Brain sync skipped');
+        } else {
+          const connections = asArray<Record<string, unknown>>((contactsResult.data as { connections?: unknown })?.connections);
+          for (const person of connections) {
+            const names = asArray<Record<string, unknown>>(person.names);
+            const emails = asArray<Record<string, unknown>>(person.emailAddresses);
+            const phoneNumbers = asArray<Record<string, unknown>>(person.phoneNumbers);
+            const organizations = asArray<Record<string, unknown>>(person.organizations);
+            const biographies = asArray<Record<string, unknown>>(person.biographies);
+            const locations = asArray<Record<string, unknown>>(person.locations);
+            const email = textOrUndefined(emails[0]?.value);
+            const name = textOrUndefined(names[0]?.displayName) ?? email;
+            if (!name) continue;
+            this.secondBrainService.upsertPerson({
+              id: `google:person:${String(person.resourceName ?? person.etag ?? peopleSynced)}`,
+              name,
+              email,
+              phone: textOrUndefined(phoneNumbers[0]?.value),
+              title: textOrUndefined(organizations[0]?.title),
+              company: textOrUndefined(organizations[0]?.name),
+              location: textOrUndefined(locations[0]?.value),
+              notes: textOrUndefined(biographies[0]?.value),
+              relationship: 'work',
+            });
+            peopleSynced += 1;
+          }
+          this.updateCursor({
+            id: 'google:contacts',
+            provider: 'google',
+            entity: 'contacts',
+            cursor: null,
           });
-          peopleSynced += 1;
         }
-        this.updateCursor({
-          id: 'google:contacts',
-          provider: 'google',
-          entity: 'contacts',
-          cursor: null,
-        });
       }
 
       this.secondBrainService.recordUsage({
@@ -334,13 +336,15 @@ export class SyncService {
         connectorCalls,
       });
 
-      return {
+      const result: ProviderSyncResult = {
         provider: 'google',
         skipped: false,
         eventsSynced,
         peopleSynced,
         connectorCalls,
       };
+      if (contactSyncError) result.error = contactSyncError;
+      return result;
     } catch (error) {
       log.warn({ err: error instanceof Error ? error.message : String(error) }, 'Google Workspace Second Brain sync failed');
       return {

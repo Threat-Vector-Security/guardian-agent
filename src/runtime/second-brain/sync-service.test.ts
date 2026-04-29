@@ -157,4 +157,47 @@ describe('SyncService', () => {
     expect(new Date(event!.startsAt).toISOString()).toBe('2026-04-07T01:00:00.000Z');
     expect(new Date(event!.endsAt ?? 0).toISOString()).toBe('2026-04-07T01:30:00.000Z');
   });
+
+  it('keeps Google calendar sync when contacts are unavailable', async () => {
+    const { service, now } = createFixture();
+    const googleService = {
+      isAuthenticated: () => true,
+      isServiceEnabled: (svc: string) => svc === 'calendar' || svc === 'contacts',
+      async execute(params: { service: string }) {
+        if (params.service === 'calendar') {
+          return {
+            success: true,
+            data: {
+              items: [{
+                id: 'google-evt-partial-1',
+                summary: 'Google Partial Sync',
+                start: { dateTime: '2026-04-04T14:00:00Z' },
+              }],
+            },
+          };
+        }
+        return {
+          success: false,
+          error: 'People API has not been used in project before or it is disabled.',
+        };
+      },
+    };
+
+    const syncService = new SyncService(service, {
+      now,
+      getGoogleService: () => googleService as any,
+    });
+
+    const summary = await syncService.syncGoogleWorkspace();
+
+    expect(summary.skipped).toBe(false);
+    expect(summary.eventsSynced).toBe(1);
+    expect(summary.peopleSynced).toBe(0);
+    expect(summary.connectorCalls).toBe(2);
+    expect(summary.error).toContain('People API');
+    expect(service.listEvents({ includePast: true, fromTime: 0, limit: 10 }).map((event) => event.title))
+      .toContain('Google Partial Sync');
+    expect(service.getSyncCursorById('google:calendar')?.lastSyncAt).toBe(now());
+    expect(service.getSyncCursorById('google:contacts')).toBeNull();
+  });
 });

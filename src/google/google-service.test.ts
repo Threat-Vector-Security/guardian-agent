@@ -180,6 +180,40 @@ describe('GoogleService', () => {
     }
   });
 
+  it('builds Google People connections URL without reusing resourceName', async () => {
+    let capturedUrl = '';
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      capturedUrl = url;
+      return Promise.resolve({
+        ok: true,
+        text: async () => '{"connections":[]}',
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const svc = new GoogleService(mockAuth());
+      await svc.execute({
+        service: 'contacts',
+        resource: 'people connections',
+        method: 'list',
+        params: {
+          resourceName: 'people/me',
+          pageSize: 50,
+          personFields: 'names,emailAddresses',
+        },
+      });
+
+      const url = new URL(capturedUrl);
+      expect(url.pathname).toBe('/v1/people/people%2Fme/connections');
+      expect(url.searchParams.get('resourceName')).toBeNull();
+      expect(url.searchParams.get('pageSize')).toBe('50');
+      expect(url.searchParams.get('personFields')).toBe('names,emailAddresses');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('builds correct Gmail get URL with userId and messageId', async () => {
     let capturedUrl = '';
     const originalFetch = globalThis.fetch;
