@@ -56,10 +56,8 @@ import {
 import type { ExecutionGraphStore } from '../runtime/execution-graph/graph-store.js';
 import {
   artifactRefFromArtifact,
-  readExecutionGraphArtifactsFromMetadata,
 } from '../runtime/execution-graph/graph-artifacts.js';
 import {
-  buildDirectReasoningGraphContext,
   type DirectReasoningGraphContext,
 } from '../runtime/execution-graph/direct-reasoning-node.js';
 import {
@@ -108,18 +106,10 @@ import {
   type WorkerSuspensionGraphResumeContext,
 } from '../runtime/execution-graph/worker-suspension-resume.js';
 import {
-  buildGraphWriteSpecSynthesisMessages,
-  buildGroundedSynthesisLedgerArtifact,
-  completeGraphWriteSpecSynthesisNode,
-} from '../runtime/execution-graph/synthesis-node.js';
-import {
   buildApprovedMutationToolResult,
-  buildMutationToolRequest,
   emitMutationResumeGraphEvent,
-  executeWriteSpecMutationNode,
   reconstructGraphMutationResume,
   resumeWriteSpecMutationNodeAfterApproval,
-  type MutationNodeExecutionContext,
 } from '../runtime/execution-graph/mutation-node.js';
 import {
   readExecutionGraphResumePayload,
@@ -127,11 +117,7 @@ import {
 } from '../runtime/execution-graph/pending-action-adapter.js';
 import {
   buildGraphControlledTaskRunId,
-  buildGraphControlledFailureResponse,
-  buildGraphReadOnlyIntentGatewayRecord,
-  createGraphControlledRun,
-  selectGraphControllerExecutionProfile,
-  shouldUseGraphControlledExecution,
+  runGraphControlledExecution as runGraphControlledExecutionController,
 } from '../runtime/execution-graph/graph-controller.js';
 import {
   runRecoveryAdvisorInvocation,
@@ -145,14 +131,12 @@ import {
 import { buildDelegatedTaskContract } from '../runtime/execution/verifier.js';
 import type { RecoveryAdvisorRequest } from '../runtime/execution/recovery-advisor.js';
 import {
-  shouldHandleDirectReasoningMode,
   type DirectReasoningTraceContext,
 } from '../runtime/direct-reasoning-mode.js';
 import {
   toPendingActionClientMetadata,
   type PendingActionApprovalSummary,
   type PendingActionRecord,
-  type PendingActionScope,
   type PendingActionStore,
 } from '../runtime/pending-actions.js';
 import {
@@ -481,373 +465,33 @@ export class WorkerManager {
     requestId: string;
     taskRunId: string;
   }): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!shouldUseGraphControlledExecution({
-      taskContract: input.taskContract,
-      decision: input.effectiveIntentDecision,
-      executionProfile: input.request.executionProfile,
-    })) {
-      return null;
-    }
-
-    const gatewayRecord = buildGraphReadOnlyIntentGatewayRecord({
-      baseRecord: input.preRoutedGateway,
-      baseDecision: input.effectiveIntentDecision,
-      taskContract: input.taskContract,
-      originalRequest: input.request.message.content,
-    });
-    if (!gatewayRecord) {
-      return buildGraphControlledFailureResponse({
-        executionProfile: input.request.executionProfile,
-        reason: 'Graph-controlled execution could not derive a read-only routing decision.',
-      });
-    }
-    const graphExecutionProfile = selectGraphControllerExecutionProfile({
+    return runGraphControlledExecutionController({
       runtime: this.runtime,
+      request: input.request,
       target: input.target,
-      decision: input.effectiveIntentDecision,
-      currentProfile: input.request.executionProfile,
-    });
-    if (!shouldHandleDirectReasoningMode({
-      gateway: gatewayRecord,
-      selectedExecutionProfile: graphExecutionProfile,
-    })) {
-      return null;
-    }
-
-    const now = this.observability.now ?? Date.now;
-    const codeContext = input.request.message.metadata?.codeContext as ToolExecutionRequest['codeContext'] | undefined;
-    const run = createGraphControlledRun({
+      taskContract: input.taskContract,
+      preRoutedGateway: input.preRoutedGateway,
+      effectiveIntentDecision: input.effectiveIntentDecision,
+      requestId: input.requestId,
+      taskRunId: input.taskRunId,
       graphStore: this.observability.executionGraphStore,
       runTimeline: this.observability.runTimeline,
-      now,
-      taskRunId: input.taskRunId,
-      requestId: input.requestId,
-      gatewayDecision: gatewayRecord.decision,
-      agentId: input.target.agentId,
-      userId: input.request.userId,
-      channel: input.request.message.channel,
-      ...(input.request.message.surfaceId ? { surfaceId: input.request.message.surfaceId } : {}),
-      triggerSourceId: input.request.message.id,
-      ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
-      ...(input.request.delegation?.executionId ? { parentExecutionId: input.request.delegation.executionId } : {}),
-      ...(input.request.delegation?.codeSessionId ?? codeContext?.sessionId
-        ? { codeSessionId: input.request.delegation?.codeSessionId ?? codeContext?.sessionId }
-        : {}),
-    });
-    const { graphId, rootExecutionId, parentExecutionId, codeSessionId } = run;
-    const { readNodeId, synthesisNodeId, mutationNodeId, verificationNodeId } = run.nodeIds;
-    const emitGraphEvent = run.emitGraphEvent;
-    const emitArtifact = run.emitArtifact;
-    const failGraph = (reason: string, nodeId?: string, nodeKind?: ExecutionGraphEvent['nodeKind']) => {
-      if (nodeId && nodeKind) {
-        emitGraphEvent('node_failed', { reason }, `${nodeId}:failed`, { nodeId, nodeKind });
-      }
-      emitGraphEvent('graph_failed', { reason }, 'graph:failed');
-      return buildGraphControlledFailureResponse({
-        executionProfile: input.request.executionProfile,
-        reason,
-        graphId,
-      });
-    };
-
-    emitGraphEvent('graph_started', {
-      route: input.effectiveIntentDecision?.route,
-      operation: input.effectiveIntentDecision?.operation,
-      executionClass: input.effectiveIntentDecision?.executionClass,
-      controller: 'execution_graph',
-    }, 'graph:started');
-
-    try {
-      const worker = await this.getOrSpawnWorker(
-        input.request.sessionId,
-        input.request.agentId,
-        input.request.userId,
-        input.request.message.channel,
-        input.request.grantedCapabilities,
-      );
-      const hasFallbackProvider = !!this.runtime.getFallbackProviderConfig?.(input.request.agentId);
-      const additionalSections = appendPromptAdditionalSection(
-        input.request.additionalSections ?? [],
-        this.buildCodeSessionRegistrySection(input.request),
-      );
-      const readGraphContext: DirectReasoningGraphContext = buildDirectReasoningGraphContext({
-        graphId,
-        nodeId: readNodeId,
-        requestId: input.requestId,
-        executionId: input.taskRunId,
-        rootExecutionId,
-        parentExecutionId,
-        taskExecutionId: input.taskRunId,
-        channel: input.request.message.channel,
-        agentId: input.target.agentId,
-        userId: input.request.userId,
-        codeSessionId,
-        decision: gatewayRecord.decision,
-      });
-      const readMessage: UserMessage = {
-        ...input.request.message,
-        content: gatewayRecord.decision.resolvedContent ?? input.request.message.content,
-        metadata: attachPreRoutedIntentGatewayMetadata(input.request.message.metadata, gatewayRecord),
-      };
-      const directResult = await this.dispatchToWorker(worker, {
-        message: readMessage,
-        systemPrompt: input.request.systemPrompt,
-        history: input.request.history,
-        knowledgeBases: input.request.knowledgeBases ?? [],
-        activeSkills: input.request.activeSkills ?? [],
-        additionalSections,
-        toolContext: input.request.toolContext ?? '',
-        runtimeNotices: input.request.runtimeNotices ?? [],
-        executionProfile: graphExecutionProfile,
-        continuity: input.request.continuity,
-        pendingAction: input.request.pendingAction,
-        pendingApprovalNotice: input.request.pendingApprovalNotice,
-        hasFallbackProvider,
-        directReasoning: true,
-        directReasoningTrace: {
-          requestId: input.requestId,
-          messageId: input.request.message.id,
-          userId: input.request.userId,
-          channel: input.request.message.channel,
-          agentId: input.target.agentId,
-          contentPreview: input.request.message.content,
-          ...(parentExecutionId ? { executionId: parentExecutionId } : {}),
-          rootExecutionId,
-          taskExecutionId: input.taskRunId,
-          ...(codeSessionId ? { codeSessionId } : {}),
-        },
-        directReasoningGraphContext: readGraphContext,
-        directReasoningGraphLifecycle: 'node_only',
-        returnExecutionGraphArtifacts: true,
-      });
-      const sourceArtifacts = readExecutionGraphArtifactsFromMetadata(directResult.metadata);
-      for (const artifact of sourceArtifacts) {
-        this.observability.executionGraphStore?.writeArtifact(artifact);
-      }
-      if (directResult.metadata?.directReasoningFailed === true || sourceArtifacts.length === 0) {
-        return failGraph('Read-only graph node did not produce typed evidence artifacts.', readNodeId, 'explore_readonly');
-      }
-
-      emitGraphEvent('node_started', {
-        evidenceArtifactCount: sourceArtifacts.length,
-        purpose: 'write_spec_candidate',
-      }, `${synthesisNodeId}:started`, { nodeId: synthesisNodeId, nodeKind: 'synthesize' });
-      const ledgerArtifact = buildGroundedSynthesisLedgerArtifact({
-        graphId,
-        nodeId: synthesisNodeId,
-        artifactId: `${graphId}:${synthesisNodeId}:evidence-ledger`,
-        sourceArtifacts,
-        createdAt: now(),
-      });
-      if (ledgerArtifact) {
-        emitArtifact(ledgerArtifact, synthesisNodeId, 'synthesize');
-      }
-      const synthesisMessages = buildGraphWriteSpecSynthesisMessages({
-        request: input.request.message.content,
-        decision: input.effectiveIntentDecision ?? gatewayRecord.decision,
-        workspaceRoot: codeContext?.workspaceRoot,
-        sourceArtifacts,
-        ledgerArtifact,
-      });
-      emitGraphEvent('llm_call_started', {
-        phase: 'write_spec_synthesis',
-        evidenceArtifactCount: sourceArtifacts.length,
-      }, `${synthesisNodeId}:llm:started`, { nodeId: synthesisNodeId, nodeKind: 'synthesize' });
-      const synthesisResult = await this.dispatchToWorker(worker, {
-        message: input.request.message,
-        systemPrompt: input.request.systemPrompt,
-        history: input.request.history,
-        knowledgeBases: input.request.knowledgeBases ?? [],
-        activeSkills: input.request.activeSkills ?? [],
-        additionalSections,
-        toolContext: input.request.toolContext ?? '',
-        runtimeNotices: input.request.runtimeNotices ?? [],
-        executionProfile: graphExecutionProfile,
-        continuity: input.request.continuity,
-        pendingAction: input.request.pendingAction,
-        pendingApprovalNotice: input.request.pendingApprovalNotice,
-        hasFallbackProvider,
-        groundedSynthesis: {
-          messages: synthesisMessages,
-          responseFormat: {
-            type: 'json_schema',
-            name: 'graph_write_spec_candidate',
-            schema: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                path: { type: 'string' },
-                content: { type: 'string' },
-                append: { type: 'boolean' },
-                summary: { type: 'string' },
-              },
-              required: ['path', 'content', 'append'],
-            },
-          },
-          maxTokens: 4_000,
-          temperature: 0,
-        },
-      });
-      emitGraphEvent('llm_call_completed', {
-        phase: 'write_spec_synthesis',
-        resultStatus: synthesisResult.content.trim() ? 'succeeded' : 'failed',
-      }, `${synthesisNodeId}:llm:completed`, { nodeId: synthesisNodeId, nodeKind: 'synthesize' });
-      const synthesis = completeGraphWriteSpecSynthesisNode({
-        graphId,
-        nodeId: synthesisNodeId,
-        candidateContent: synthesisResult.content,
-        sourceArtifacts,
-        ledgerArtifact,
-        createdAt: now(),
-      });
-      if (!synthesis) {
-        return failGraph('Synthesis node did not produce a valid write specification.', synthesisNodeId, 'synthesize');
-      }
-      const { draft, writeSpec } = synthesis;
-      emitArtifact(draft.artifact, synthesisNodeId, 'synthesize');
-      emitArtifact(writeSpec, synthesisNodeId, 'synthesize');
-      emitGraphEvent('node_completed', {
-        draftArtifactId: draft.artifact.artifactId,
-        writeSpecArtifactId: writeSpec.artifactId,
-      }, `${synthesisNodeId}:completed`, { nodeId: synthesisNodeId, nodeKind: 'synthesize' });
-
-      const toolRequest = buildMutationToolRequest({
-        requestId: input.requestId,
-        agentId: input.request.agentId,
-        userId: input.request.userId,
-        surfaceId: input.request.message.surfaceId,
-        principalId: input.request.message.principalId ?? input.request.userId,
-        principalRole: input.request.message.principalRole ?? 'owner',
-        channel: input.request.message.channel,
-        codeContext,
-        toolContextMode: graphExecutionProfile?.toolContextMode,
-        activeSkillIds: input.request.activeSkills?.map((skill) => skill.id) ?? [],
-      });
-      const mutationContext: MutationNodeExecutionContext = {
-        graphId,
-        executionId: input.taskRunId,
-        rootExecutionId,
-        ...(parentExecutionId ? { parentExecutionId } : {}),
-        requestId: input.requestId,
-        runId: input.requestId,
-        nodeId: mutationNodeId,
-        channel: input.request.message.channel,
-        agentId: input.target.agentId,
-        userId: input.request.userId,
-        ...(codeSessionId ? { codeSessionId } : {}),
-        verificationNodeId,
-        sequenceStart: run.currentSequence(),
-        now,
-        emit: (event) => {
-          run.ingestGraphEvent(event);
-        },
-      };
-      const mutationResult = await executeWriteSpecMutationNode({
-        writeSpec,
+      pendingActionStore: this.observability.pendingActionStore,
+      now: this.observability.now ?? Date.now,
+      supervisor: {
+        getWorker: ({ sessionId, agentId, userId, channel, grantedCapabilities }) => this.getOrSpawnWorker(
+          sessionId,
+          agentId,
+          userId,
+          channel,
+          grantedCapabilities,
+        ),
+        hasFallbackProvider: (agentId) => !!this.runtime.getFallbackProviderConfig?.(agentId),
+        buildCodeSessionRegistrySection: () => this.buildCodeSessionRegistrySection(input.request),
+        dispatchToWorker: (worker, params) => this.dispatchToWorker(worker, params),
         executeTool: (toolName, args, request) => this.tools.executeModelTool(toolName, args, request),
-        toolRequest,
-        context: mutationContext,
-      });
-      run.updateSequenceFromEvents(mutationResult.events);
-      const artifactIds = [
-        ...sourceArtifacts.map((artifact) => artifact.artifactId),
-        ...(ledgerArtifact ? [ledgerArtifact.artifactId] : []),
-        draft.artifact.artifactId,
-        writeSpec.artifactId,
-        ...(mutationResult.receiptArtifact ? [mutationResult.receiptArtifact.artifactId] : []),
-        ...(mutationResult.verificationArtifact ? [mutationResult.verificationArtifact.artifactId] : []),
-      ];
-      if (mutationResult.receiptArtifact) {
-        this.observability.executionGraphStore?.writeArtifact(mutationResult.receiptArtifact);
-      }
-      if (mutationResult.verificationArtifact) {
-        this.observability.executionGraphStore?.writeArtifact(mutationResult.verificationArtifact);
-      }
-
-      if (mutationResult.status === 'awaiting_approval' && mutationResult.receiptArtifact) {
-        const approvalEvent = mutationResult.events.find((event) => event.kind === 'approval_requested');
-        const approvalId = mutationResult.receiptArtifact.content.approvalId;
-        if (!approvalEvent || !approvalId) {
-          return failGraph('Mutation node requested approval without a resumable approval id.', mutationNodeId, 'mutate');
-        }
-        const approvalSummary = {
-          id: approvalId,
-          toolName: 'fs_write',
-          argsPreview: JSON.stringify({
-            path: writeSpec.content.path,
-            append: writeSpec.content.append,
-          }),
-          actionLabel: 'approve file write',
-          requestId: input.requestId,
-          ...(codeSessionId ? { codeSessionId } : {}),
-        };
-        const pendingScope: PendingActionScope = {
-          agentId: input.request.agentId,
-          userId: input.request.userId,
-          channel: input.request.message.channel,
-          surfaceId: input.request.message.surfaceId?.trim() || input.request.message.channel,
-        };
-        const pendingRecord = this.observability.pendingActionStore
-          ? recordGraphPendingActionInterrupt({
-              store: this.observability.pendingActionStore,
-              scope: pendingScope,
-              event: approvalEvent,
-              originalUserContent: input.request.message.content,
-              intent: {
-                route: input.effectiveIntentDecision?.route,
-                operation: input.effectiveIntentDecision?.operation,
-                summary: input.effectiveIntentDecision?.summary,
-                resolvedContent: input.effectiveIntentDecision?.resolvedContent,
-              },
-              artifactRefs: [writeSpec, mutationResult.receiptArtifact].map(artifactRefFromArtifact),
-              approvalSummaries: [approvalSummary],
-              nowMs: now(),
-            })
-          : null;
-        return {
-          content: formatPendingApprovalMessage([approvalSummary]),
-          metadata: {
-            executionProfile: graphExecutionProfile ?? undefined,
-            executionGraph: {
-              graphId,
-              status: 'awaiting_approval',
-              artifactIds,
-              writeSpecArtifactId: writeSpec.artifactId,
-              receiptArtifactId: mutationResult.receiptArtifact.artifactId,
-            },
-            ...(pendingRecord ? { pendingAction: toPendingActionClientMetadata(pendingRecord) } : {}),
-            continueConversationAfterApproval: true,
-          },
-        };
-      }
-
-      if (mutationResult.status !== 'succeeded' || !mutationResult.verificationArtifact) {
-        return failGraph('Mutation node failed before verification completed.', mutationNodeId, 'mutate');
-      }
-      emitGraphEvent('graph_completed', {
-        status: 'succeeded',
-        artifactIds,
-        writeSpecArtifactId: writeSpec.artifactId,
-        receiptArtifactId: mutationResult.receiptArtifact?.artifactId,
-        verificationArtifactId: mutationResult.verificationArtifact.artifactId,
-      }, 'graph:completed');
-      return {
-        content: `Wrote ${writeSpec.content.path} and verified the contents.`,
-        metadata: {
-          executionProfile: graphExecutionProfile ?? undefined,
-          executionGraph: {
-            graphId,
-            status: 'succeeded',
-            artifactIds,
-            writeSpecArtifactId: writeSpec.artifactId,
-            receiptArtifactId: mutationResult.receiptArtifact?.artifactId,
-            verificationArtifactId: mutationResult.verificationArtifact.artifactId,
-          },
-        },
-      };
-    } catch (error) {
-      return failGraph(error instanceof Error ? error.message : String(error));
-    }
+      },
+    });
   }
 
   async resumeExecutionGraphPendingAction(

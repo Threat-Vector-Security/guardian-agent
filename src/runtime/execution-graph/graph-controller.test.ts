@@ -4,6 +4,7 @@ import type { SelectedExecutionProfile } from '../execution-profiles.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { DelegatedTaskContract } from '../execution/types.js';
 import {
+  buildFileReadSetArtifact,
   buildWriteSpecArtifact,
   type ExecutionArtifact,
 } from './graph-artifacts.js';
@@ -12,6 +13,7 @@ import {
   buildGraphControlledTaskRunId,
   buildGraphReadOnlyIntentGatewayRecord,
   createGraphControlledRun,
+  runGraphControlledExecution,
   shouldUseGraphControlledExecution,
 } from './graph-controller.js';
 import type { ExecutionGraphEvent } from './graph-events.js';
@@ -220,5 +222,121 @@ describe('graph-controller boundary', () => {
     ]);
     expect(timelineEvents.map((event) => event.eventId)).toEqual(snapshot?.events.map((event) => event.eventId));
     expect(graphStore.getArtifact(run.graphId, 'write-spec-1')?.artifactType).toBe('WriteSpec');
+  });
+
+  it('runs graph-controlled read/synthesize/mutate/verify through supervisor callbacks', async () => {
+    const graphStore = new ExecutionGraphStore({ now: () => 1000 });
+    const timelineEvents: ExecutionGraphEvent[] = [];
+    const dispatchModes: string[] = [];
+    const result = await runGraphControlledExecution({
+      runtime: { getConfigSnapshot: () => ({}) } as never,
+      request: {
+        sessionId: 'session-1',
+        agentId: 'guardian',
+        userId: 'owner',
+        grantedCapabilities: [],
+        message: {
+          id: 'message-1',
+          userId: 'owner',
+          channel: 'web',
+          content: 'Read the file and write the summary.',
+          timestamp: 100,
+        },
+        systemPrompt: 'system',
+        history: [],
+        executionProfile: {
+          ...localProfile,
+          id: 'managed-cloud-coding',
+          providerTier: 'managed_cloud',
+          providerName: 'ollama-cloud-coding',
+          providerType: 'ollama_cloud',
+          providerLocality: 'external',
+          requestedTier: 'external',
+        },
+      },
+      target: { agentId: 'guardian' },
+      taskContract: taskContract([
+        {
+          stepId: 'read-1',
+          kind: 'read',
+          summary: 'Read the source file.',
+          required: true,
+        },
+        {
+          stepId: 'write-1',
+          kind: 'write',
+          summary: 'Write the summary.',
+          required: true,
+        },
+      ]),
+      preRoutedGateway: null,
+      effectiveIntentDecision: baseDecision(),
+      requestId: 'request-runner',
+      taskRunId: 'graph-run-request-runner',
+      graphStore,
+      runTimeline: {
+        ingestExecutionGraphEvent: (event) => {
+          timelineEvents.push(event);
+        },
+      },
+      now: () => 2000,
+      supervisor: {
+        getWorker: async () => ({ id: 'worker-1' }),
+        hasFallbackProvider: () => false,
+        buildCodeSessionRegistrySection: () => null,
+        dispatchToWorker: async (_worker, params) => {
+          if (params.directReasoningGraphContext) {
+            dispatchModes.push('read');
+            return {
+              content: 'Read src/example.ts.',
+              metadata: {
+                executionGraphArtifacts: [
+                  buildFileReadSetArtifact({
+                    graphId: params.directReasoningGraphContext.graphId,
+                    nodeId: params.directReasoningGraphContext.nodeId,
+                    artifactId: 'file-read-1',
+                    path: 'src/example.ts',
+                    content: 'export const value = 1;\n',
+                    createdAt: 2000,
+                  }),
+                ],
+              },
+            };
+          }
+          dispatchModes.push('synthesize');
+          expect(params.groundedSynthesis?.responseFormat?.type).toBe('json_schema');
+          return {
+            content: JSON.stringify({
+              path: 'tmp/graph-controller-runner.txt',
+              content: 'graph controller ok',
+              append: false,
+            }),
+          };
+        },
+        executeTool: async (toolName) => {
+          if (toolName === 'fs_write') {
+            return { success: true, status: 'succeeded', size: 'graph controller ok'.length };
+          }
+          if (toolName === 'fs_read') {
+            return {
+              success: true,
+              status: 'succeeded',
+              output: { content: 'graph controller ok', truncated: false },
+            };
+          }
+          return { success: false, status: 'failed', error: `Unexpected tool ${toolName}` };
+        },
+      },
+    });
+
+    expect(result?.content).toBe('Wrote tmp/graph-controller-runner.txt and verified the contents.');
+    expect(result?.metadata?.executionGraph).toMatchObject({
+      graphId: 'graph:graph-run-request-runner',
+      status: 'succeeded',
+      writeSpecArtifactId: 'graph:graph-run-request-runner:node:graph-run-request-runner:synthesize:write-spec',
+    });
+    expect(dispatchModes).toEqual(['read', 'synthesize']);
+    expect(graphStore.getArtifact('graph:graph-run-request-runner', 'file-read-1')?.artifactType).toBe('FileReadSet');
+    expect(timelineEvents.map((event) => event.kind)).toContain('graph_completed');
   });
 });
