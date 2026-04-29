@@ -1790,6 +1790,10 @@ export class CLIChannel implements ChannelAdapter {
         job.source,
         job.status === 'failed'
           ? this.red('failed')
+          : job.status === 'blocked'
+          ? this.yellow('blocked')
+          : job.status === 'cancelled'
+          ? this.yellow('cancelled')
           : job.status === 'running'
           ? this.yellow('running')
           : this.green('succeeded'),

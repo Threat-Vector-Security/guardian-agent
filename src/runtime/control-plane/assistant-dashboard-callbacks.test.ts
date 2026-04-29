@@ -60,7 +60,7 @@ describe('createAssistantDashboardCallbacks', () => {
       } as never,
       jobTracker: {
         getState: vi.fn(() => ({
-          summary: { total: 1, running: 1, succeeded: 0, failed: 0, lastStartedAt: 100 },
+          summary: { total: 1, running: 1, succeeded: 0, failed: 0, blocked: 0, cancelled: 0, lastStartedAt: 100 },
           jobs: [{
             id: 'job-1',
             type: 'config.apply',
@@ -82,7 +82,16 @@ describe('createAssistantDashboardCallbacks', () => {
       orchestrator: { activeRequests: [] },
       intentRoutingTrace: { enabled: true, filePath: '/tmp/intent-routing.jsonl' },
       jobs: {
-        summary: { total: 1, running: 1, succeeded: 0, failed: 0, lastStartedAt: 100 },
+        summary: {
+          total: 1,
+          running: 1,
+          succeeded: 0,
+          failed: 0,
+          blocked: 0,
+          cancelled: 0,
+          lastStartedAt: 100,
+          lastCompletedAt: undefined,
+        },
         jobs: [{
           id: 'job-1',
           type: 'config.apply',

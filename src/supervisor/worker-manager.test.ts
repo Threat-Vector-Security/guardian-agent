@@ -1768,7 +1768,7 @@ describe('WorkerManager', () => {
     expect(state.summary.total).toBe(1);
     expect(state.jobs[0]).toMatchObject({
       type: 'delegated_worker',
-      status: 'succeeded',
+      status: 'blocked',
       metadata: {
         delegation: {
           kind: 'brokered_worker',

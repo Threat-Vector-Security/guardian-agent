@@ -1705,7 +1705,10 @@ export class WorkerManager {
         return normalizedResult;
       }
 
-      this.delegatedJobTracker.succeed(delegatedJob.id, {
+      const finishDelegatedJob = lifecycle === 'blocked'
+        ? this.delegatedJobTracker.block.bind(this.delegatedJobTracker)
+        : this.delegatedJobTracker.succeed.bind(this.delegatedJobTracker);
+      finishDelegatedJob(delegatedJob.id, {
         detail: handoff.summary,
         metadata: {
           delegation: buildDelegationJobMetadata(effectiveInput, {

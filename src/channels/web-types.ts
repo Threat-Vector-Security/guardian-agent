@@ -280,7 +280,7 @@ export interface DashboardMemoryAuditEventView {
 export interface DashboardMemoryMaintenanceJobView {
   id: string;
   type: string;
-  status: 'running' | 'succeeded' | 'failed';
+  status: 'running' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
   startedAt: number;
   completedAt?: number;
   detail?: string;
@@ -914,6 +914,8 @@ export interface DashboardAssistantState {
       running: number;
       succeeded: number;
       failed: number;
+      blocked: number;
+      cancelled: number;
       lastStartedAt?: number;
       lastCompletedAt?: number;
     };
@@ -921,7 +923,7 @@ export interface DashboardAssistantState {
       id: string;
       type: string;
       source: 'manual' | 'scheduled' | 'system';
-      status: 'running' | 'succeeded' | 'failed';
+      status: 'running' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
       startedAt: number;
       completedAt?: number;
       durationMs?: number;

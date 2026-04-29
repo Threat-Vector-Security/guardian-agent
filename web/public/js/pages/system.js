@@ -827,7 +827,7 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assist
       ${renderMiniCard('Sessions', orchestratorSummary.sessionCount || 0, `${orchestratorSummary.runningCount || 0} running / ${orchestratorSummary.queuedCount || 0} queued`, 'info', 'Assistant session volume and queue depth across active conversations.')}
       ${renderMiniCard('Requests', orchestratorSummary.totalRequests || 0, `${orchestratorSummary.failedRequests || 0} failed`, (orchestratorSummary.failedRequests || 0) > 0 ? 'warning' : 'success', 'Total assistant requests processed, including failures.')}
       ${renderMiniCard('Latency', `${orchestratorSummary.avgEndToEndMs || 0}ms`, 'Average end-to-end', 'accent', 'Average end-to-end request time through routing, tool use, and response delivery.')}
-      ${renderMiniCard('Jobs', jobsSummary.total || 0, `${jobsSummary.running || 0} running / ${jobsSummary.failed || 0} failed`, (jobsSummary.failed || 0) > 0 ? 'warning' : 'success', 'Background job summary for async and deferred work.')}
+      ${renderMiniCard('Jobs', jobsSummary.total || 0, `${jobsSummary.running || 0} running / ${jobsSummary.blocked || 0} blocked / ${jobsSummary.failed || 0} failed`, (jobsSummary.failed || 0) > 0 || (jobsSummary.blocked || 0) > 0 ? 'warning' : 'success', 'Background job summary for async and deferred work.')}
     </div>
     <table style="margin-top:1rem;">
       <thead><tr><th>Session</th><th>Status</th><th>Agent</th><th>Provider</th><th>Model</th><th>Last Activity</th></tr></thead>
@@ -880,7 +880,7 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assist
           : jobs.map((job) => `
               <tr>
                 <td>${esc(job.type || '-')}</td>
-                <td><span class="badge ${job.status === 'failed' ? 'badge-warn' : job.status === 'running' ? 'badge-running' : 'badge-info'}">${esc(job.status || '-')}</span></td>
+                <td><span class="badge ${resolveAssistantJobStatusBadge(job.status)}">${esc(job.status || '-')}</span></td>
                 <td>${esc(summarizeAssistantJobOrigin(job))}</td>
                 <td>${esc(summarizeAssistantJobOutcome(job))}</td>
                 <td>${job.startedAt ? esc(formatTime(job.startedAt)) : '-'}</td>
@@ -1197,6 +1197,12 @@ function summarizeAssistantJobOrigin(job) {
     if (parts.length > 0) return parts.join(' • ');
   }
   return job?.source || '-';
+}
+
+function resolveAssistantJobStatusBadge(status) {
+  if (status === 'failed' || status === 'blocked' || status === 'cancelled') return 'badge-warn';
+  if (status === 'running') return 'badge-running';
+  return 'badge-info';
 }
 
 function summarizeAssistantJobOutcome(job) {

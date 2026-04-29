@@ -88,6 +88,37 @@ describe('AssistantJobTracker', () => {
     expect(merged.jobs[1]?.type).toBe('security_scan');
   });
 
+  it('tracks blocked and cancelled jobs as distinct terminal states', () => {
+    let now = 1000;
+    const tracker = new AssistantJobTracker({ now: () => now });
+    const blocked = tracker.start({
+      type: 'delegated_worker',
+      source: 'system',
+      detail: 'Waiting for approval',
+    });
+    const cancelled = tracker.start({
+      type: 'connector_sync',
+      source: 'manual',
+      detail: 'Syncing connector',
+    });
+
+    now = 1200;
+    tracker.block(blocked.id, { detail: 'Approval required' });
+    now = 1300;
+    tracker.cancel(cancelled.id, 'Cancelled by operator');
+
+    const state = tracker.getState(5);
+    expect(state.summary).toMatchObject({
+      total: 2,
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+      blocked: 1,
+      cancelled: 1,
+    });
+    expect(state.jobs.map((job) => job.status).sort()).toEqual(['blocked', 'cancelled']);
+  });
+
   it('derives delegated follow-up display state for operator surfaces', () => {
     const display = buildAssistantJobDisplay({
       source: 'system',
