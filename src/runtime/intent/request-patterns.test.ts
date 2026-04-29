@@ -8,6 +8,7 @@ import {
   isExplicitWorkspaceScopedRepoWorkRequest,
   isConversationTranscriptReferenceRequest,
   isRawCredentialDisclosureRequest,
+  looksLikeSelfContainedDirectAnswerTurn,
   looksLikePendingActionContextTurn,
 } from './request-patterns.js';
 
@@ -115,6 +116,15 @@ describe('request-patterns', () => {
     )).toBe(false);
     expect(isRawCredentialDisclosureRequest(
       'List my configured AI providers.',
+    )).toBe(false);
+  });
+
+  it('recognizes short context-prefaced exact-answer turns without catching tool-backed output constraints', () => {
+    expect(looksLikeSelfContainedDirectAnswerTurn(
+      'For this chat only, the temporary marker is POSTGRAPH-CONT-42801. Do not save it to memory. Reply exactly: ACK',
+    )).toBe(true);
+    expect(looksLikeSelfContainedDirectAnswerTurn(
+      'Search memory for SMOKE-MEM-42801 and reply with only the marker if you find it.',
     )).toBe(false);
   });
 

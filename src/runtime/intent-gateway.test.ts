@@ -37,6 +37,31 @@ describe('IntentGateway', () => {
     });
   });
 
+  it('keeps context-prefaced exact-answer turns on the direct content-plan path', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: 'For this chat only, the temporary marker is POSTGRAPH-CONT-42801. Do not save it to memory. Reply exactly: ACK',
+        channel: 'web',
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:self-contained-exact-answer');
+    expect(result.decision).toMatchObject({
+      route: 'general_assistant',
+      executionClass: 'direct_assistant',
+      requiresToolSynthesis: false,
+      preferredAnswerPath: 'direct',
+    });
+  });
+
   it('uses a content-plan record for raw credential disclosure refusals without calling the model', async () => {
     const gateway = new IntentGateway();
     let called = false;

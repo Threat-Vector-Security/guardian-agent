@@ -20,6 +20,10 @@ const RAW_SECRET_QUALIFIER_PATTERN = /\b(?:raw|actual|full|unredacted|plain\s*te
 const RAW_SECRET_PROTECTED_SOURCE_PATTERN = /(?:^|[\\/\s.])\.guardianagent\b|\bguardianagent\b.{0,80}\b(?:config|configuration|credential|credentials|secrets?)\b|\b(?:config|configuration|credential|credentials?)\s+files?\b/;
 const RAW_SECRET_REDACTION_REQUEST_PATTERN = /\b(?:redacted|redact|masked|mask|sanitize|sanitized|without\s+(?:printing|revealing|showing|displaying)\s+(?:raw\s+)?(?:secrets?|credentials?|tokens?|api\s*keys?))\b/;
 const NEGATED_RAW_SECRET_DISCLOSURE_CLAUSE_PATTERN = /\b(?:(?:do\s+not|don't|never)\s+(?:expose|include|print|show|reveal|display|dump|extract|exfiltrate|leak|return|give|read|open|cat|list)|without\s+(?:exposing|including|printing|revealing|showing|displaying|dumping|extracting|exfiltrating|leaking|returning|giving|reading|opening|listing))\b[^.!?\n]{0,180}\b(?:raw\s+)?(?:api\s*keys?|bearer\s*tokens?|telegram\s*(?:bot\s*)?tokens?|provider\s+credentials?|credential\s+values?|credentials?|secrets?|secret\s+store|access\s+tokens?|refresh\s+tokens?)\b[^.!?\n]*/g;
+const DIRECT_REPLY_LEAD_PATTERN = /^(?:reply|respond|answer|say)\b/;
+const DIRECT_REPLY_EXACTNESS_PATTERN = /\b(?:exactly|no other text|only this|just this|marker)\b/;
+const DIRECT_REPLY_INSTRUCTION_PATTERN = /(?:^|[.!?]\s+)(?:reply|respond|answer|say)\s+(?:with\s+)?(?:exactly|only|just)\b/;
+const DIRECT_REPLY_CONTEXT_CLAUSE_PATTERN = /^(?:for\s+(?:this|the)\s+(?:chat|conversation|thread)\s+only|in\s+(?:this|the)\s+(?:chat|conversation|thread)\s+only|the\s+temporary\s+marker\s+is\b|temporary\s+marker\s+is\b|do\s+not\s+save\s+(?:it|this|that|the\s+marker)\s+to\s+memory\b|don'?t\s+save\s+(?:it|this|that|the\s+marker)\s+to\s+memory\b|context\b|note\b)/;
 
 export function looksLikeContextDependentPromptSelectionTurn(request: string): boolean {
   const normalized = request.trim().toLowerCase();
@@ -61,8 +65,22 @@ export function looksLikeStandaloneGreetingTurn(request: string | undefined): bo
 export function looksLikeSelfContainedDirectAnswerTurn(request: string | undefined): boolean {
   const normalized = normalizeIntentGatewayRepairText(request);
   if (!normalized || normalized.length > 240) return false;
-  return /^(?:reply|respond|answer|say)\b/.test(normalized)
-    && /\b(?:exactly|no other text|only this|just this|marker)\b/.test(normalized);
+  if (DIRECT_REPLY_LEAD_PATTERN.test(normalized)) {
+    return DIRECT_REPLY_EXACTNESS_PATTERN.test(normalized);
+  }
+
+  const directInstruction = normalized.match(DIRECT_REPLY_INSTRUCTION_PATTERN);
+  if (!directInstruction || !DIRECT_REPLY_EXACTNESS_PATTERN.test(normalized.slice(directInstruction.index))) {
+    return false;
+  }
+
+  const contextPrefix = normalized.slice(0, directInstruction.index).trim();
+  if (!contextPrefix) return true;
+  return contextPrefix
+    .split(/[.!?]+|\s+and\s+/)
+    .map((clause) => clause.trim())
+    .filter(Boolean)
+    .every((clause) => DIRECT_REPLY_CONTEXT_CLAUSE_PATTERN.test(clause));
 }
 
 export function isRawCredentialDisclosureRequest(request: string | undefined): boolean {
