@@ -827,6 +827,26 @@ describe('RunTimelineStore', () => {
   it('ingests direct reasoning execution graph tool events as run timeline items', () => {
     const store = new RunTimelineStore({ now: () => 500 });
     store.ingestExecutionGraphEvent(createExecutionGraphEvent({
+      eventId: 'graph-model-completed',
+      graphId: 'execution-graph:exec-direct:direct-reasoning',
+      executionId: 'exec-direct',
+      rootExecutionId: 'exec-direct',
+      requestId: 'req-direct',
+      runId: 'req-direct',
+      nodeId: 'node:exec-direct:explore_readonly',
+      nodeKind: 'explore_readonly',
+      kind: 'llm_call_completed',
+      timestamp: 110,
+      sequence: 0,
+      producer: 'brokered_worker',
+      channel: 'web',
+      agentId: 'guardian',
+      codeSessionId: 'code-direct',
+      payload: {
+        summary: 'No classification summary provided.',
+      },
+    }));
+    store.ingestExecutionGraphEvent(createExecutionGraphEvent({
       eventId: 'graph-tool-started',
       graphId: 'execution-graph:exec-direct:direct-reasoning',
       executionId: 'exec-direct',
@@ -845,6 +865,7 @@ describe('RunTimelineStore', () => {
       payload: {
         toolName: 'fs_search',
         argsPreview: '{"query":"RunTimelineStore"}',
+        summary: 'No classification summary provided.',
       },
     }));
     store.ingestExecutionGraphEvent(createExecutionGraphEvent({
@@ -880,19 +901,28 @@ describe('RunTimelineStore', () => {
       title: 'Direct reasoning exploration',
     });
     expect(run?.items.map((item) => item.type)).toEqual([
+      'note',
       'tool_call_started',
       'tool_call_completed',
     ]);
     expect(run?.items[0]).toMatchObject({
       source: 'execution_graph',
+      title: 'Model call completed',
+      status: 'succeeded',
+    });
+    expect(run?.items[0]?.detail).toBeUndefined();
+    expect(run?.items[1]).toMatchObject({
+      source: 'execution_graph',
       title: 'Tool started: Fs Search',
       toolName: 'fs_search',
+      detail: '{"query":"RunTimelineStore"}',
     });
-    expect(run?.items[1]).toMatchObject({
+    expect(run?.items[2]).toMatchObject({
       source: 'execution_graph',
       title: 'Tool completed: Fs Search',
       status: 'succeeded',
       detail: 'Search results for RunTimelineStore (2 matches).',
     });
+    expect(run?.liveSummary.items.map((item) => item.detail).join('\n')).not.toContain('No classification summary provided.');
   });
 });

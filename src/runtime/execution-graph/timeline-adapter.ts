@@ -7,6 +7,8 @@ import { redactSensitiveText } from '../../util/crypto-guardrails.js';
 import type { ExecutionGraphEvent } from './graph-events.js';
 import type { ExecutionNodeKind } from './types.js';
 
+const MISSING_CLASSIFICATION_SUMMARY = 'No classification summary provided.';
+
 export interface ExecutionGraphTimelineProjection {
   runId: string;
   baseStatus?: DashboardRunStatus;
@@ -174,7 +176,7 @@ function buildGraphEventDetail(event: ExecutionGraphEvent): string | undefined {
     normalizeText(stringPayload(event, 'question')),
     normalizeText(stringPayload(event, 'summary')),
     normalizeText(stringPayload(event, 'preview')),
-  ].filter((value): value is string => !!value);
+  ].filter((value): value is string => !!value && value !== MISSING_CLASSIFICATION_SUMMARY);
   return truncateText(parts.join('\n'), 220);
 }
 
