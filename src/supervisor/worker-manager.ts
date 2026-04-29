@@ -56,10 +56,7 @@ import {
 import type { ExecutionGraphStore } from '../runtime/execution-graph/graph-store.js';
 import {
   artifactRefFromArtifact,
-  findStoredWriteSpecArtifact,
   readExecutionGraphArtifactsFromMetadata,
-  type ExecutionArtifact,
-  type WriteSpecContent,
 } from '../runtime/execution-graph/graph-artifacts.js';
 import {
   buildDirectReasoningGraphContext,
@@ -101,11 +98,11 @@ import {
 import { runDelegatedWorkerRetryInvocation } from '../runtime/execution-graph/delegated-worker-retry-invocation.js';
 import {
   buildWorkerSuspensionArtifact,
-  readWorkerSuspensionArtifact,
 } from '../runtime/execution-graph/worker-suspension-artifact.js';
 import {
   buildWorkerSuspensionResumeContext,
   emitWorkerSuspensionGraphEvent,
+  reconstructWorkerSuspensionGraphResume,
   workerSuspensionResumeContextToTraceContext,
   type WorkerApprovalContinuationTraceContext,
   type WorkerSuspensionGraphResumeContext,
@@ -120,6 +117,7 @@ import {
   buildMutationToolRequest,
   emitMutationResumeGraphEvent,
   executeWriteSpecMutationNode,
+  reconstructGraphMutationResume,
   resumeWriteSpecMutationNodeAfterApproval,
   type MutationNodeExecutionContext,
 } from '../runtime/execution-graph/mutation-node.js';
@@ -324,18 +322,6 @@ function readDelegatedPendingApprovalMetadata(metadata: Record<string, unknown> 
       : approvalIds.map((id) => ({ id, toolName: 'unknown', argsPreview: '' })),
     prompt: prompt || 'Approval required for the pending delegated action.',
   };
-}
-
-interface ExecutionGraphResumeContext {
-  graphId: string;
-  nodeId: string;
-  resumeToken: string;
-  approvalId: string;
-  writeSpec: ExecutionArtifact<WriteSpecContent>;
-  mutationContext: MutationNodeExecutionContext;
-  toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>;
-  artifactIds: string[];
-  expiresAt: number;
 }
 
 export interface WorkerProcess {
@@ -887,7 +873,12 @@ export class WorkerManager {
         options,
       );
     }
-    const workerSuspension = this.reconstructWorkerSuspensionGraphResume(pendingAction, payload, options.approvalId);
+    const workerSuspension = reconstructWorkerSuspensionGraphResume({
+      pendingAction,
+      payload,
+      approvalId: options.approvalId,
+      graphStore: this.observability.executionGraphStore,
+    });
     if (workerSuspension) {
       return this.resumeWorkerSuspensionGraphPendingAction(
         pendingAction,
@@ -895,7 +886,12 @@ export class WorkerManager {
         options,
       );
     }
-    const suspension = this.reconstructExecutionGraphSuspension(pendingAction, payload, options.approvalId);
+    const suspension = reconstructGraphMutationResume({
+      pendingAction,
+      payload,
+      approvalId: options.approvalId,
+      graphStore: this.observability.executionGraphStore,
+    });
     if (!suspension) {
       this.markExecutionGraphPendingActionFailed(pendingAction, now());
       return {
@@ -1369,125 +1365,6 @@ export class WorkerManager {
     nowMs: number,
   ): void {
     this.observability.pendingActionStore?.update(pendingAction.id, { status: 'failed' }, nowMs);
-  }
-
-  private reconstructWorkerSuspensionGraphResume(
-    pendingAction: PendingActionRecord,
-    payload: ReturnType<typeof readExecutionGraphResumePayload>,
-    approvalId: string,
-  ): WorkerSuspensionGraphResumeContext | null {
-    if (!payload) return null;
-    const graphStore = this.observability.executionGraphStore;
-    if (!graphStore) return null;
-    const snapshot = graphStore.getSnapshot(payload.graphId);
-    if (!snapshot) return null;
-    const artifactIds = uniqueStrings([
-      ...payload.artifactIds,
-      ...(pendingAction.graphInterrupt?.artifactRefs.map((artifact) => artifact.artifactId) ?? []),
-    ]);
-    const artifact = artifactIds
-      .map((artifactId) => graphStore.getArtifact(payload.graphId, artifactId))
-      .find((candidate) => candidate?.artifactType === 'WorkerSuspension');
-    const envelope = readWorkerSuspensionArtifact(artifact);
-    if (!envelope || !envelope.resume.approvalIds.includes(approvalId)) {
-      return null;
-    }
-    const graph = snapshot.graph;
-    const sequenceStart = snapshot.events.reduce(
-      (highest, event) => Math.max(highest, event.sequence),
-      0,
-    );
-    return {
-      graphId: graph.graphId,
-      executionId: graph.executionId,
-      rootExecutionId: graph.rootExecutionId,
-      ...(graph.parentExecutionId ? { parentExecutionId: graph.parentExecutionId } : {}),
-      requestId: graph.requestId,
-      ...(graph.runId ? { runId: graph.runId } : {}),
-      nodeId: payload.nodeId,
-      resumeToken: payload.resumeToken,
-      approvalId,
-      ...(graph.securityContext.channel ? { channel: graph.securityContext.channel } : {}),
-      ...(graph.securityContext.agentId ? { agentId: graph.securityContext.agentId } : {}),
-      ...(graph.securityContext.userId ? { userId: graph.securityContext.userId } : {}),
-      ...(graph.securityContext.codeSessionId ? { codeSessionId: graph.securityContext.codeSessionId } : {}),
-      resume: envelope.resume,
-      session: envelope.session,
-      artifactIds: uniqueStrings([
-        ...graph.artifacts.map((artifactRef) => artifactRef.artifactId),
-        ...artifactIds,
-      ]),
-      sequenceStart,
-      expiresAt: Math.min(pendingAction.expiresAt, envelope.resume.expiresAt, envelope.session.expiresAt),
-    };
-  }
-
-  private reconstructExecutionGraphSuspension(
-    pendingAction: PendingActionRecord,
-    payload: ReturnType<typeof readExecutionGraphResumePayload>,
-    approvalId: string,
-  ): ExecutionGraphResumeContext | null {
-    if (!payload) return null;
-    const graphStore = this.observability.executionGraphStore;
-    if (!graphStore) return null;
-    const snapshot = graphStore.getSnapshot(payload.graphId);
-    if (!snapshot) return null;
-    const writeSpec = findStoredWriteSpecArtifact({
-      graphStore,
-      graphId: payload.graphId,
-      artifactIds: [
-        ...payload.artifactIds,
-        ...(pendingAction.graphInterrupt?.artifactRefs.map((artifact) => artifact.artifactId) ?? []),
-      ],
-    });
-    if (!writeSpec) return null;
-    const graph = snapshot.graph;
-    const sequenceStart = snapshot.events.reduce(
-      (highest, event) => Math.max(highest, event.sequence),
-      0,
-    );
-    const channel = graph.securityContext.channel ?? pendingAction.scope.channel;
-    const userId = graph.securityContext.userId ?? pendingAction.scope.userId;
-    const agentId = graph.securityContext.agentId ?? pendingAction.scope.agentId;
-    const verificationNodeId = graph.nodes.find((node) => node.kind === 'verify')?.nodeId;
-    return {
-      graphId: graph.graphId,
-      nodeId: payload.nodeId,
-      resumeToken: payload.resumeToken,
-      approvalId,
-      writeSpec,
-      mutationContext: {
-        graphId: graph.graphId,
-        executionId: graph.executionId,
-        rootExecutionId: graph.rootExecutionId,
-        ...(graph.parentExecutionId ? { parentExecutionId: graph.parentExecutionId } : {}),
-        requestId: graph.requestId,
-        ...(graph.runId ? { runId: graph.runId } : {}),
-        nodeId: payload.nodeId,
-        channel,
-        agentId,
-        userId,
-        ...(graph.securityContext.codeSessionId ? { codeSessionId: graph.securityContext.codeSessionId } : {}),
-        ...(verificationNodeId ? { verificationNodeId } : {}),
-        sequenceStart,
-      },
-      toolRequest: {
-        origin: 'assistant',
-        requestId: graph.requestId,
-        agentId,
-        userId,
-        surfaceId: graph.securityContext.surfaceId ?? pendingAction.scope.surfaceId,
-        principalId: userId,
-        principalRole: 'owner',
-        channel,
-        activeSkills: [],
-      },
-      artifactIds: uniqueStrings([
-        ...graph.artifacts.map((artifact) => artifact.artifactId),
-        ...payload.artifactIds,
-      ]),
-      expiresAt: pendingAction.expiresAt,
-    };
   }
 
   private startDelegatedWorkerGraph(input: {
@@ -3945,17 +3822,6 @@ function buildDelegatedWorkerRunningDetail(
   return `${targetLabel} is working${profileSuffix}${sessionSuffix}.`;
 }
 
-function uniqueStrings(values: string[]): string[] {
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const value of values) {
-    const normalized = value.trim();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    unique.push(normalized);
-  }
-  return unique;
-}
 
 function appendPromptAdditionalSection(
   sections: PromptAssemblyAdditionalSection[],

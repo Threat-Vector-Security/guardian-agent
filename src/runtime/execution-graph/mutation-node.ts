@@ -1,15 +1,19 @@
 import { scanWriteContent } from '../../guardian/argument-sanitizer.js';
 import type { ToolApprovalDecisionResult } from '../../tools/executor.js';
 import type { ToolExecutionRequest } from '../../tools/types.js';
+import type { PendingActionRecord } from '../pending-actions.js';
 import {
   artifactRefFromArtifact,
   buildMutationReceiptArtifact,
+  findStoredWriteSpecArtifact,
   type ExecutionArtifact,
+  type ExecutionGraphArtifactLookupStore,
   type MutationReceiptContent,
   type VerificationResultContent,
   type WriteSpecContent,
 } from './graph-artifacts.js';
 import { createExecutionGraphEvent, type ExecutionGraphEvent } from './graph-events.js';
+import type { ExecutionGraphSnapshot } from './graph-store.js';
 import type { ExecutionNodeKind } from './types.js';
 import { buildWriteMutationVerificationArtifact } from './node-verifier.js';
 
@@ -84,6 +88,29 @@ export interface ResumeWriteSpecMutationNodeAfterApprovalInput {
   approvalId?: string;
 }
 
+export interface GraphMutationResumePayload {
+  graphId: string;
+  nodeId: string;
+  resumeToken: string;
+  artifactIds: string[];
+}
+
+export interface GraphMutationResumeStore extends ExecutionGraphArtifactLookupStore {
+  getSnapshot(graphId: string): ExecutionGraphSnapshot | null | undefined;
+}
+
+export interface GraphMutationResumeContext {
+  graphId: string;
+  nodeId: string;
+  resumeToken: string;
+  approvalId: string;
+  writeSpec: ExecutionArtifact<WriteSpecContent>;
+  mutationContext: MutationNodeExecutionContext;
+  toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>;
+  artifactIds: string[];
+  expiresAt: number;
+}
+
 export function buildMutationToolRequest(
   input: BuildMutationToolRequestInput,
 ): Omit<ToolExecutionRequest, 'toolName' | 'args'> {
@@ -99,6 +126,73 @@ export function buildMutationToolRequest(
     ...(input.codeContext ? { codeContext: input.codeContext } : {}),
     toolContextMode: input.toolContextMode,
     activeSkills: input.activeSkillIds ?? [],
+  };
+}
+
+export function reconstructGraphMutationResume(input: {
+  pendingAction: PendingActionRecord;
+  payload: GraphMutationResumePayload | null;
+  approvalId: string;
+  graphStore?: GraphMutationResumeStore | null;
+}): GraphMutationResumeContext | null {
+  if (!input.payload || !input.graphStore) return null;
+  const snapshot = input.graphStore.getSnapshot(input.payload.graphId);
+  if (!snapshot) return null;
+  const artifactIds = [
+    ...input.payload.artifactIds,
+    ...(input.pendingAction.graphInterrupt?.artifactRefs.map((artifact) => artifact.artifactId) ?? []),
+  ];
+  const writeSpec = findStoredWriteSpecArtifact({
+    graphStore: input.graphStore,
+    graphId: input.payload.graphId,
+    artifactIds,
+  });
+  if (!writeSpec) return null;
+  const graph = snapshot.graph;
+  const sequenceStart = snapshot.events.reduce(
+    (highest, event) => Math.max(highest, event.sequence),
+    0,
+  );
+  const channel = graph.securityContext.channel ?? input.pendingAction.scope.channel;
+  const userId = graph.securityContext.userId ?? input.pendingAction.scope.userId;
+  const agentId = graph.securityContext.agentId ?? input.pendingAction.scope.agentId;
+  const verificationNodeId = graph.nodes.find((node) => node.kind === 'verify')?.nodeId;
+  return {
+    graphId: graph.graphId,
+    nodeId: input.payload.nodeId,
+    resumeToken: input.payload.resumeToken,
+    approvalId: input.approvalId,
+    writeSpec,
+    mutationContext: {
+      graphId: graph.graphId,
+      executionId: graph.executionId,
+      rootExecutionId: graph.rootExecutionId,
+      ...(graph.parentExecutionId ? { parentExecutionId: graph.parentExecutionId } : {}),
+      requestId: graph.requestId,
+      ...(graph.runId ? { runId: graph.runId } : {}),
+      nodeId: input.payload.nodeId,
+      channel,
+      agentId,
+      userId,
+      ...(graph.securityContext.codeSessionId ? { codeSessionId: graph.securityContext.codeSessionId } : {}),
+      ...(verificationNodeId ? { verificationNodeId } : {}),
+      sequenceStart,
+    },
+    toolRequest: buildMutationToolRequest({
+      requestId: graph.requestId,
+      agentId,
+      userId,
+      surfaceId: graph.securityContext.surfaceId ?? input.pendingAction.scope.surfaceId,
+      principalId: userId,
+      principalRole: 'owner',
+      channel,
+      activeSkillIds: [],
+    }),
+    artifactIds: uniqueStrings([
+      ...graph.artifacts.map((artifact) => artifact.artifactId),
+      ...input.payload.artifactIds,
+    ]),
+    expiresAt: input.pendingAction.expiresAt,
   };
 }
 
@@ -629,4 +723,16 @@ function baseEventContext(context: MutationNodeExecutionContext): Omit<
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    unique.push(normalized);
+  }
+  return unique;
 }
