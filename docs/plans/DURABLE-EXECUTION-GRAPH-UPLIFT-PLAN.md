@@ -1510,6 +1510,15 @@ Checkpoint after the mutation approval-result normalization cleanup:
 - Local gates passed after the cleanup: `npm run check` and `npm run build`.
 - Cross-domain regression coverage passed after the cleanup: `node scripts/test-cross-domain-orchestration-stress.mjs`.
 
+Checkpoint after the graph artifact metadata lookup cleanup:
+
+- `src/runtime/execution-graph/graph-artifacts.ts` now owns response-metadata artifact extraction and stored `WriteSpec` lookup through `readExecutionGraphArtifactsFromMetadata` and `findStoredWriteSpecArtifact`.
+- `WorkerManager` still supplies the graph store and decides when the graph-controlled mutation/resume path needs those artifacts. It no longer carries local artifact-shape validation or `WriteSpec` lookup helpers.
+- This is an artifact ownership cleanup only. It does not change graph execution order, write-spec synthesis, mutation execution, approval policy, provider/profile selection, or brokered-worker isolation.
+- Focused coverage passed: `npx vitest run src/runtime/execution-graph/graph-artifacts.test.ts src/supervisor/worker-manager.test.ts` reported 54 passing tests.
+- Local gates passed after the cleanup: `npm run check` and `npm run build`.
+- Cross-domain regression coverage passed after the cleanup: `node scripts/test-cross-domain-orchestration-stress.mjs`.
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.

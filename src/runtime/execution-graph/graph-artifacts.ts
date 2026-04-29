@@ -199,6 +199,11 @@ export class ExecutionArtifactStore {
   }
 }
 
+export interface ExecutionGraphArtifactLookupStore {
+  getArtifact(graphId: string, artifactId: string): ExecutionArtifact | null | undefined;
+  listArtifacts(graphId: string): ExecutionArtifact[];
+}
+
 export function artifactRefFromArtifact(artifact: ExecutionArtifact): ExecutionArtifactRef {
   return {
     artifactId: artifact.artifactId,
@@ -212,6 +217,48 @@ export function artifactRefFromArtifact(artifact: ExecutionArtifact): ExecutionA
     redactionPolicy: artifact.redactionPolicy,
     createdAt: artifact.createdAt,
   };
+}
+
+export function readExecutionGraphArtifactsFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): ExecutionArtifact[] {
+  const artifacts = metadata?.executionGraphArtifacts;
+  if (!Array.isArray(artifacts)) {
+    return [];
+  }
+  return artifacts
+    .map((artifact) => normalizeExecutionArtifact(artifact))
+    .filter((artifact): artifact is ExecutionArtifact => !!artifact);
+}
+
+export function findStoredWriteSpecArtifact(input: {
+  graphStore: ExecutionGraphArtifactLookupStore;
+  graphId: string;
+  artifactIds: string[];
+}): ExecutionArtifact<WriteSpecContent> | null {
+  for (const artifactId of uniqueStrings(input.artifactIds)) {
+    const artifact = input.graphStore.getArtifact(input.graphId, artifactId);
+    if (isWriteSpecArtifact(artifact)) {
+      return artifact;
+    }
+  }
+  return input.graphStore.listArtifacts(input.graphId).find(isWriteSpecArtifact) ?? null;
+}
+
+export function isWriteSpecArtifact(
+  artifact: ExecutionArtifact | null | undefined,
+): artifact is ExecutionArtifact<WriteSpecContent> {
+  if (!artifact || artifact.artifactType !== 'WriteSpec') {
+    return false;
+  }
+  const content = artifact.content as Partial<WriteSpecContent>;
+  return content.operation === 'write_file'
+    && typeof content.path === 'string'
+    && typeof content.append === 'boolean'
+    && typeof content.content === 'string'
+    && typeof content.contentHash === 'string'
+    && typeof content.contentBytes === 'number'
+    && Array.isArray(content.sourceArtifactIds);
 }
 
 export function buildSearchResultSetArtifact(input: {
@@ -594,6 +641,25 @@ export function validateSynthesisDraftArtifact(input: {
     missingArtifactIds,
     invalidRefs,
   };
+}
+
+function normalizeExecutionArtifact(value: unknown): ExecutionArtifact | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const artifact = value as Record<string, unknown>;
+  if (
+    typeof artifact.artifactId !== 'string'
+    || typeof artifact.graphId !== 'string'
+    || typeof artifact.nodeId !== 'string'
+    || typeof artifact.artifactType !== 'string'
+    || typeof artifact.label !== 'string'
+    || typeof artifact.content !== 'object'
+    || artifact.content === null
+  ) {
+    return null;
+  }
+  return artifact as unknown as ExecutionArtifact;
 }
 
 function normalizeSearchMatch(match: Record<string, unknown>): SearchResultArtifactMatch | null {

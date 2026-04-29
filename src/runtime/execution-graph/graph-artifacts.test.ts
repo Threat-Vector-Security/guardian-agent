@@ -7,7 +7,10 @@ import {
   buildRecoveryProposalArtifact,
   buildSearchResultSetArtifact,
   buildSynthesisDraftArtifact,
+  buildWriteSpecArtifact,
+  findStoredWriteSpecArtifact,
   formatEvidenceArtifactsForSynthesis,
+  readExecutionGraphArtifactsFromMetadata,
   validateSynthesisDraftArtifact,
 } from './graph-artifacts.js';
 
@@ -154,6 +157,63 @@ describe('execution graph artifacts', () => {
 
     expect(store.getArtifact('old-artifact')).toBeNull();
     expect(store.listArtifacts().map((artifact) => artifact.artifactId)).toEqual(['new-artifact']);
+  });
+
+  it('reads graph artifacts from metadata using graph-owned validation', () => {
+    const search = buildSearchResultSetArtifact({
+      graphId: 'graph-1',
+      nodeId: 'node-1',
+      artifactId: 'artifact-search',
+      matches: [],
+      createdAt: 100,
+    });
+
+    expect(readExecutionGraphArtifactsFromMetadata({
+      executionGraphArtifacts: [
+        search,
+        { artifactId: 'missing-content' },
+        null,
+      ],
+    })).toEqual([search]);
+    expect(readExecutionGraphArtifactsFromMetadata(undefined)).toEqual([]);
+  });
+
+  it('finds stored WriteSpec artifacts by preferred ids before falling back to graph artifacts', () => {
+    const writeSpec = buildWriteSpecArtifact({
+      graphId: 'graph-1',
+      nodeId: 'synthesize-1',
+      artifactId: 'write-spec-1',
+      path: 'tmp/manual-web/approval-graph.txt',
+      content: 'graph approval ok',
+      createdAt: 100,
+    });
+    const fallbackWriteSpec = buildWriteSpecArtifact({
+      graphId: 'graph-1',
+      nodeId: 'synthesize-1',
+      artifactId: 'write-spec-fallback',
+      path: 'tmp/manual-web/fallback.txt',
+      content: 'fallback',
+      createdAt: 110,
+    });
+    const byId = new Map([
+      [writeSpec.artifactId, writeSpec],
+      [fallbackWriteSpec.artifactId, fallbackWriteSpec],
+    ]);
+    const graphStore = {
+      getArtifact: (_graphId: string, artifactId: string) => byId.get(artifactId) ?? null,
+      listArtifacts: () => [fallbackWriteSpec],
+    };
+
+    expect(findStoredWriteSpecArtifact({
+      graphStore,
+      graphId: 'graph-1',
+      artifactIds: ['missing', writeSpec.artifactId],
+    })).toEqual(writeSpec);
+    expect(findStoredWriteSpecArtifact({
+      graphStore,
+      graphId: 'graph-1',
+      artifactIds: ['missing'],
+    })).toEqual(fallbackWriteSpec);
   });
 
   it('creates bounded advisory recovery proposal artifacts', () => {
