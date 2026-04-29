@@ -164,6 +164,76 @@
       "status": "draft",
       "createdAt": 1777207846690,
       "updatedAt": 1777207846690
+    },
+    {
+      "id": "878daffe-b17b-48f4-8297-8f02d19c7327",
+      "name": "Guardian Stress Follow-up",
+      "subjectTemplate": "Guardian status follow-up",
+      "bodyTemplate": "Review the latest Guardian orchestration status.",
+      "contactIds": [],
+      "status": "draft",
+      "createdAt": 1777419708737,
+      "updatedAt": 1777419708737
+    },
+    {
+      "id": "3c331d89-7758-4d79-a567-8ce6f32a8fab",
+      "name": "Guardian Stress Follow-up",
+      "subjectTemplate": "Guardian status follow-up",
+      "bodyTemplate": "Review the latest Guardian orchestration status.",
+      "contactIds": [],
+      "status": "draft",
+      "createdAt": 1777423608156,
+      "updatedAt": 1777423608156
+    },
+    {
+      "id": "eae87c56-1240-4a45-9f79-671d06f314a9",
+      "name": "Guardian Stress Follow-up",
+      "subjectTemplate": "Guardian status follow-up",
+      "bodyTemplate": "Review the latest Guardian orchestration status.",
+      "contactIds": [],
+      "status": "draft",
+      "createdAt": 1777424097977,
+      "updatedAt": 1777424097977
+    },
+    {
+      "id": "1d0d363f-6559-46b3-a1d7-6a85e2d8267f",
+      "name": "Guardian Stress Follow-up",
+      "subjectTemplate": "Guardian status follow-up",
+      "bodyTemplate": "Review the latest Guardian orchestration status.",
+      "contactIds": [],
+      "status": "draft",
+      "createdAt": 1777424279753,
+      "updatedAt": 1777424279753
+    },
+    {
+      "id": "7d7ee03d-1c1a-4e00-9c7d-e9cca774f93e",
+      "name": "Guardian Stress Follow-up",
+      "subjectTemplate": "Guardian status follow-up",
+      "bodyTemplate": "Review the latest Guardian orchestration status.",
+      "contactIds": [],
+      "status": "draft",
+      "createdAt": 1777424443546,
+      "updatedAt": 1777424443546
+    },
+    {
+      "id": "70f55239-7963-427e-9d32-1ab1378f6e87",
+      "name": "Guardian Stress Follow-up",
+      "subjectTemplate": "Guardian status follow-up",
+      "bodyTemplate": "Review the latest Guardian orchestration status.",
+      "contactIds": [],
+      "status": "draft",
+      "createdAt": 1777424606239,
+      "updatedAt": 1777424606239
+    },
+    {
+      "id": "0400424a-6cc7-40bb-b821-bfd5aa10b981",
+      "name": "Guardian Stress Follow-up",
+      "subjectTemplate": "Guardian status follow-up",
+      "bodyTemplate": "Review the latest Guardian orchestration status.",
+      "contactIds": [],
+      "status": "draft",
+      "createdAt": 1777426031745,
+      "updatedAt": 1777426031745
     }
   ],
   "runs": []
