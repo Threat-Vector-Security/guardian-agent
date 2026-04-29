@@ -1443,6 +1443,19 @@ function buildAssistantTraceItems(trace: AssistantDispatchTrace): DashboardRunTi
     });
   }
 
+  if (trace.status === 'cancelled') {
+    items.push({
+      id: `trace:${trace.requestId}:cancelled`,
+      runId: trace.runId,
+      timestamp: trace.completedAt ?? trace.startedAt ?? trace.queuedAt,
+      type: 'run_failed',
+      status: 'warning',
+      source: 'orchestrator',
+      title: 'Run cancelled',
+      detail: sanitizeTimelineText(trace.error),
+    });
+  }
+
   return items;
 }
 
