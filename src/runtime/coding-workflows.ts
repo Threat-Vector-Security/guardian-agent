@@ -18,6 +18,7 @@ export type CodeSessionWorkflowStage =
   | 'inspect'
   | 'plan'
   | 'implement'
+  | 'approve'
   | 'verify'
   | 'summarize';
 
@@ -92,6 +93,7 @@ const CODING_WORKFLOW_RECIPES: Record<CodeSessionWorkflowType, CodeSessionWorkfl
       { id: 'inspect', label: 'Inspect', detail: 'Read the repo evidence and confirm the owner files before changing anything.' },
       { id: 'plan', label: 'Plan', detail: 'Write a bounded implementation plan and call out the intended verification.' },
       { id: 'implement', label: 'Implement', detail: 'Make the smallest coherent change that satisfies the plan.' },
+      { id: 'approve', label: 'Approve', detail: 'Resolve any required approval before the mutation or verification continues.' },
       { id: 'verify', label: 'Verify', detail: 'Run targeted proof for the touched area before closing the loop.' },
       { id: 'summarize', label: 'Summarize', detail: 'Report what changed, which files moved, and what proof passed.' },
     ],
@@ -106,6 +108,7 @@ const CODING_WORKFLOW_RECIPES: Record<CodeSessionWorkflowType, CodeSessionWorkfl
       { id: 'inspect', label: 'Inspect', detail: 'Gather failure evidence, affected files, and the likely owner path.' },
       { id: 'plan', label: 'Plan', detail: 'Describe the root-cause hypothesis and the narrowest fix path.' },
       { id: 'implement', label: 'Implement', detail: 'Patch the failing logic without widening the change unnecessarily.' },
+      { id: 'approve', label: 'Approve', detail: 'Resolve any required approval before the patch or verification continues.' },
       { id: 'verify', label: 'Verify', detail: 'Reproduce the original failure and rerun the targeted regression checks.' },
       { id: 'summarize', label: 'Summarize', detail: 'State the root cause, the fix, and the verification that now passes.' },
     ],
@@ -120,6 +123,7 @@ const CODING_WORKFLOW_RECIPES: Record<CodeSessionWorkflowType, CodeSessionWorkfl
       { id: 'inspect', label: 'Inspect', detail: 'Read the changed files and the surrounding code before judging the patch.' },
       { id: 'plan', label: 'Plan', detail: 'Frame the review around correctness, regressions, and missing proof.' },
       { id: 'implement', label: 'Review', detail: 'Collect concrete findings, not generic opinions or style noise.' },
+      { id: 'approve', label: 'Approve', detail: 'Resolve any approval if the review needs to inspect or verify a gated action.' },
       { id: 'verify', label: 'Validate', detail: 'Confirm the findings against tests, execution proof, or adjacent code paths when needed.' },
       { id: 'summarize', label: 'Summarize', detail: 'Report findings first, then note residual risks or missing proof.' },
     ],
@@ -134,6 +138,7 @@ const CODING_WORKFLOW_RECIPES: Record<CodeSessionWorkflowType, CodeSessionWorkfl
       { id: 'inspect', label: 'Inspect', detail: 'Read the current design and the coupled call sites before reshaping it.' },
       { id: 'plan', label: 'Plan', detail: 'Define the safe change boundary and the behavior that must remain intact.' },
       { id: 'implement', label: 'Implement', detail: 'Refactor in the smallest coherent steps that preserve behavior.' },
+      { id: 'approve', label: 'Approve', detail: 'Resolve any required approval before the refactor or verification continues.' },
       { id: 'verify', label: 'Verify', detail: 'Run focused tests or build proof that covers the reshaped behavior.' },
       { id: 'summarize', label: 'Summarize', detail: 'Explain the structural improvement and the evidence that behavior stayed intact.' },
     ],
@@ -148,6 +153,7 @@ const CODING_WORKFLOW_RECIPES: Record<CodeSessionWorkflowType, CodeSessionWorkfl
       { id: 'inspect', label: 'Inspect', detail: 'Read the failing tests, fixtures, and touched production path first.' },
       { id: 'plan', label: 'Plan', detail: 'Decide whether the failure is in the tests, the product logic, or both.' },
       { id: 'implement', label: 'Implement', detail: 'Repair the minimum failing path before widening the change.' },
+      { id: 'approve', label: 'Approve', detail: 'Resolve any required approval before the repair or verification continues.' },
       { id: 'verify', label: 'Verify', detail: 'Rerun the failing tests first, then expand verification only if needed.' },
       { id: 'summarize', label: 'Summarize', detail: 'State which tests were repaired, why they failed, and what now passes.' },
     ],
@@ -162,6 +168,7 @@ const CODING_WORKFLOW_RECIPES: Record<CodeSessionWorkflowType, CodeSessionWorkfl
       { id: 'inspect', label: 'Inspect', detail: 'Read the dependency boundary, lockfile impact, and likely affected surfaces.' },
       { id: 'plan', label: 'Plan', detail: 'Decide the upgrade path, rollback risk, and the proof required afterward.' },
       { id: 'implement', label: 'Implement', detail: 'Apply the upgrade or pin change without broad unrelated churn.' },
+      { id: 'approve', label: 'Approve', detail: 'Resolve any required approval before install, mutation, or verification continues.' },
       { id: 'verify', label: 'Verify', detail: 'Run the narrowest tests, build, or lint proof that covers the upgraded area.' },
       { id: 'summarize', label: 'Summarize', detail: 'Report the version change, risk notes, and verification proof.' },
     ],
@@ -176,6 +183,7 @@ const CODING_WORKFLOW_RECIPES: Record<CodeSessionWorkflowType, CodeSessionWorkfl
       { id: 'inspect', label: 'Inspect', detail: 'Read the spec, adjacent code, and owner files before proposing work.' },
       { id: 'plan', label: 'Plan', detail: 'Break the work into bounded implementation steps with risks and verification.' },
       { id: 'implement', label: 'Implement', detail: 'Implementation is intentionally deferred in this workflow.' },
+      { id: 'approve', label: 'Approve', detail: 'Approval is deferred unless implementation starts.' },
       { id: 'verify', label: 'Verify', detail: 'Verification is deferred because this workflow ends at the plan.' },
       { id: 'summarize', label: 'Summarize', detail: 'Report the plan, open questions, and next actions.' },
     ],
@@ -321,6 +329,7 @@ export function buildCodingWorkflowPlan(
     risks: buildWorkflowSpecificRisks(workflowType),
     plan: recipe.stages
       .filter((stage) => !(workflowType === 'spec_to_plan' && stage.id === 'implement'))
+      .filter((stage) => !(workflowType === 'spec_to_plan' && stage.id === 'approve'))
       .filter((stage) => !(recipe.verificationMode === 'not_required' && stage.id === 'verify'))
       .map((stage) => stage.detail),
   };
@@ -412,7 +421,7 @@ export function deriveCodeSessionWorkflowState(input: DeriveCodeSessionWorkflowS
     status = 'ready';
     nextAction = recipe.stages.find((stage) => stage.id === 'plan')?.detail || 'Write a bounded plan before editing.';
   } else if (pendingApprovals.length > 0) {
-    currentStage = 'implement';
+    currentStage = 'approve';
     status = 'blocked';
     blockedReason = 'A pending approval is pausing the workflow.';
     nextAction = 'Resolve the pending approval so the next coding step can continue.';
