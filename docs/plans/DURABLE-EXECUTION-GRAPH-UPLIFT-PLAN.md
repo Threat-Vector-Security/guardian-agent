@@ -29,6 +29,7 @@ As of 2026-04-29:
 - The read-only manual/API lane has proven the harder repo-inspection prompts on `ollama-cloud-coding` / `glm-5.1` without frontier escalation, including "files implementing run timeline rendering" and "which web pages consume `run-timeline-context.js`".
 - Exact-file synthesis coverage for reverse dependency/consumer questions is handled in evidence selection, synthesis coverage, path canonicalization, and gateway recovery normalization, not by intent-routing keyword interception.
 - Repo search grounding now scans normal large TypeScript source files under the shared search budget and returns multiple content occurrences per file, so exact-symbol questions can surface both definitions and production call sites without routing-specific search exceptions.
+- Definition-plus-call-site synthesis now has a graph/direct-reasoning deterministic completion path after evidence hydration. It selects the symbol and call site from all strong implementation evidence, prefers explicitly requested emitter symbols over generic event factories, records a `SynthesisDraft`, and avoids an extra final synthesis model call when the answer is already fully evidenced.
 - Do not move to broader hybrid write behavior until the next slice preserves the proven app-facing API sweep for fresh-surface isolation, same-surface continuity, approval continuity, security refusal, and managed-cloud provider metadata.
 
 ### 2026-04-27 Handoff Status
@@ -1573,6 +1574,12 @@ Final scoped completion checkpoint:
 - Final focused harnesses passed: `node scripts/test-security-verification.mjs` reported 11/11 checks, `node scripts/test-cross-domain-orchestration-stress.mjs` passed, and `node scripts/test-web-approvals.mjs` passed.
 - Final live app smoke passed on the actual app after `.\scripts\start-dev-windows.ps1 -StartOnly`: `/api/status` reported `running`, `/api/providers` exposed the configured managed-cloud profiles, and `/api/message` with request id `codex-final-graph-42801` returned exactly `FINAL-GRAPH-42801` using Ollama Cloud direct profile metadata (`ollama_cloud`, `ollama-cloud-direct`, `minimax-m2.1`, no fallback).
 - Two optional harnesses remained setup-blocked rather than graph-regression failures: `node scripts/test-brokered-isolation.mjs` generated a local-Ollama-only config and failed because no local Ollama model was installed or reachable at `127.0.0.1:11434`; `node scripts/test-code-ui-smoke.mjs` hit local auth/focus setup failures (`401`/`404` then workspace-focus timeout). Do not count those as green until their environment assumptions are satisfied.
+
+Synthesis/search quality checkpoint:
+
+- Direct-reasoning definition/call-site requests now skip the generic synthesis-coverage revision and use a scoped deterministic completion once evidence contains both the definition and a call site. This keeps broad multi-domain synthesis on the normal grounded-synthesis path while stabilizing exact repo answers such as `emitMutationResumeGraphEvent`.
+- The focused regression covers a misleading generic `createExecutionGraphEvent` definition before the real `emitMutationResumeGraphEvent` evidence and verifies that the final answer names `src/runtime/execution-graph/mutation-node.ts` and `src/supervisor/worker-manager.ts`, without adding routing keywords or channel-specific exceptions.
+- Verification for this checkpoint: `npx vitest run src/runtime/direct-reasoning-mode.test.ts --reporter=dot`, `npm run check`, `npm run build`, `node scripts/test-cross-domain-orchestration-stress.mjs`, `node scripts/test-web-approvals.mjs`, `node scripts/test-security-verification.mjs`, and an actual app `/api/message` replay with request id `codex-fast-defcall4-1777433191` all passed. The live replay returned the correct deterministic two-bullet answer in 65 seconds on the real app.
 
 ### Phase 8: Web UI And Operator Observability
 
