@@ -98,7 +98,7 @@ describe('chat continuation graph approval resume', () => {
     ]);
   });
 
-  it('keeps suspended tool-loop replay state inside the graph artifact, not pending-action client metadata', () => {
+  it('keeps suspended tool-loop replay state inside a checkpoint artifact, not pending-action client metadata', () => {
     const graphStore = new ExecutionGraphStore({ now: fixedNow(1_000) });
     const pendingAction = createPendingAction(graphStore, {
       prompt: 'Approve write?',
@@ -162,6 +162,26 @@ describe('chat continuation graph approval resume', () => {
       redactionPolicy: 'internal_resume_payload',
       content: {
         type: 'chat_continuation',
+        payload: {
+          type: 'suspended_tool_loop',
+        },
+      },
+    });
+    expect(JSON.stringify(artifact?.content)).not.toContain('llmMessages');
+    expect(JSON.stringify(artifact?.content)).not.toContain('requestText');
+    expect(JSON.stringify(artifact?.content)).not.toContain('Write the private plan');
+    expect(JSON.stringify(artifact?.content)).not.toContain('classified');
+
+    const checkpointArtifactId = String((artifact?.content as { payload?: { checkpointArtifactId?: string } } | undefined)?.payload?.checkpointArtifactId ?? '');
+    expect(checkpointArtifactId).toMatch(/^artifact:/);
+    const checkpointArtifact = graphStore.getArtifact(graphId, checkpointArtifactId);
+    expect(checkpointArtifact).toMatchObject({
+      artifactType: 'ToolLoopCheckpoint',
+      label: 'Tool-loop checkpoint',
+      refs: ['fs_write'],
+      redactionPolicy: 'internal_resume_checkpoint',
+      content: {
+        type: 'tool_loop_checkpoint',
         payload: {
           type: 'suspended_tool_loop',
           requestText: 'Write the private plan to tmp/secret.txt.',

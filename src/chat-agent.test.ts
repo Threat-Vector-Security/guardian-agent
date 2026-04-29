@@ -8003,7 +8003,15 @@ describe('LLMChatAgent direct intent metadata', () => {
         },
       ],
     });
-    expect(((payload as Record<string, unknown>).llmMessages as Array<Record<string, unknown>>)
+    const checkpointArtifactId = String((payload as Record<string, unknown>).checkpointArtifactId ?? '');
+    expect(checkpointArtifactId).toMatch(/^artifact:/);
+    const checkpointArtifact = executionGraphStore.getArtifact(pending!.graphInterrupt!.graphId, checkpointArtifactId);
+    const checkpointPayload = (checkpointArtifact?.content as { payload?: Record<string, unknown> } | undefined)?.payload;
+    expect(checkpointArtifact).toMatchObject({
+      artifactType: 'ToolLoopCheckpoint',
+      redactionPolicy: 'internal_resume_checkpoint',
+    });
+    expect(((checkpointPayload as Record<string, unknown>).llmMessages as Array<Record<string, unknown>>)
       .find((message) => message.role === 'assistant')?.toolCalls).toEqual([
       {
         id: 'tool-call-1',

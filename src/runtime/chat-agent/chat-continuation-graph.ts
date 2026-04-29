@@ -29,6 +29,7 @@ import {
   type FilesystemSaveOutputContinuationPayload,
 } from './chat-continuation-payloads.js';
 import {
+  TOOL_LOOP_CONTINUATION_TYPE_SUSPENDED_APPROVAL,
   readToolLoopContinuationPayload,
   type ToolLoopContinuationPayload,
 } from './tool-loop-continuation.js';
@@ -63,6 +64,11 @@ export interface ChatContinuationGraphApprovalResumeStart {
 
 export interface ChatContinuationArtifactContent extends Record<string, unknown> {
   type: 'chat_continuation';
+  payload: Record<string, unknown>;
+}
+
+export interface ToolLoopCheckpointArtifactContent extends Record<string, unknown> {
+  type: 'tool_loop_checkpoint';
   payload: Record<string, unknown>;
 }
 
@@ -179,12 +185,23 @@ export function recordChatContinuationGraphApproval(input: {
     route: input.action.route,
     operation: input.action.operation,
   }, 'started');
-  const artifact = buildChatContinuationArtifact({
+  const artifacts = buildChatContinuationArtifacts({
     graphId,
     nodeId,
     payload: input.action.continuation,
     createdAt: nowMs,
   });
+  if (artifacts.checkpoint) {
+    input.graphStore.writeArtifact(artifacts.checkpoint);
+    const checkpointRef = artifactRefFromArtifact(artifacts.checkpoint);
+    emit('artifact_created', {
+      artifactId: checkpointRef.artifactId,
+      artifactType: checkpointRef.artifactType,
+      label: checkpointRef.label,
+      ...(checkpointRef.preview ? { preview: checkpointRef.preview } : {}),
+    }, `artifact:${artifacts.checkpoint.artifactId}`);
+  }
+  const artifact = artifacts.continuation;
   input.graphStore.writeArtifact(artifact);
   const artifactRef = artifactRefFromArtifact(artifact);
   emit('artifact_created', {
@@ -238,7 +255,10 @@ export function readChatContinuationGraphResume(input: {
   ]);
   for (const artifactId of artifactIds) {
     const artifact = input.graphStore.getArtifact(payload.graphId, artifactId);
-    const continuation = readChatContinuationArtifact(artifact);
+    const continuation = readChatContinuationArtifact(
+      artifact,
+      (checkpointArtifactId) => input.graphStore?.getArtifact(payload.graphId, checkpointArtifactId) ?? null,
+    );
     if (continuation) {
       return {
         graph: snapshot.graph,
@@ -400,34 +420,51 @@ export function completeChatContinuationGraphResume(input: {
   };
 }
 
-function buildChatContinuationArtifact(input: {
+function buildChatContinuationArtifacts(input: {
   graphId: string;
   nodeId: string;
   payload: ChatContinuationPayload;
   createdAt: number;
-}): ExecutionArtifact<ChatContinuationArtifactContent> {
+}): {
+  continuation: ExecutionArtifact<ChatContinuationArtifactContent>;
+  checkpoint?: ExecutionArtifact<ToolLoopCheckpointArtifactContent>;
+} {
   const descriptor = describeChatContinuationPayload(input.payload);
+  const checkpoint = input.payload.type === TOOL_LOOP_CONTINUATION_TYPE_SUSPENDED_APPROVAL
+    ? buildToolLoopCheckpointArtifact({
+        graphId: input.graphId,
+        nodeId: input.nodeId,
+        payload: input.payload,
+        createdAt: input.createdAt,
+      })
+    : undefined;
   return {
-    artifactId: `artifact:${randomUUID()}`,
-    graphId: input.graphId,
-    nodeId: input.nodeId,
-    artifactType: 'ChatContinuation',
-    label: descriptor.label,
-    preview: descriptor.preview,
-    refs: descriptor.refs,
-    trustLevel: 'trusted',
-    taintReasons: [],
-    redactionPolicy: 'internal_resume_payload',
-    content: {
-      type: CHAT_CONTINUATION_ARTIFACT_CONTENT_TYPE,
-      payload: cloneChatContinuationPayload(input.payload),
+    ...(checkpoint ? { checkpoint } : {}),
+    continuation: {
+      artifactId: `artifact:${randomUUID()}`,
+      graphId: input.graphId,
+      nodeId: input.nodeId,
+      artifactType: 'ChatContinuation',
+      label: descriptor.label,
+      preview: descriptor.preview,
+      refs: descriptor.refs,
+      trustLevel: 'trusted',
+      taintReasons: [],
+      redactionPolicy: 'internal_resume_payload',
+      content: {
+        type: CHAT_CONTINUATION_ARTIFACT_CONTENT_TYPE,
+        payload: checkpoint
+          ? cloneToolLoopContinuationDescriptorPayload(input.payload as ToolLoopContinuationPayload, checkpoint.artifactId)
+          : cloneChatContinuationPayload(input.payload),
+      },
+      createdAt: input.createdAt,
     },
-    createdAt: input.createdAt,
   };
 }
 
 function readChatContinuationArtifact(
   artifact: ExecutionArtifact | null,
+  getArtifact?: (artifactId: string) => ExecutionArtifact | null | undefined,
 ): ChatContinuationPayload | null {
   if (!artifact || artifact.artifactType !== 'ChatContinuation') return null;
   const content = artifact.content;
@@ -436,7 +473,53 @@ function readChatContinuationArtifact(
   }
   return readFilesystemSaveOutputContinuationPayload(content.payload)
     ?? readAutomationAuthoringContinuationPayload(content.payload)
-    ?? readToolLoopContinuationPayload(content.payload);
+    ?? readToolLoopContinuationPayload(content.payload)
+    ?? readToolLoopCheckpointContinuationPayload(content.payload, getArtifact);
+}
+
+function buildToolLoopCheckpointArtifact(input: {
+  graphId: string;
+  nodeId: string;
+  payload: ToolLoopContinuationPayload;
+  createdAt: number;
+}): ExecutionArtifact<ToolLoopCheckpointArtifactContent> {
+  return {
+    artifactId: `artifact:${randomUUID()}`,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    artifactType: 'ToolLoopCheckpoint',
+    label: 'Tool-loop checkpoint',
+    preview: `Checkpoint for ${input.payload.pendingTools.length} approved tool call${input.payload.pendingTools.length === 1 ? '' : 's'}.`,
+    refs: input.payload.pendingTools.map((tool) => tool.name),
+    trustLevel: 'trusted',
+    taintReasons: [...input.payload.taintReasons],
+    redactionPolicy: 'internal_resume_checkpoint',
+    content: {
+      type: 'tool_loop_checkpoint',
+      payload: cloneChatContinuationPayload(input.payload),
+    },
+    createdAt: input.createdAt,
+  };
+}
+
+function readToolLoopCheckpointContinuationPayload(
+  payload: Record<string, unknown>,
+  getArtifact?: (artifactId: string) => ExecutionArtifact | null | undefined,
+): ToolLoopContinuationPayload | null {
+  if (payload.type !== TOOL_LOOP_CONTINUATION_TYPE_SUSPENDED_APPROVAL || !getArtifact) {
+    return null;
+  }
+  const checkpointArtifactId = typeof payload.checkpointArtifactId === 'string'
+    ? payload.checkpointArtifactId.trim()
+    : '';
+  if (!checkpointArtifactId) return null;
+  const checkpoint = getArtifact(checkpointArtifactId);
+  if (!checkpoint || checkpoint.artifactType !== 'ToolLoopCheckpoint') return null;
+  const content = checkpoint.content;
+  if (!isRecord(content) || content.type !== 'tool_loop_checkpoint' || !isRecord(content.payload)) {
+    return null;
+  }
+  return readToolLoopContinuationPayload(content.payload);
 }
 
 function createChatContinuationGraphEvent(input: {
@@ -524,6 +607,37 @@ function cloneChatContinuationPayload(
   return {
     ...payload,
     ...(payload.codeContext ? { codeContext: { ...payload.codeContext } } : {}),
+  };
+}
+
+function cloneToolLoopContinuationDescriptorPayload(
+  payload: ToolLoopContinuationPayload,
+  checkpointArtifactId: string,
+): Record<string, unknown> {
+  return {
+    type: payload.type,
+    checkpointArtifactId,
+    pendingTools: payload.pendingTools.map((tool) => ({
+      approvalId: tool.approvalId,
+      toolCallId: tool.toolCallId,
+      jobId: tool.jobId,
+      name: tool.name,
+    })),
+    referenceTime: payload.referenceTime,
+    allowModelMemoryMutation: payload.allowModelMemoryMutation,
+    activeSkillIds: [...payload.activeSkillIds],
+    contentTrustLevel: payload.contentTrustLevel,
+    taintReasons: [...payload.taintReasons],
+    ...(payload.intentDecision ? { intentDecision: { ...payload.intentDecision } } : {}),
+    ...(payload.codeContext ? { codeContext: { ...payload.codeContext } } : {}),
+    ...(payload.selectedExecutionProfile
+      ? {
+          selectedExecutionProfile: {
+            ...payload.selectedExecutionProfile,
+            fallbackProviderOrder: [...payload.selectedExecutionProfile.fallbackProviderOrder],
+          },
+        }
+      : {}),
   };
 }
 
