@@ -188,6 +188,7 @@ Core harness scripts include:
 | **`scripts/test-contextual-security-uplifts.mjs`** | Contextual-security regression harness: quarantined remote content, trust-aware memory, principal-bound approvals, bounded schedules, runaway controls (Node.js) | ~20 |
 | **`scripts/test-brokered-isolation.mjs`** | Brokered worker smoke harness: isolated worker startup, broker-mediated chat path, and health under agent isolation (Node.js) | focused brokered-worker assertions |
 | **`scripts/test-brokered-approvals.mjs`** | Brokered approval harness: multi-step approvals, broker-mediated continuation, memory-save suppression, and tool-reporting (Node.js) | focused brokered approval assertions |
+| **`scripts/test-cross-domain-orchestration-stress.mjs`** | Cross-domain orchestration stress harness: graph/tool-loop coordination across Second Brain, automations, repo inspection, browser/network, Google Workspace, WHM/cloud, and security tools (Node.js) | focused multi-domain graph assertions |
 | **`scripts/test-skills-routing-harness.mjs`** | Skills routing harness: resolver selection, active-skill context, and skill-backed tool routing through the web channel (Node.js with `tsx`) | focused skills-routing assertions |
 | **`scripts/test-automation-authoring-compiler.mjs`** | Conversational automation compiler harness: native task/workflow compilation, dedupe, and no-script drift (Node.js) | ~12 |
 | **`scripts/test-coding-assistant.mjs`** | Coding-session transport + repo-grounding harness using canonical chat dispatch plus session attachments/overrides, including approval scoping, memory-scope isolation, and optional real Ollama smoke lane (Node.js) | focused Code-session assertions |
@@ -312,6 +313,14 @@ The **preferred method** for automated testing and bug reproduction is to write 
 For planner-path bugs such as tool discovery regressions, "tool is unavailable" chatter, or approval preamble wording, drive the scenario through `POST /api/message`. Direct `POST /api/tools/run` tests validate the approval transport, but they bypass the LLM's tool-selection and response-copy path.
 
 For coding-session regressions, create a backend Code session first, attach the relevant surface, and drive conversation through the normal `POST /api/message` or `POST /api/message/stream` path for that surface. Keep approvals on `POST /api/code/sessions/:id/approvals/:approvalId`, and keep session-state assertions on `GET /api/code/sessions/:id`. Also keep explicit `/api/message` coverage for ad hoc `workspaceRoot`-only coding context and fail-closed handling when a caller supplies an unresolved `metadata.codeContext.sessionId`.
+
+For graph-owned orchestration, delegated verification/retry, multi-domain tool synthesis, or cross-domain approval resume changes, run:
+
+```bash
+node scripts/test-cross-domain-orchestration-stress.mjs
+```
+
+For local debugging, add `--keep-tmp` or set `HARNESS_KEEP_TMP=1` to preserve the harness temp directory.
 
 Recommended Coding Assistant regression loop:
 
