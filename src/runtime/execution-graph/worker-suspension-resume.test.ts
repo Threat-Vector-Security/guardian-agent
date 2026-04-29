@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { SelectedExecutionProfile } from '../execution-profiles.js';
+import { buildWorkerSuspensionEnvelope } from '../worker-suspension.js';
 import {
   buildWorkerSuspensionGraphEvent,
   buildWorkerSuspensionResumeContext,
   emitWorkerSuspensionGraphEvent,
+  reconstructWorkerSuspensionGraphResume,
   workerSuspensionResumeContextToTraceContext,
   type WorkerSuspensionGraphResumeContext,
 } from './worker-suspension-resume.js';
+import { buildWorkerSuspensionArtifact } from './worker-suspension-artifact.js';
 
 describe('worker suspension resume graph helpers', () => {
   it('builds delegated worker suspension resume state without supervisor authority', () => {
@@ -141,6 +144,75 @@ describe('worker suspension resume graph helpers', () => {
     });
     expect(event).not.toHaveProperty('nodeId');
     expect(event).not.toHaveProperty('nodeKind');
+  });
+
+  it('reconstructs worker suspension resume context from graph artifacts', () => {
+    const suspension = suspensionContext();
+    const artifact = buildWorkerSuspensionArtifact({
+      graphId: suspension.graphId,
+      nodeId: suspension.nodeId,
+      artifactId: 'worker-suspension-1',
+      envelope: buildWorkerSuspensionEnvelope({
+        resume: suspension.resume,
+        session: suspension.session,
+      }),
+      createdAt: 1_500,
+    });
+    const resume = reconstructWorkerSuspensionGraphResume({
+      approvalId: 'approval-1',
+      payload: {
+        graphId: suspension.graphId,
+        nodeId: suspension.nodeId,
+        resumeToken: 'resume-token',
+        artifactIds: ['worker-suspension-1'],
+      },
+      pendingAction: {
+        expiresAt: 4_000,
+        scope: {
+          agentId: 'default',
+          userId: 'owner',
+          channel: 'web',
+          surfaceId: 'surface-1',
+        },
+      } as never,
+      graphStore: {
+        getArtifact: (_graphId, artifactId) => artifactId === artifact.artifactId ? artifact : null,
+        getSnapshot: () => ({
+          graph: {
+            graphId: suspension.graphId,
+            executionId: suspension.executionId,
+            rootExecutionId: suspension.rootExecutionId,
+            requestId: suspension.requestId,
+            runId: suspension.runId,
+            securityContext: {
+              channel: suspension.channel,
+              agentId: suspension.agentId,
+              userId: suspension.userId,
+              codeSessionId: suspension.codeSessionId,
+            },
+            artifacts: [{ artifactId: artifact.artifactId }],
+          },
+          events: [{ sequence: 7 }],
+        } as never),
+      },
+    });
+
+    expect(resume).toMatchObject({
+      graphId: suspension.graphId,
+      executionId: suspension.executionId,
+      rootExecutionId: suspension.rootExecutionId,
+      requestId: suspension.requestId,
+      runId: suspension.runId,
+      nodeId: suspension.nodeId,
+      resumeToken: 'resume-token',
+      approvalId: 'approval-1',
+      codeSessionId: suspension.codeSessionId,
+      resume: suspension.resume,
+      session: suspension.session,
+      artifactIds: ['worker-suspension-1'],
+      sequenceStart: 7,
+      expiresAt: 4_000,
+    });
   });
 
   it('projects worker suspension resume context into trace context', () => {

@@ -7,9 +7,11 @@ import {
   buildMutationResumeGraphEvent,
   emitMutationResumeGraphEvent,
   executeWriteSpecMutationNode,
+  reconstructGraphMutationResume,
   resumeWriteSpecMutationNodeAfterApproval,
   type MutationNodeExecutionContext,
 } from './mutation-node.js';
+import { ExecutionGraphStore } from './graph-store.js';
 
 describe('execution graph mutation node', () => {
   it('builds supervisor-owned tool request envelopes for mutation nodes', () => {
@@ -66,6 +68,117 @@ describe('execution graph mutation node', () => {
       output: {
         path: 'tmp/manual-web/approval-graph.txt',
       },
+    });
+  });
+
+  it('reconstructs mutation resume context from graph artifacts and pending action metadata', () => {
+    const store = new ExecutionGraphStore({ now: () => 100 });
+    store.createGraph({
+      graphId: 'graph-resume',
+      executionId: 'exec-resume',
+      rootExecutionId: 'root-resume',
+      requestId: 'request-resume',
+      runId: 'run-resume',
+      intent: {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'modify',
+        summary: 'Write a file.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        entities: {},
+      },
+      securityContext: {
+        agentId: 'guardian',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'surface-1',
+        codeSessionId: 'code-1',
+      },
+      nodes: [
+        {
+          nodeId: 'mutate-1',
+          graphId: 'graph-resume',
+          kind: 'mutate',
+          status: 'pending',
+          title: 'Mutate',
+          requiredInputIds: [],
+          outputArtifactTypes: ['MutationReceipt'],
+          allowedToolCategories: ['filesystem.write'],
+        },
+        {
+          nodeId: 'verify-1',
+          graphId: 'graph-resume',
+          kind: 'verify',
+          status: 'pending',
+          title: 'Verify',
+          requiredInputIds: [],
+          outputArtifactTypes: ['VerificationResult'],
+          allowedToolCategories: ['filesystem.read'],
+        },
+      ],
+    });
+    const writeSpec = buildWriteSpecArtifact({
+      graphId: 'graph-resume',
+      nodeId: 'synthesize-1',
+      artifactId: 'write-spec-resume',
+      path: 'tmp/manual-web/approval-graph.txt',
+      content: 'graph approval ok',
+      createdAt: 110,
+    });
+    store.writeArtifact(writeSpec);
+
+    const resume = reconstructGraphMutationResume({
+      graphStore: store,
+      approvalId: 'approval-1',
+      payload: {
+        graphId: 'graph-resume',
+        nodeId: 'mutate-1',
+        resumeToken: 'resume-token',
+        artifactIds: ['write-spec-resume'],
+      },
+      pendingAction: {
+        expiresAt: 10_000,
+        scope: {
+          agentId: 'guardian',
+          userId: 'owner',
+          channel: 'web',
+          surfaceId: 'surface-1',
+        },
+      } as never,
+    });
+
+    expect(resume).toMatchObject({
+      graphId: 'graph-resume',
+      nodeId: 'mutate-1',
+      resumeToken: 'resume-token',
+      approvalId: 'approval-1',
+      writeSpec,
+      mutationContext: {
+        graphId: 'graph-resume',
+        executionId: 'exec-resume',
+        rootExecutionId: 'root-resume',
+        requestId: 'request-resume',
+        runId: 'run-resume',
+        nodeId: 'mutate-1',
+        verificationNodeId: 'verify-1',
+        codeSessionId: 'code-1',
+      },
+      toolRequest: {
+        origin: 'assistant',
+        requestId: 'request-resume',
+        agentId: 'guardian',
+        userId: 'owner',
+        surfaceId: 'surface-1',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        activeSkills: [],
+      },
+      artifactIds: ['write-spec-resume'],
+      expiresAt: 10_000,
     });
   });
 

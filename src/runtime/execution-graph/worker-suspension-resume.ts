@@ -1,10 +1,15 @@
 import type { UserMessage } from '../../agent/types.js';
+import type { ExecutionArtifact } from './graph-artifacts.js';
+import type { ExecutionGraphSnapshot } from './graph-store.js';
 import type { SelectedExecutionProfile } from '../execution-profiles.js';
 import type { OrchestrationRoleDescriptor } from '../orchestration-role-descriptors.js';
+import type { PendingActionRecord } from '../pending-actions.js';
 import type {
   SerializedWorkerSuspensionSession,
   WorkerSuspensionResumeContext,
 } from '../worker-suspension.js';
+import type { ExecutionGraphResumePayload } from './pending-action-adapter.js';
+import { readWorkerSuspensionArtifact } from './worker-suspension-artifact.js';
 import {
   createExecutionGraphEvent,
   type ExecutionGraphEvent,
@@ -96,6 +101,11 @@ export interface WorkerSuspensionGraphTimeline {
   ingestExecutionGraphEvent?: (event: ExecutionGraphEvent) => void;
 }
 
+export interface WorkerSuspensionGraphResumeStore {
+  getSnapshot(graphId: string): ExecutionGraphSnapshot | null | undefined;
+  getArtifact(graphId: string, artifactId: string): ExecutionArtifact | null | undefined;
+}
+
 export function buildWorkerSuspensionResumeContext(input: {
   worker: WorkerSuspensionResumeWorkerInput;
   request: WorkerSuspensionResumeRequestInput;
@@ -144,6 +154,56 @@ export function buildWorkerSuspensionResumeContext(input: {
     channel: originChannel,
     approvalIds: [...new Set(input.approvalIds.map((id) => id.trim()).filter(Boolean))],
     expiresAt: input.expiresAt,
+  };
+}
+
+export function reconstructWorkerSuspensionGraphResume(input: {
+  pendingAction: PendingActionRecord;
+  payload: ExecutionGraphResumePayload | null;
+  approvalId: string;
+  graphStore?: WorkerSuspensionGraphResumeStore | null;
+}): WorkerSuspensionGraphResumeContext | null {
+  if (!input.payload || !input.graphStore) return null;
+  const snapshot = input.graphStore.getSnapshot(input.payload.graphId);
+  if (!snapshot) return null;
+  const artifactIds = uniqueStrings([
+    ...input.payload.artifactIds,
+    ...(input.pendingAction.graphInterrupt?.artifactRefs.map((artifact) => artifact.artifactId) ?? []),
+  ]);
+  const artifact = artifactIds
+    .map((artifactId) => input.graphStore?.getArtifact(input.payload?.graphId ?? '', artifactId))
+    .find((candidate) => candidate?.artifactType === 'WorkerSuspension');
+  const envelope = readWorkerSuspensionArtifact(artifact);
+  if (!envelope || !envelope.resume.approvalIds.includes(input.approvalId)) {
+    return null;
+  }
+  const graph = snapshot.graph;
+  const sequenceStart = snapshot.events.reduce(
+    (highest, event) => Math.max(highest, event.sequence),
+    0,
+  );
+  return {
+    graphId: graph.graphId,
+    executionId: graph.executionId,
+    rootExecutionId: graph.rootExecutionId,
+    ...(graph.parentExecutionId ? { parentExecutionId: graph.parentExecutionId } : {}),
+    requestId: graph.requestId,
+    ...(graph.runId ? { runId: graph.runId } : {}),
+    nodeId: input.payload.nodeId,
+    resumeToken: input.payload.resumeToken,
+    approvalId: input.approvalId,
+    ...(graph.securityContext.channel ? { channel: graph.securityContext.channel } : {}),
+    ...(graph.securityContext.agentId ? { agentId: graph.securityContext.agentId } : {}),
+    ...(graph.securityContext.userId ? { userId: graph.securityContext.userId } : {}),
+    ...(graph.securityContext.codeSessionId ? { codeSessionId: graph.securityContext.codeSessionId } : {}),
+    resume: envelope.resume,
+    session: envelope.session,
+    artifactIds: uniqueStrings([
+      ...graph.artifacts.map((artifactRef) => artifactRef.artifactId),
+      ...artifactIds,
+    ]),
+    sequenceStart,
+    expiresAt: Math.min(input.pendingAction.expiresAt, envelope.resume.expiresAt, envelope.session.expiresAt),
   };
 }
 
@@ -264,4 +324,16 @@ function cloneSelectedExecutionProfile(profile: SelectedExecutionProfile): Selec
     ...profile,
     fallbackProviderOrder: [...profile.fallbackProviderOrder],
   };
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    unique.push(normalized);
+  }
+  return unique;
 }
