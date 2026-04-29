@@ -233,6 +233,13 @@ describe('RunTimelineStore', () => {
     expect(run?.summary.completedAt).toBeTypeOf('number');
     expect(run?.summary.error).toBe('Canceled by user.');
     expect(run?.liveSummary.label).toBe('Cancelled');
+    expect(run?.items.find((item) => item.id === 'trace:req-cancelled:cancelled')).toMatchObject({
+      id: 'trace:req-cancelled:cancelled',
+      type: 'run_failed',
+      status: 'warning',
+      title: 'Run cancelled',
+      detail: 'Canceled by user.',
+    });
   });
 
   it('adds humanized orchestrator step items for ordinary assistant runs', () => {

@@ -5615,6 +5615,101 @@ describe('WebChannel', () => {
       }]);
     });
 
+    it('keeps long-running stream work inspectable after the client aborts the response', async () => {
+      const requestId = 'req-long-stream-1';
+      let runStatus: 'running' | 'completed' = 'running';
+      let releaseDispatch!: () => void;
+      let markDispatchStarted!: () => void;
+      const dispatchStarted = new Promise<void>((resolve) => {
+        markDispatchStarted = resolve;
+      });
+      const buildRunDetail = () => ({
+        summary: {
+          runId: requestId,
+          groupId: 'web:web-user:agent-1',
+          kind: 'assistant_dispatch' as const,
+          status: runStatus,
+          title: 'Long-running stream request',
+          startedAt: 1,
+          lastUpdatedAt: runStatus === 'running' ? 1 : 2,
+          pendingApprovalCount: 0,
+          verificationPendingCount: 0,
+          tags: ['web', 'message'],
+          ...(runStatus === 'completed' ? { completedAt: 2, durationMs: 1 } : {}),
+        },
+        items: [],
+        liveSummary: {
+          label: runStatus === 'running' ? 'Running' : 'Completed',
+          items: [],
+        },
+      });
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onStreamDispatch: async (_agentId, message) => {
+          expect(message.requestId).toBe(requestId);
+          runStatus = 'running';
+          markDispatchStarted();
+          await new Promise<void>((release) => {
+            releaseDispatch = release;
+          });
+          runStatus = 'completed';
+          return {
+            requestId,
+            runId: requestId,
+            content: 'Long-running work completed.',
+          };
+        },
+        onAssistantRuns: () => ({
+          runs: [buildRunDetail()],
+        }),
+        onAssistantRunDetail: () => buildRunDetail(),
+      };
+
+      web = new WebChannel({ port: 19022, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'fallback' }));
+
+      const controller = new AbortController();
+      const streamPromise = fetch('http://localhost:19022/api/message/stream', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({
+          content: 'Run a long task',
+          requestId,
+          agentId: 'agent-1',
+          surfaceId: 'web-guardian-chat',
+        }),
+      }).catch((err) => err);
+
+      await dispatchStarted;
+
+      const runningRes = await fetch('http://localhost:19022/api/assistant/runs?status=running', { headers: authHeaders });
+      expect(runningRes.status).toBe(200);
+      const runningBody = await runningRes.json() as { runs: Array<{ summary: { runId: string; status: string } }> };
+      expect(runningBody.runs).toEqual([
+        expect.objectContaining({
+          summary: expect.objectContaining({
+            runId: requestId,
+            status: 'running',
+          }),
+        }),
+      ]);
+
+      controller.abort();
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      releaseDispatch();
+      await streamPromise;
+
+      const detailRes = await fetch(`http://localhost:19022/api/assistant/runs/${requestId}`, { headers: authHeaders });
+      expect(detailRes.status).toBe(200);
+      const detailBody = await detailRes.json() as { summary: { runId: string; status: string; completedAt?: number } };
+      expect(detailBody.summary).toMatchObject({
+        runId: requestId,
+        status: 'completed',
+        completedAt: 2,
+      });
+    });
+
     it('POST /api/message/cancel forwards request cancel requests', async () => {
       const calls: Array<{ requestId: string; userId?: string; channel?: string; agentId?: string; reason?: string }> = [];
       const dashboard: DashboardCallbacks = {
