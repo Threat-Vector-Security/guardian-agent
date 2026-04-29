@@ -338,13 +338,13 @@ export class GoogleService {
     consumedParams: Set<string>,
   ): unknown {
     if (!params) return undefined;
-    if (params[paramKey] != null) {
+    if (!consumedParams.has(paramKey) && params[paramKey] != null) {
       consumedParams.add(paramKey);
       return params[paramKey];
     }
     const aliases = RESOURCE_PATH_PARAM_ALIASES[segment as keyof typeof RESOURCE_PATH_PARAM_ALIASES] ?? [];
     for (const alias of aliases) {
-      if (params[alias] != null) {
+      if (!consumedParams.has(alias) && params[alias] != null) {
         consumedParams.add(alias);
         return params[alias];
       }
