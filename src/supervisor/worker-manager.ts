@@ -114,6 +114,7 @@ import {
   completeGraphWriteSpecSynthesisNode,
 } from '../runtime/execution-graph/synthesis-node.js';
 import {
+  buildApprovedMutationToolResult,
   buildMutationToolRequest,
   emitMutationResumeGraphEvent,
   executeWriteSpecMutationNode,
@@ -977,7 +978,7 @@ export class WorkerManager {
 
     const mutationResult = await resumeWriteSpecMutationNodeAfterApproval({
       writeSpec: suspension.writeSpec,
-      approvedToolResult: buildToolResultFromApprovalDecision(options.approvalId, options.approvalResult),
+      approvedToolResult: buildApprovedMutationToolResult(options.approvalId, options.approvalResult),
       executeTool: (toolName, args, request) => this.tools.executeModelTool(toolName, args, request),
       toolRequest: suspension.toolRequest,
       context: {
@@ -3940,24 +3941,6 @@ function buildDelegatedWorkerRunningDetail(
   const profileSuffix = profileLabel ? ` using ${profileLabel}` : '';
   const sessionSuffix = codeSessionId?.trim() ? ` in code session ${codeSessionId.trim()}` : '';
   return `${targetLabel} is working${profileSuffix}${sessionSuffix}.`;
-}
-
-function buildToolResultFromApprovalDecision(
-  approvalId: string,
-  result: ToolApprovalDecisionResult,
-): Record<string, unknown> {
-  const executionSucceeded = result.executionSucceeded
-    ?? result.result?.success
-    ?? (result.job?.status === 'succeeded');
-  return {
-    success: executionSucceeded === true,
-    status: executionSucceeded === true ? 'succeeded' : (result.job?.status ?? 'failed'),
-    approvalId,
-    ...(result.job?.id ? { jobId: result.job.id } : {}),
-    message: result.message,
-    ...(result.result?.output !== undefined ? { output: result.result.output } : {}),
-    ...(result.result?.error ? { error: result.result.error } : {}),
-  };
 }
 
 function readExecutionGraphArtifactsFromMetadata(metadata: Record<string, unknown> | undefined): ExecutionArtifact[] {
