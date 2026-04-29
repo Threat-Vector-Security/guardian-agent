@@ -56,6 +56,8 @@ import {
 import type { ExecutionGraphStore } from '../runtime/execution-graph/graph-store.js';
 import {
   artifactRefFromArtifact,
+  findStoredWriteSpecArtifact,
+  readExecutionGraphArtifactsFromMetadata,
   type ExecutionArtifact,
   type WriteSpecContent,
 } from '../runtime/execution-graph/graph-artifacts.js';
@@ -3941,65 +3943,6 @@ function buildDelegatedWorkerRunningDetail(
   const profileSuffix = profileLabel ? ` using ${profileLabel}` : '';
   const sessionSuffix = codeSessionId?.trim() ? ` in code session ${codeSessionId.trim()}` : '';
   return `${targetLabel} is working${profileSuffix}${sessionSuffix}.`;
-}
-
-function readExecutionGraphArtifactsFromMetadata(metadata: Record<string, unknown> | undefined): ExecutionArtifact[] {
-  const artifacts = metadata?.executionGraphArtifacts;
-  if (!Array.isArray(artifacts)) {
-    return [];
-  }
-  return artifacts
-    .map((artifact) => normalizeExecutionArtifact(artifact))
-    .filter((artifact): artifact is ExecutionArtifact => !!artifact);
-}
-
-function findStoredWriteSpecArtifact(input: {
-  graphStore: Pick<ExecutionGraphStore, 'getArtifact' | 'listArtifacts'>;
-  graphId: string;
-  artifactIds: string[];
-}): ExecutionArtifact<WriteSpecContent> | null {
-  for (const artifactId of uniqueStrings(input.artifactIds)) {
-    const artifact = input.graphStore.getArtifact(input.graphId, artifactId);
-    if (isWriteSpecArtifact(artifact)) {
-      return artifact;
-    }
-  }
-  return input.graphStore.listArtifacts(input.graphId).find(isWriteSpecArtifact) ?? null;
-}
-
-function isWriteSpecArtifact(
-  artifact: ExecutionArtifact | null | undefined,
-): artifact is ExecutionArtifact<WriteSpecContent> {
-  if (!artifact || artifact.artifactType !== 'WriteSpec') {
-    return false;
-  }
-  const content = artifact.content as Partial<WriteSpecContent>;
-  return content.operation === 'write_file'
-    && typeof content.path === 'string'
-    && typeof content.append === 'boolean'
-    && typeof content.content === 'string'
-    && typeof content.contentHash === 'string'
-    && typeof content.contentBytes === 'number'
-    && Array.isArray(content.sourceArtifactIds);
-}
-
-function normalizeExecutionArtifact(value: unknown): ExecutionArtifact | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null;
-  }
-  const artifact = value as Record<string, unknown>;
-  if (
-    typeof artifact.artifactId !== 'string'
-    || typeof artifact.graphId !== 'string'
-    || typeof artifact.nodeId !== 'string'
-    || typeof artifact.artifactType !== 'string'
-    || typeof artifact.label !== 'string'
-    || typeof artifact.content !== 'object'
-    || artifact.content === null
-  ) {
-    return null;
-  }
-  return artifact as unknown as ExecutionArtifact;
 }
 
 function uniqueStrings(values: string[]): string[] {
