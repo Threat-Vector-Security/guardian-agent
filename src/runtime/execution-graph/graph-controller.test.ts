@@ -8,6 +8,7 @@ import {
   type ExecutionArtifact,
 } from './graph-artifacts.js';
 import {
+  buildGraphControlledFailureResponse,
   buildGraphControlledTaskRunId,
   buildGraphReadOnlyIntentGatewayRecord,
   createGraphControlledRun,
@@ -144,6 +145,24 @@ describe('graph-controller boundary', () => {
 
   it('keeps graph-controlled task run ids deterministic for request ids', () => {
     expect(buildGraphControlledTaskRunId('request-1')).toBe('graph-run:request-1');
+  });
+
+  it('builds graph-controlled failure responses with execution metadata', () => {
+    expect(buildGraphControlledFailureResponse({
+      executionProfile: localProfile,
+      reason: 'Read node did not produce evidence.',
+      graphId: 'graph-1',
+    })).toEqual({
+      content: 'Execution graph could not complete the request: Read node did not produce evidence.',
+      metadata: {
+        executionProfile: localProfile,
+        executionGraph: {
+          graphId: 'graph-1',
+          status: 'failed',
+          reason: 'Read node did not produce evidence.',
+        },
+      },
+    });
   });
 
   it('creates the graph shell and owns graph event/artifact projection', () => {

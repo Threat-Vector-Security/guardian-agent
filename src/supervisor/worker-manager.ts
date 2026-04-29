@@ -124,6 +124,7 @@ import {
 } from '../runtime/execution-graph/pending-action-adapter.js';
 import {
   buildGraphControlledTaskRunId,
+  buildGraphControlledFailureResponse,
   buildGraphReadOnlyIntentGatewayRecord,
   createGraphControlledRun,
   selectGraphControllerExecutionProfile,
@@ -479,27 +480,6 @@ export class WorkerManager {
     }
   }
 
-  private buildGraphControlledFailureResponse(
-    input: {
-      request: WorkerMessageRequest;
-      effectiveIntentDecision?: IntentGatewayDecision;
-    },
-    reason: string,
-    graphId?: string,
-  ): { content: string; metadata?: Record<string, unknown> } {
-    return {
-      content: `Execution graph could not complete the request: ${reason}`,
-      metadata: {
-        executionProfile: input.request.executionProfile ?? undefined,
-        executionGraph: {
-          ...(graphId ? { graphId } : {}),
-          status: 'failed',
-          reason,
-        },
-      },
-    };
-  }
-
   private async runGraphControlledExecution(input: {
     request: WorkerMessageRequest;
     target: ResolvedDelegatedTargetMetadata;
@@ -524,7 +504,10 @@ export class WorkerManager {
       originalRequest: input.request.message.content,
     });
     if (!gatewayRecord) {
-      return this.buildGraphControlledFailureResponse(input, 'Graph-controlled execution could not derive a read-only routing decision.');
+      return buildGraphControlledFailureResponse({
+        executionProfile: input.request.executionProfile,
+        reason: 'Graph-controlled execution could not derive a read-only routing decision.',
+      });
     }
     const graphExecutionProfile = selectGraphControllerExecutionProfile({
       runtime: this.runtime,
@@ -568,7 +551,11 @@ export class WorkerManager {
         emitGraphEvent('node_failed', { reason }, `${nodeId}:failed`, { nodeId, nodeKind });
       }
       emitGraphEvent('graph_failed', { reason }, 'graph:failed');
-      return this.buildGraphControlledFailureResponse(input, reason, graphId);
+      return buildGraphControlledFailureResponse({
+        executionProfile: input.request.executionProfile,
+        reason,
+        graphId,
+      });
     };
 
     emitGraphEvent('graph_started', {
