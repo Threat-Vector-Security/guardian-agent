@@ -603,6 +603,179 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('rejects mixed-domain source-bullet answers that omit a requested source', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Search web, repo, and memory evidence before answering.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the web for the title of https://example.com.', expectedToolCategories: ['web_search'], required: true },
+        { kind: 'search', summary: 'Search this workspace for execution graph approval resume events.', expectedToolCategories: ['fs_search'], required: true },
+        { kind: 'search', summary: 'Search memory for SMOKE-MEM-42801.', expectedToolCategories: ['memory_search'], required: true },
+        { kind: 'answer', summary: 'Return exactly three bullets with one source per bullet.', required: true, dependsOn: ['step_1', 'step_2', 'step_3'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = [
+      '- Web: https://example.com title is "Example Domain".',
+      '- Memory: SMOKE-MEM-42801 found.',
+    ].join('\n');
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+        stepReceipts: taskContract.plan.steps.map((step, index) => ({
+          stepId: step.stepId,
+          status: 'satisfied',
+          evidenceReceiptIds: [`receipt-${index + 1}`],
+          summary: index === 3 ? finalAnswer : `Satisfied ${step.stepId}.`,
+          startedAt: index + 1,
+          endedAt: index + 2,
+        })),
+        evidenceReceipts: [
+          {
+            receiptId: 'receipt-1',
+            sourceType: 'tool_call',
+            toolName: 'web_search',
+            status: 'succeeded',
+            refs: ['https://example.com/'],
+            summary: 'Found title Example Domain.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            receiptId: 'receipt-2',
+            sourceType: 'tool_call',
+            toolName: 'fs_search',
+            status: 'succeeded',
+            refs: ['src/runtime/execution/graph.ts'],
+            summary: 'Found approval resume events in the execution graph.',
+            startedAt: 3,
+            endedAt: 4,
+          },
+          {
+            receiptId: 'receipt-3',
+            sourceType: 'tool_call',
+            toolName: 'memory_search',
+            status: 'succeeded',
+            refs: ['memory:smoke'],
+            summary: 'Found SMOKE-MEM-42801.',
+            startedAt: 5,
+            endedAt: 6,
+          },
+        ],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['step_4'],
+    });
+    expect(decision.reasons[0]).toContain('one source-labeled bullet');
+  });
+
+  it('rejects mixed-domain source-bullet answers that combine requested sources', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Search web, repo, and memory evidence before answering.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the web for the title of https://example.com.', expectedToolCategories: ['web_search'], required: true },
+        { kind: 'search', summary: 'Search this workspace for execution graph approval resume events.', expectedToolCategories: ['fs_search'], required: true },
+        { kind: 'search', summary: 'Search memory for SMOKE-MEM-42801.', expectedToolCategories: ['memory_search'], required: true },
+        { kind: 'answer', summary: 'Return exactly three bullets with one source per bullet.', required: true, dependsOn: ['step_1', 'step_2', 'step_3'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = [
+      '- Web / Workspace: Example Domain is the page title, and src/runtime/execution/graph.ts emits approval resume events.',
+      '- Memory: SMOKE-MEM-42801 found.',
+      '- Summary: All requested sources were checked.',
+    ].join('\n');
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+        stepReceipts: taskContract.plan.steps.map((step, index) => ({
+          stepId: step.stepId,
+          status: 'satisfied',
+          evidenceReceiptIds: [`receipt-${index + 1}`],
+          summary: index === 3 ? finalAnswer : `Satisfied ${step.stepId}.`,
+          startedAt: index + 1,
+          endedAt: index + 2,
+        })),
+        evidenceReceipts: [
+          {
+            receiptId: 'receipt-1',
+            sourceType: 'tool_call',
+            toolName: 'web_search',
+            status: 'succeeded',
+            refs: ['https://example.com/'],
+            summary: 'Found title Example Domain.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            receiptId: 'receipt-2',
+            sourceType: 'tool_call',
+            toolName: 'fs_search',
+            status: 'succeeded',
+            refs: ['src/runtime/execution/graph.ts'],
+            summary: 'Found approval resume events in the execution graph.',
+            startedAt: 3,
+            endedAt: 4,
+          },
+          {
+            receiptId: 'receipt-3',
+            sourceType: 'tool_call',
+            toolName: 'memory_search',
+            status: 'succeeded',
+            refs: ['memory:smoke'],
+            summary: 'Found SMOKE-MEM-42801.',
+            startedAt: 5,
+            endedAt: 6,
+          },
+        ],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['step_4'],
+    });
+    expect(decision.reasons[0]).toContain('combined multiple requested evidence domains');
+  });
+
   it('rejects mixed-domain implementation-location answers that cite only repo search-hit files', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'general_assistant',
