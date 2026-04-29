@@ -7279,6 +7279,68 @@ describe('ToolExecutor', () => {
     expect(contentMatch?.snippet).toContain('Code GRC');
   });
 
+  it('falls back to ranked term matching for natural-language content searches with no exact phrase hit', async () => {
+    const root = createExecutorRoot();
+    mkdirSync(join(root, 'src', 'runtime', 'execution-graph'), { recursive: true });
+    await writeFile(
+      join(root, 'src', 'runtime', 'execution-graph', 'mutation-node.ts'),
+      [
+        'export function emitMutationResumeGraphEvent(input: unknown) {',
+        "  const event = { kind: 'mutation_resume', approval: true };",
+        '  return event;',
+        '}',
+      ].join('\n'),
+      'utf-8',
+    );
+    await writeFile(
+      join(root, 'src', 'runtime', 'execution-graph', 'unrelated.ts'),
+      'export const graphNode = true;',
+      'utf-8',
+    );
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'fs_search',
+      args: {
+        path: '.',
+        query: 'where execution graph mutation approval resume events are emitted',
+        mode: 'content',
+      },
+      origin: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    const output = result.output as {
+      matches: Array<{
+        relativePath: string;
+        matchType: string;
+        matchedTerms?: string[];
+        snippet?: string;
+      }>;
+    };
+    expect(output.matches[0]).toMatchObject({
+      relativePath: 'src/runtime/execution-graph/mutation-node.ts',
+      matchType: 'content',
+    });
+    expect(output.matches[0]?.matchedTerms).toEqual(expect.arrayContaining([
+      'graph',
+      'mutation',
+      'approval',
+      'resume',
+      'events',
+      'emitted',
+    ]));
+    expect(output.matches[0]?.snippet).toContain('emitMutationResumeGraphEvent');
+  });
+
   it('searches large text files by content with the default search budget', async () => {
     const root = createExecutorRoot();
     mkdirSync(join(root, 'src'), { recursive: true });
