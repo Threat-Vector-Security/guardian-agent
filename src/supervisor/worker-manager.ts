@@ -55,9 +55,6 @@ import {
 } from '../runtime/execution-graph/graph-events.js';
 import type { ExecutionGraphStore } from '../runtime/execution-graph/graph-store.js';
 import {
-  artifactRefFromArtifact,
-} from '../runtime/execution-graph/graph-artifacts.js';
-import {
   type DirectReasoningGraphContext,
 } from '../runtime/execution-graph/direct-reasoning-node.js';
 import {
@@ -95,11 +92,8 @@ import {
 } from '../runtime/execution-graph/delegated-worker-retry.js';
 import { runDelegatedWorkerRetryInvocation } from '../runtime/execution-graph/delegated-worker-retry-invocation.js';
 import {
-  buildWorkerSuspensionArtifact,
-} from '../runtime/execution-graph/worker-suspension-artifact.js';
-import {
-  buildWorkerSuspensionResumeContext,
   emitWorkerSuspensionGraphEvent,
+  recordDelegatedWorkerGraphPendingApprovalAction,
   recordWorkerSuspensionGraphContinuationPendingAction,
   reconstructWorkerSuspensionGraphResume,
   workerSuspensionResumeContextToTraceContext,
@@ -157,7 +151,6 @@ import {
 } from '../worker/automation-resume.js';
 import {
   attachWorkerSuspensionMetadata,
-  buildWorkerSuspensionEnvelope,
   readWorkerSuspensionMetadata,
 } from '../runtime/worker-suspension.js';
 import type {
@@ -2860,84 +2853,6 @@ export class WorkerManager {
     }
   }
 
-  private recordDelegatedGraphPendingApprovalAction(input: {
-    worker: WorkerProcess;
-    request: WorkerMessageRequest;
-    result: { metadata?: Record<string, unknown> };
-    target: ResolvedDelegatedTargetMetadata;
-    taskRunId: string;
-    intentDecision?: IntentGatewayDecision;
-    graphCompletion?: DelegatedWorkerGraphCompletion;
-    approvalMetadata: {
-      approvalIds: string[];
-      approvalSummaries: PendingActionApprovalSummary[];
-      prompt: string;
-    };
-  }): PendingActionRecord | null {
-    const store = this.observability.pendingActionStore;
-    const graphStore = this.observability.executionGraphStore;
-    const graphCompletion = input.graphCompletion;
-    const interruption = graphCompletion?.interruptEvent;
-    const workerSuspension = readWorkerSuspensionMetadata(input.result.metadata);
-    if (!store || !graphStore || !graphCompletion || !interruption || !workerSuspension) {
-      return null;
-    }
-    const originChannel = input.request.delegation?.originChannel?.trim()
-      || input.request.message.channel;
-    const surfaceId = input.request.message.surfaceId?.trim()
-      || input.request.delegation?.originSurfaceId?.trim()
-      || input.request.message.channel;
-    const nowMs = this.observability.now?.() ?? Date.now();
-    const resume = buildWorkerSuspensionResumeContext({
-      worker: input.worker,
-      request: input.request,
-      target: input.target,
-      taskRunId: input.taskRunId,
-      approvalIds: input.approvalMetadata.approvalIds,
-      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
-    });
-    const suspensionArtifact = buildWorkerSuspensionArtifact({
-      graphId: interruption.graphId,
-      nodeId: interruption.nodeId ?? graphCompletion.metadata.nodeId,
-      envelope: buildWorkerSuspensionEnvelope({
-        resume,
-        session: workerSuspension,
-      }),
-      createdAt: nowMs,
-    });
-    graphStore.writeArtifact(suspensionArtifact);
-    const artifactRefs = [
-      ...(graphCompletion.verificationArtifactRef ? [graphCompletion.verificationArtifactRef] : []),
-      artifactRefFromArtifact(suspensionArtifact),
-    ];
-    return recordGraphPendingActionInterrupt({
-      store,
-      scope: {
-        agentId: input.request.agentId,
-        userId: input.request.userId,
-        channel: originChannel,
-        surfaceId,
-      },
-      event: interruption,
-      originalUserContent: input.request.message.content,
-      intent: {
-        ...(input.intentDecision?.route ? { route: input.intentDecision.route } : {}),
-        ...(input.intentDecision?.operation ? { operation: input.intentDecision.operation } : {}),
-        ...(input.intentDecision?.summary ? { summary: input.intentDecision.summary } : {}),
-        ...(input.intentDecision?.turnRelation ? { turnRelation: input.intentDecision.turnRelation } : {}),
-        ...(input.intentDecision?.resolution ? { resolution: input.intentDecision.resolution } : {}),
-        ...(input.intentDecision?.missingFields?.length ? { missingFields: input.intentDecision.missingFields } : {}),
-        ...(input.intentDecision?.resolvedContent ? { resolvedContent: input.intentDecision.resolvedContent } : {}),
-        ...(input.intentDecision?.provenance ? { provenance: input.intentDecision.provenance } : {}),
-        ...(input.intentDecision?.entities ? { entities: input.intentDecision.entities as Record<string, unknown> } : {}),
-      },
-      artifactRefs,
-      approvalSummaries: input.approvalMetadata.approvalSummaries,
-      nowMs,
-      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
-    });
-  }
-
   private recordDelegatedPendingApprovalAction(input: {
     worker: WorkerProcess;
     request: WorkerMessageRequest;
@@ -2950,9 +2865,19 @@ export class WorkerManager {
     if (!this.observability.pendingActionStore) return null;
     const approvalMetadata = readDelegatedPendingApprovalMetadata(input.result.metadata);
     if (!approvalMetadata) return null;
-    return this.recordDelegatedGraphPendingApprovalAction({
-      ...input,
+    return recordDelegatedWorkerGraphPendingApprovalAction({
+      store: this.observability.pendingActionStore,
+      graphStore: this.observability.executionGraphStore,
+      worker: input.worker,
+      request: input.request,
+      target: input.target,
+      taskRunId: input.taskRunId,
+      graphCompletion: input.graphCompletion,
       approvalMetadata,
+      workerSuspension: readWorkerSuspensionMetadata(input.result.metadata),
+      intentDecision: input.intentDecision,
+      now: this.observability.now,
+      ttlMs: PENDING_APPROVAL_TTL_MS,
     });
   }
 

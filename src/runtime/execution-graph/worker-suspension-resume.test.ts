@@ -5,6 +5,7 @@ import {
   buildWorkerSuspensionGraphEvent,
   buildWorkerSuspensionResumeContext,
   emitWorkerSuspensionGraphEvent,
+  recordDelegatedWorkerGraphPendingApprovalAction,
   recordWorkerSuspensionGraphContinuationPendingAction,
   reconstructWorkerSuspensionGraphResume,
   workerSuspensionResumeContextToTraceContext,
@@ -308,6 +309,113 @@ describe('worker suspension resume graph helpers', () => {
       nodeId: suspension.nodeId,
     });
     expect(replacements).toHaveLength(1);
+  });
+
+  it('records delegated worker graph approval pending actions with origin surface scope', () => {
+    const suspension = suspensionContext();
+    const interruption = buildWorkerSuspensionGraphEvent({
+      suspension,
+      kind: 'interruption_requested',
+      payloadDetails: {
+        kind: 'approval',
+        approvalIds: ['approval-1'],
+        resumeToken: 'resume-token-1',
+      },
+      eventKey: 'approval-requested',
+      sequence: 8,
+      timestamp: 10_000,
+    });
+    const writtenArtifacts: unknown[] = [];
+    const pending = recordDelegatedWorkerGraphPendingApprovalAction({
+      worker: {
+        id: 'worker-1',
+        workerSessionKey: 'session-1::default',
+        sessionId: 'session-1',
+        agentId: 'default',
+      },
+      request: {
+        agentId: 'default',
+        userId: 'owner',
+        message: {
+          id: 'message-1',
+          content: 'Create the draft.',
+          channel: 'worker-internal:surface',
+          principalId: 'principal-owner',
+          principalRole: 'owner',
+        },
+        delegation: {
+          requestId: 'request-1',
+          originChannel: 'web',
+          originSurfaceId: 'web-surface',
+        },
+        executionProfile: executionProfile(),
+      },
+      target: {
+        agentName: 'Workspace Explorer',
+        orchestration: { role: 'explorer', label: 'Explorer' },
+      },
+      taskRunId: 'task-1',
+      graphCompletion: {
+        metadata: { nodeId: suspension.nodeId },
+        interruptEvent: interruption,
+      },
+      approvalMetadata: {
+        approvalIds: ['approval-1'],
+        approvalSummaries: [{
+          id: 'approval-1',
+          toolName: 'fs_write',
+          argsPreview: '{"path":"tmp/draft.txt"}',
+        }],
+        prompt: 'Approve the write.',
+      },
+      workerSuspension: suspension.session,
+      intentDecision: {
+        route: 'coding_task',
+        operation: 'modify',
+        summary: 'Create the draft.',
+      },
+      now: () => 20_000,
+      ttlMs: 5_000,
+      graphStore: {
+        appendEvent: () => undefined,
+        writeArtifact: (artifact) => writtenArtifacts.push(artifact),
+      },
+      store: {
+        replaceActive: (scope, replacement, nowMs) => ({
+          id: 'pending-1',
+          createdAt: nowMs,
+          updatedAt: nowMs,
+          scope,
+          ...replacement,
+        }),
+      },
+    });
+
+    expect(pending).toMatchObject({
+      scope: {
+        agentId: 'default',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-surface',
+      },
+      blocker: {
+        kind: 'approval',
+        approvalIds: ['approval-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'modify',
+        summary: 'Create the draft.',
+        originalUserContent: 'Create the draft.',
+      },
+      expiresAt: 25_000,
+    });
+    expect(writtenArtifacts).toHaveLength(1);
+    expect(writtenArtifacts[0]).toMatchObject({
+      artifactType: 'WorkerSuspension',
+      graphId: suspension.graphId,
+      nodeId: suspension.nodeId,
+    });
   });
 
   it('projects worker suspension resume context into trace context', () => {
