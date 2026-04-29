@@ -97,6 +97,10 @@ export function verifyDelegatedResult(input: {
     if (ongoingAnswerFailure) {
       return ongoingAnswerFailure;
     }
+    const repoEvidenceFailure = verifyRepoEvidenceQuality(input.envelope);
+    if (repoEvidenceFailure) {
+      return repoEvidenceFailure;
+    }
     const exactFileReferenceFailure = verifyExactFileReferenceRequirements(input.envelope);
     if (exactFileReferenceFailure) {
       return exactFileReferenceFailure;
@@ -453,6 +457,93 @@ function verifyExactFileReferenceRequirements(
     };
   }
   return null;
+}
+
+const REPO_EVIDENCE_TOOL_NAMES = new Set([
+  'fs_search',
+  'fs_read',
+  'fs_list',
+  'code_symbol_search',
+]);
+const REPO_EVIDENCE_CATEGORY_NAMES = new Set([
+  'repo',
+  'repository',
+  'repo_inspect',
+  'repo_inspection',
+  'fs_search',
+  'fs_read',
+  'fs_list',
+  'code_symbol_search',
+]);
+const REPO_NO_MATCH_ANSWER_PATTERN = /\b(?:no\s+(?:content\s+)?matches?\s+(?:were\s+)?found|no\s+results?\s+(?:were\s+)?found|could(?:\s+not|n't)\s+find|did(?:\s+not|n't)\s+find|not\s+found)\b/i;
+const IMPLEMENTATION_LOCATION_REQUEST_PATTERN = /\b(?:where|which|what|exact|identify|locate|show|list|find|search)\b[\s\S]{0,180}\b(?:implement|implements|implemented|define|defines|defined|called|calls|callers?|emitted|emits?|triggered|fires?|published|registered|wired|handled|handles|render|renders|rendered|own|owns|responsible|file|files|function|functions|symbol|symbols|path|paths)\b/i;
+
+function verifyRepoEvidenceQuality(
+  envelope: DelegatedResultEnvelope,
+): VerificationDecision | null {
+  const answer = envelope.finalUserAnswer?.trim() || '';
+  if (!answer || !REPO_NO_MATCH_ANSWER_PATTERN.test(answer)) {
+    return null;
+  }
+  const successfulRepoReceipts = envelope.evidenceReceipts.filter((receipt) => (
+    receipt.status === 'succeeded'
+    && receipt.sourceType === 'tool_call'
+    && typeof receipt.toolName === 'string'
+    && REPO_EVIDENCE_TOOL_NAMES.has(receipt.toolName)
+  ));
+  if (successfulRepoReceipts.length <= 0) {
+    return null;
+  }
+  const successfulRepoReceiptIds = new Set(successfulRepoReceipts.map((receipt) => receipt.receiptId));
+  const repoFileClaims = envelope.claims.filter((claim) => (
+    (claim.kind === 'file_reference' || claim.kind === 'implementation_file')
+    && claim.evidenceReceiptIds.some((receiptId) => successfulRepoReceiptIds.has(receiptId))
+  ));
+  const hasRepoEvidenceRefs = successfulRepoReceipts.some((receipt) => receipt.refs.length > 0)
+    || repoFileClaims.length > 0;
+  if (hasRepoEvidenceRefs) {
+    return null;
+  }
+
+  const requiresLocationEvidence = envelope.taskContract.requireExactFileReferences === true
+    || envelope.taskContract.answerConstraints?.requiresImplementationFiles === true
+    || envelope.taskContract.answerConstraints?.requiresSymbolNames === true
+    || contractLooksLikeImplementationLocationRequest(envelope);
+  if (!requiresLocationEvidence) {
+    return null;
+  }
+  const repoStepIds = findRepoEvidenceStepIds(envelope.taskContract.plan.steps);
+  const answerStepIds = findAnswerStepIds(envelope.taskContract.plan);
+  return {
+    decision: 'insufficient',
+    reasons: ['Delegated worker reported no repo matches for an implementation-location request without backed repo file evidence.'],
+    retryable: true,
+    requiredNextAction: 'Retry the delegated run with targeted repo inspection; broaden or adjust the source query and inspect likely directories before concluding no implementation path exists.',
+    missingEvidenceKinds: ['repo_evidence'],
+    unsatisfiedStepIds: [...new Set([...repoStepIds, ...answerStepIds])],
+  };
+}
+
+function contractLooksLikeImplementationLocationRequest(envelope: DelegatedResultEnvelope): boolean {
+  const summaries = [
+    envelope.taskContract.summary,
+    ...envelope.taskContract.plan.steps.map((step) => step.summary),
+  ]
+    .filter((summary): summary is string => typeof summary === 'string' && summary.trim().length > 0)
+    .join(' ');
+  return IMPLEMENTATION_LOCATION_REQUEST_PATTERN.test(summaries);
+}
+
+function findRepoEvidenceStepIds(
+  steps: DelegatedResultEnvelope['taskContract']['plan']['steps'],
+): string[] {
+  return steps
+    .filter((step) => step.kind === 'search' || step.kind === 'read' || step.kind === 'tool_call')
+    .filter((step) => step.expectedToolCategories?.some((category) => (
+      REPO_EVIDENCE_CATEGORY_NAMES.has(category.trim())
+      || category.trim() === 'runtime_evidence'
+    )) === true)
+    .map((step) => step.stepId);
 }
 
 interface RepoInspectionVerificationResult {
