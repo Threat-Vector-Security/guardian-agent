@@ -1,4 +1,5 @@
 import { scanWriteContent } from '../../guardian/argument-sanitizer.js';
+import type { ToolApprovalDecisionResult } from '../../tools/executor.js';
 import type { ToolExecutionRequest } from '../../tools/types.js';
 import {
   artifactRefFromArtifact,
@@ -98,6 +99,24 @@ export function buildMutationToolRequest(
     ...(input.codeContext ? { codeContext: input.codeContext } : {}),
     toolContextMode: input.toolContextMode,
     activeSkills: input.activeSkillIds ?? [],
+  };
+}
+
+export function buildApprovedMutationToolResult(
+  approvalId: string,
+  result: ToolApprovalDecisionResult,
+): Record<string, unknown> {
+  const executionSucceeded = result.executionSucceeded
+    ?? result.result?.success
+    ?? (result.job?.status === 'succeeded');
+  return {
+    success: executionSucceeded === true,
+    status: executionSucceeded === true ? 'succeeded' : (result.job?.status ?? 'failed'),
+    approvalId,
+    ...(result.job?.id ? { jobId: result.job.id } : {}),
+    message: result.message,
+    ...(result.result?.output !== undefined ? { output: result.result.output } : {}),
+    ...(result.result?.error ? { error: result.result.error } : {}),
   };
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ToolExecutionRequest } from '../../tools/types.js';
 import { buildSearchResultSetArtifact, buildWriteSpecArtifact } from './graph-artifacts.js';
 import {
+  buildApprovedMutationToolResult,
   buildMutationToolRequest,
   buildMutationResumeGraphEvent,
   emitMutationResumeGraphEvent,
@@ -39,6 +40,32 @@ describe('execution graph mutation node', () => {
       },
       toolContextMode: 'tight',
       activeSkills: ['repo-search'],
+    });
+  });
+
+  it('normalizes approved ToolExecutor decisions into mutation receipt inputs', () => {
+    expect(buildApprovedMutationToolResult('approval-1', {
+      success: true,
+      approved: true,
+      executionSucceeded: true,
+      message: 'Approved and executed.',
+      result: {
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-1',
+        message: 'Wrote file.',
+        output: {
+          path: 'tmp/manual-web/approval-graph.txt',
+        },
+      },
+    })).toEqual({
+      success: true,
+      status: 'succeeded',
+      approvalId: 'approval-1',
+      message: 'Approved and executed.',
+      output: {
+        path: 'tmp/manual-web/approval-graph.txt',
+      },
     });
   });
 
