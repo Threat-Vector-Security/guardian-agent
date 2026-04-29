@@ -247,6 +247,24 @@ export function createGraphControlledRun(input: {
   };
 }
 
+export function buildGraphControlledFailureResponse(input: {
+  executionProfile?: SelectedExecutionProfile;
+  reason: string;
+  graphId?: string;
+}): { content: string; metadata: Record<string, unknown> } {
+  return {
+    content: `Execution graph could not complete the request: ${input.reason}`,
+    metadata: {
+      executionProfile: input.executionProfile ?? undefined,
+      executionGraph: {
+        ...(input.graphId ? { graphId: input.graphId } : {}),
+        status: 'failed',
+        reason: input.reason,
+      },
+    },
+  };
+}
+
 function cloneReadOnlyPlannedStepsFromTaskContract(
   taskContract: DelegatedResultEnvelope['taskContract'],
 ): NonNullable<IntentGatewayDecision['plannedSteps']> | undefined {

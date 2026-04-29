@@ -1464,6 +1464,14 @@ Checkpoint after the delegated-worker graph-start ownership cleanup:
 - The rebuilt app was restarted with `scripts/start-dev-windows.ps1 -StartOnly`; `GET http://localhost:3000/api/status` and `GET http://localhost:3000/api/providers` confirmed the live API/provider state. `GET /api/routing/status` is not an app endpoint.
 - Live API replay with request id `codex-live-graph-start-42807` proved delegated graph startup still works after the ownership move: the mixed web + repo + memory request completed through `ollama-cloud-tools` / `glm-4.7`, returned a completed `executionGraph`, satisfied delegated verification, emitted web/search/memory receipts, and showed no provider fallback.
 
+Checkpoint after the graph-controlled failure metadata cleanup:
+
+- `src/runtime/execution-graph/graph-controller.ts` now owns `buildGraphControlledFailureResponse`, keeping graph-controlled failure content and `executionGraph` metadata with the graph controller instead of a `WorkerManager` private method.
+- `WorkerManager` still decides when a graph-controlled run has failed and still emits the failure graph event, but it delegates user-facing failure metadata assembly to the graph controller.
+- This is a narrow ownership cleanup for graph-controlled read/write runs. It does not change routing, mutation execution, approval policy, provider/profile selection, or brokered-worker authority boundaries.
+- Focused coverage passed: `npx vitest run src/runtime/execution-graph/graph-controller.test.ts src/supervisor/worker-manager.test.ts` reported 52 passing tests.
+- Local gates passed after the cleanup: `npm run check` and `npm run build`.
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.
