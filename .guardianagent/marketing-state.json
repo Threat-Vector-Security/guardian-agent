@@ -244,6 +244,16 @@
       "status": "draft",
       "createdAt": 1777426616324,
       "updatedAt": 1777426616324
+    },
+    {
+      "id": "a50e84d6-270e-49e8-8ad8-0c595ca7e411",
+      "name": "Guardian Stress Follow-up",
+      "subjectTemplate": "Guardian status follow-up",
+      "bodyTemplate": "Review the latest Guardian orchestration status.",
+      "contactIds": [],
+      "status": "draft",
+      "createdAt": 1777426877896,
+      "updatedAt": 1777426877896
     }
   ],
   "runs": []
