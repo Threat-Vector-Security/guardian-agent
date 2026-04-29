@@ -788,7 +788,41 @@ export async function executeDirectReasoningLoop(input: {
     }
   }
 
-  if (directReasoningHasUsefulEvidence(evidence)) {
+  const definitionCallSiteCompletion = buildDirectReasoningDefinitionCallSiteCompletion({
+    content: finalContent,
+    evidence,
+    input: input.input,
+  });
+  if (definitionCallSiteCompletion) {
+    finalContent = definitionCallSiteCompletion.replaceContent
+      ? definitionCallSiteCompletion.content
+      : `${finalContent.trim()}\n\n${definitionCallSiteCompletion.content}`.trim();
+    synthesized = true;
+    recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_coverage_revision', {
+      route: input.input.gateway?.decision.route,
+      operation: input.input.gateway?.decision.operation,
+      phase: 'deterministic_completion',
+      resultStatus: definitionCallSiteCompletion.replaceContent ? 'replaced' : 'appended',
+      missingCoverageFiles: definitionCallSiteCompletion.files,
+      coverageFileCount: definitionCallSiteCompletion.coverageFileCount,
+    });
+    const draftArtifact = createDirectReasoningSynthesisDraftArtifact(artifactState, finalContent, now());
+    input.graphEmitter?.emit(
+      'artifact_created',
+      artifactEventPayload(draftArtifact.artifact, draftArtifact.validation),
+      `artifact:${draftArtifact.artifact.artifactId}`,
+    );
+    recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_completed', {
+      route: input.input.gateway?.decision.route,
+      operation: input.input.gateway?.decision.operation,
+      reason: 'direct_reasoning_deterministic_definition_call_site_completed',
+      toolCallCount,
+      evidenceCount: evidence.length,
+      artifactCount: artifactState.artifacts.length,
+    });
+  }
+
+  if (!synthesized && directReasoningHasUsefulEvidence(evidence)) {
     const remainingMs = maxTotalTimeMs - (now() - startedAt);
     const finalTimeoutMs = remainingMs > 1_000
       ? Math.min(DEFAULT_FINAL_RESPONSE_TIMEOUT_MS, remainingMs)
@@ -858,74 +892,83 @@ export async function executeDirectReasoningLoop(input: {
       });
       if (synthesisContent.trim()) {
         rememberResponseSource(finalResponse);
-        const missingCoverageFiles = findMissingDirectReasoningSynthesisCoverageFiles({
-          content: synthesisContent,
-          evidence,
-          input: input.input,
-        });
-        const revisionRemainingMs = maxTotalTimeMs - (now() - startedAt);
-        const revisionTimeoutMs = Math.min(
-          DIRECT_REASONING_SYNTHESIS_REVISION_MAX_MS,
-          Math.max(0, revisionRemainingMs),
-        );
-        if (missingCoverageFiles.length > 0 && revisionTimeoutMs > 1_000) {
-          const revisionMessages = buildDirectReasoningSynthesisRevisionMessages({
-            input: input.input,
-            draft: synthesisContent,
+        const skipGenericCoverageRevision = directReasoningRequestsDefinitionAndCallSite(input.input);
+        if (!skipGenericCoverageRevision) {
+          const missingCoverageFiles = findMissingDirectReasoningSynthesisCoverageFiles({
+            content: synthesisContent,
             evidence,
-            missingCoverageFiles,
+            input: input.input,
           });
-          const revisionPromptChars = totalChatMessageContentChars(revisionMessages);
-          recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_coverage_revision', {
-            route: input.input.gateway?.decision.route,
-            operation: input.input.gateway?.decision.operation,
-            phase: 'started',
-            missingCoverageFiles: missingCoverageFiles.map((summary) => summary.file),
-            coverageFileCount: selectDirectReasoningCoverageSummaries(evidence).length,
-            callBudgetMs: revisionTimeoutMs,
-            promptChars: revisionPromptChars,
-          });
-          recordDirectReasoningLlmCall(input, 'started', {
-            phase: 'grounded_synthesis_revision',
-            attempt: 1,
-            callBudgetMs: revisionTimeoutMs,
-            messageCount: revisionMessages.length,
-            toolCount: 0,
-            evidenceCount: evidence.length,
-            artifactCount: synthesisArtifacts.length,
-            missingCoverageFileCount: missingCoverageFiles.length,
-            promptChars: revisionPromptChars,
-          });
-          const revisionResponse = await chatWithBudget(input.deps, revisionMessages, { tools: [] }, revisionTimeoutMs);
-          recordDirectReasoningLlmCall(input, 'completed', {
-            phase: 'grounded_synthesis_revision',
-            attempt: 1,
-            resultStatus: revisionResponse ? 'succeeded' : 'timed_out_or_failed',
-            ...(revisionResponse
-              ? summarizeDirectReasoningChatResponse(revisionResponse)
-              : { errorMessage: 'Grounded synthesis coverage revision did not complete within budget.' }),
-            evidenceCount: evidence.length,
-            artifactCount: synthesisArtifacts.length,
-            missingCoverageFileCount: missingCoverageFiles.length,
-          });
-          if (revisionResponse?.content?.trim()) {
-            synthesisContent = revisionResponse.content;
-            rememberResponseSource(revisionResponse);
+          const revisionRemainingMs = maxTotalTimeMs - (now() - startedAt);
+          const revisionTimeoutMs = Math.min(
+            DIRECT_REASONING_SYNTHESIS_REVISION_MAX_MS,
+            Math.max(0, revisionRemainingMs),
+          );
+          if (missingCoverageFiles.length > 0 && revisionTimeoutMs > 1_000) {
+            const revisionMessages = buildDirectReasoningSynthesisRevisionMessages({
+              input: input.input,
+              draft: synthesisContent,
+              evidence,
+              missingCoverageFiles,
+            });
+            const revisionPromptChars = totalChatMessageContentChars(revisionMessages);
+            recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_coverage_revision', {
+              route: input.input.gateway?.decision.route,
+              operation: input.input.gateway?.decision.operation,
+              phase: 'started',
+              missingCoverageFiles: missingCoverageFiles.map((summary) => summary.file),
+              coverageFileCount: selectDirectReasoningCoverageSummaries(evidence).length,
+              callBudgetMs: revisionTimeoutMs,
+              promptChars: revisionPromptChars,
+            });
+            recordDirectReasoningLlmCall(input, 'started', {
+              phase: 'grounded_synthesis_revision',
+              attempt: 1,
+              callBudgetMs: revisionTimeoutMs,
+              messageCount: revisionMessages.length,
+              toolCount: 0,
+              evidenceCount: evidence.length,
+              artifactCount: synthesisArtifacts.length,
+              missingCoverageFileCount: missingCoverageFiles.length,
+              promptChars: revisionPromptChars,
+            });
+            const revisionResponse = await chatWithBudget(input.deps, revisionMessages, { tools: [] }, revisionTimeoutMs);
+            recordDirectReasoningLlmCall(input, 'completed', {
+              phase: 'grounded_synthesis_revision',
+              attempt: 1,
+              resultStatus: revisionResponse ? 'succeeded' : 'timed_out_or_failed',
+              ...(revisionResponse
+                ? summarizeDirectReasoningChatResponse(revisionResponse)
+                : { errorMessage: 'Grounded synthesis coverage revision did not complete within budget.' }),
+              evidenceCount: evidence.length,
+              artifactCount: synthesisArtifacts.length,
+              missingCoverageFileCount: missingCoverageFiles.length,
+            });
+            if (revisionResponse?.content?.trim()) {
+              synthesisContent = revisionResponse.content;
+              rememberResponseSource(revisionResponse);
+            }
+            recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_coverage_revision', {
+              route: input.input.gateway?.decision.route,
+              operation: input.input.gateway?.decision.operation,
+              phase: 'completed',
+              resultStatus: revisionResponse?.content?.trim() ? 'revised' : 'kept_original',
+              missingCoverageFiles: missingCoverageFiles.map((summary) => summary.file),
+            });
           }
-          recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_coverage_revision', {
-            route: input.input.gateway?.decision.route,
-            operation: input.input.gateway?.decision.operation,
-            phase: 'completed',
-            resultStatus: revisionResponse?.content?.trim() ? 'revised' : 'kept_original',
-            missingCoverageFiles: missingCoverageFiles.map((summary) => summary.file),
-          });
         }
 
-        const deterministicCompletion = buildDirectReasoningSynthesisCoverageCompletion({
-          content: synthesisContent,
-          evidence,
-          input: input.input,
-        });
+        const deterministicCompletion = skipGenericCoverageRevision
+          ? buildDirectReasoningDefinitionCallSiteCompletion({
+              content: synthesisContent,
+              evidence,
+              input: input.input,
+            })
+          : buildDirectReasoningSynthesisCoverageCompletion({
+              content: synthesisContent,
+              evidence,
+              input: input.input,
+            });
         if (deterministicCompletion) {
           synthesisContent = deterministicCompletion.replaceContent
             ? deterministicCompletion.content
@@ -2586,11 +2629,7 @@ function buildDirectReasoningDefinitionCallSiteCompletion(input: {
   if (!directReasoningRequestsDefinitionAndCallSite(input.input)) {
     return null;
   }
-  const summaries = selectDirectReasoningAnswerCoverageSummaries(
-    input.evidence,
-    MAX_DIRECT_REASONING_SYNTHESIS_COMPLETION_FILES,
-    input.input,
-  );
+  const summaries = selectDirectReasoningDefinitionAndCallSiteSummaries(input.evidence, input.input);
   const selected = selectDirectReasoningDefinitionAndCallSiteEvidence({
     evidence: input.evidence,
     input: input.input,
@@ -2627,6 +2666,21 @@ function directReasoningRequestsDefinitionAndCallSite(input: DirectReasoningInpu
     && /\b(?:called?|call\s+site|usage|used)\b/.test(normalized);
 }
 
+function selectDirectReasoningDefinitionAndCallSiteSummaries(
+  evidence: DirectReasoningEvidenceEntry[],
+  input: DirectReasoningInput,
+): DirectReasoningFileSummary[] {
+  const summaries = collectDirectReasoningFileSummaries(evidence)
+    .filter((summary) => isLikelyImplementationFile(summary.file) && hasDirectReasoningStrongFileEvidence(summary));
+  const scoped = filterDirectReasoningAnswerCoverageScope(summaries, input);
+  const candidates = scoped.length > 0 ? scoped : summaries;
+  return candidates.sort((left, right) => (
+    directReasoningAnswerCoverageFileScore(right) - directReasoningAnswerCoverageFileScore(left)
+    || left.firstSeen - right.firstSeen
+    || left.file.localeCompare(right.file)
+  ));
+}
+
 function selectDirectReasoningDefinitionAndCallSiteEvidence(input: {
   evidence: DirectReasoningEvidenceEntry[];
   input: DirectReasoningInput;
@@ -2660,46 +2714,47 @@ function selectDirectReasoningDefinitionAndCallSiteEvidence(input: {
       if (!snippets.some((snippet) => isDirectReasoningDefinitionSnippetForSymbol(snippet, symbol))) {
         continue;
       }
+      const requestAsksForEmitter = requestTerms.has('emit') || requestTerms.has('emitter');
       definitionCandidates.push({
         symbol,
         summary,
         score: overlap * 100
-          + (symbolTerms.has('emit') ? 40 : 0)
+          + (symbolTerms.has('emit') ? (requestAsksForEmitter ? 360 : 40) : 0)
+          - (requestAsksForEmitter && symbolTerms.has('create') ? 120 : 0)
           + Math.min(120, summary.readCount * 40)
           + directReasoningAnswerCoverageFileScore(summary),
       });
     }
   }
-  const definition = definitionCandidates.sort((left, right) => (
+  const sortedDefinitions = definitionCandidates.sort((left, right) => (
     right.score - left.score
     || left.summary.firstSeen - right.summary.firstSeen
     || left.summary.file.localeCompare(right.summary.file)
-  ))[0];
-  if (!definition) {
-    return null;
+  ));
+  for (const definition of sortedDefinitions) {
+    const callSiteCandidates = input.summaries
+      .filter((summary) => summary.file !== definition.summary.file && !isLikelyTestFile(summary.file))
+      .map((summary) => ({
+        summary,
+        score: directReasoningCallSiteScore(summary, definition.symbol, input.evidence),
+      }))
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => (
+        right.score - left.score
+        || left.summary.firstSeen - right.summary.firstSeen
+        || left.summary.file.localeCompare(right.summary.file)
+      ));
+    const callSite = callSiteCandidates[0]?.summary;
+    if (!callSite) {
+      continue;
+    }
+    return {
+      symbol: definition.symbol,
+      definition: definition.summary,
+      callSite,
+    };
   }
-
-  const callSiteCandidates = input.summaries
-    .filter((summary) => summary.file !== definition.summary.file && !isLikelyTestFile(summary.file))
-    .map((summary) => ({
-      summary,
-      score: directReasoningCallSiteScore(summary, definition.symbol, input.evidence),
-    }))
-    .filter((candidate) => candidate.score > 0)
-    .sort((left, right) => (
-      right.score - left.score
-      || left.summary.firstSeen - right.summary.firstSeen
-      || left.summary.file.localeCompare(right.summary.file)
-    ));
-  const callSite = callSiteCandidates[0]?.summary;
-  if (!callSite) {
-    return null;
-  }
-  return {
-    symbol: definition.symbol,
-    definition: definition.summary,
-    callSite,
-  };
+  return null;
 }
 
 function directReasoningCallSiteScore(

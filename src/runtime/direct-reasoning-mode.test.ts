@@ -365,7 +365,7 @@ describe('direct reasoning mode', () => {
               {
                 id: 'guessed-read',
                 name: 'fs_read',
-                arguments: JSON.stringify({ path: 'src/runtime/execution-graph/mutation-node.ts' }),
+                arguments: JSON.stringify({ path: 'src/runtime/execution-graph/graph-events.ts' }),
               },
             ],
           });
@@ -380,10 +380,7 @@ describe('direct reasoning mode', () => {
       expect(prompt).toContain('src/runtime/execution-graph/mutation-node.ts');
       expect(prompt).toContain('src/supervisor/worker-manager.ts');
       return chatResponse({
-        content: [
-          'Defined in `src/runtime/execution-graph/mutation-node.ts` as `emitMutationResumeGraphEvent`.',
-          'Called from `src/supervisor/worker-manager.ts`.',
-        ].join('\n'),
+        content: 'The relevant generic helper is probably `src/runtime/execution-graph/graph-events.ts`.',
       });
     });
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
@@ -394,6 +391,11 @@ describe('direct reasoning mode', () => {
           output: {
             query: String(args.query ?? ''),
             matches: [
+              ...Array.from({ length: 9 }, (_, index) => ({
+                relativePath: `src/runtime/execution-graph/generic-event-${index}.ts`,
+                matchType: 'content',
+                snippet: 'export function createExecutionGraphEvent(input: unknown) { return input; }',
+              })),
               {
                 relativePath: 'src/runtime/execution-graph/mutation-node.ts',
                 matchType: 'content',
@@ -423,6 +425,22 @@ describe('direct reasoning mode', () => {
               '}',
               'export function buildMutationResumeGraphEvent(input: unknown) {',
               '  return createExecutionGraphEvent(input);',
+              '}',
+            ].join('\n'),
+          },
+        };
+      }
+      if (toolName === 'fs_read' && args.path === 'src/runtime/execution-graph/graph-events.ts') {
+        return {
+          success: true,
+          status: 'succeeded',
+          output: {
+            path: args.path,
+            bytes: 120,
+            truncated: false,
+            content: [
+              'export function createExecutionGraphEvent(input: unknown) {',
+              '  return input;',
               '}',
             ].join('\n'),
           },
@@ -492,11 +510,12 @@ describe('direct reasoning mode', () => {
 
     expect(result.content).toContain('src/runtime/execution-graph/mutation-node.ts');
     expect(result.content).toContain('src/supervisor/worker-manager.ts');
+    expect(result.content).not.toContain('graph-events.ts');
     expect(executeTool).toHaveBeenCalledWith('fs_search', expect.objectContaining({
       query: 'where execution graph mutation approval resume events are emitted',
       mode: 'content',
     }), expect.any(Object));
-    expect(synthesisCalls).toBe(1);
+    expect(synthesisCalls).toBe(0);
   });
 
   it('does not select brokered direct reasoning when planned evidence requires web search', () => {
