@@ -104,4 +104,102 @@ describe('direct route filesystem runtime', () => {
     expect(result).toBeNull();
     expect(tools.executeModelTool).not.toHaveBeenCalled();
   });
+
+  it('defers repo-grounded search and answer requests to synthesis orchestration', async () => {
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(),
+      getApprovalSummaries: vi.fn(),
+      getPolicy: vi.fn(() => ({})),
+    };
+
+    const result = await tryDirectFilesystemIntent({
+      message: message('Search this workspace for where execution graph mutation approval resume events are emitted and tell me the exact file.'),
+      ctx: context(),
+      userKey: 'owner:web',
+      conversationKey: { agentId: 'default', userId: 'owner', channel: 'web' },
+      codeContext: { workspaceRoot: 'S:/Development/GuardianAgent', sessionId: 'code-1' },
+      gatewayDecision: decision({
+        route: 'coding_task',
+        operation: 'search',
+        summary: 'Search repo and answer with exact files.',
+        requiresToolSynthesis: false,
+        preferredAnswerPath: 'direct',
+        plannedSteps: [
+          { kind: 'search', summary: 'Search the repo.', required: true },
+          { kind: 'answer', summary: 'Answer with exact files.', required: true, dependsOn: ['step_1'] },
+        ],
+      }),
+      agentId: 'default',
+      tools,
+      conversationService: { getSessionHistory: vi.fn(() => []) },
+      executeStoredFilesystemSave: vi.fn(),
+      setApprovalFollowUp: vi.fn(),
+      getPendingApprovals: vi.fn(() => null),
+      formatPendingApprovalPrompt: vi.fn(() => ''),
+      setPendingApprovalActionForRequest: vi.fn(),
+      buildPendingApprovalBlockedResponse: vi.fn(),
+    });
+
+    expect(result).toBeNull();
+    expect(tools.executeModelTool).not.toHaveBeenCalled();
+  });
+
+  it('keeps simple filesystem search requests on the direct filesystem path', async () => {
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async () => ({
+        success: true,
+        output: {
+          root: 'S:/Development/GuardianAgent',
+          scannedFiles: 12,
+          truncated: false,
+          matches: [
+            { relativePath: 'package.json', matchType: 'name' },
+          ],
+        },
+      })),
+      getApprovalSummaries: vi.fn(),
+      getPolicy: vi.fn(() => ({ sandbox: { allowedPaths: ['S:/Development/GuardianAgent'] } })),
+    };
+
+    const result = await tryDirectFilesystemIntent({
+      message: message('Search this workspace for "package.json".'),
+      ctx: context(),
+      userKey: 'owner:web',
+      conversationKey: { agentId: 'default', userId: 'owner', channel: 'web' },
+      codeContext: { workspaceRoot: 'S:/Development/GuardianAgent', sessionId: 'code-1' },
+      gatewayDecision: decision({
+        operation: 'search',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        requireExactFileReferences: false,
+        executionClass: 'tool',
+        preferredAnswerPath: 'direct',
+        plannedSteps: [
+          { kind: 'search', summary: 'Search files.', required: true },
+        ],
+      }),
+      agentId: 'default',
+      tools,
+      conversationService: { getSessionHistory: vi.fn(() => []) },
+      executeStoredFilesystemSave: vi.fn(),
+      setApprovalFollowUp: vi.fn(),
+      getPendingApprovals: vi.fn(() => null),
+      formatPendingApprovalPrompt: vi.fn(() => ''),
+      setPendingApprovalActionForRequest: vi.fn(),
+      buildPendingApprovalBlockedResponse: vi.fn(),
+    });
+
+    expect(typeof result).toBe('string');
+    expect(result).toContain('package.json');
+    expect(tools.executeModelTool).toHaveBeenCalledWith(
+      'fs_search',
+      expect.objectContaining({
+        path: 'S:/Development/GuardianAgent',
+        query: 'package.json',
+      }),
+      expect.objectContaining({ origin: 'assistant' }),
+    );
+  });
 });

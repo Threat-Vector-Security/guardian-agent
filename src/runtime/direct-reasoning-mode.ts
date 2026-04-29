@@ -759,9 +759,19 @@ export async function executeDirectReasoningLoop(input: {
   }
 
   let synthesized = false;
+  const requiredSearchEvidenceToolCalls = await ensureDirectReasoningRequiredSearchEvidence({
+    input: input.input,
+    deps: input.deps,
+    graphEmitter: input.graphEmitter,
+    artifactState,
+    evidence,
+    turn: Math.max(1, turns),
+  });
+  toolCallCount += requiredSearchEvidenceToolCalls;
   const shouldHydrateEvidence = directReasoningHasUsefulEvidence(evidence)
     && (
       !finalContent.trim()
+      || requiredSearchEvidenceToolCalls > 0
       || shouldHydrateDirectReasoningEvidenceBeforeGroundedSynthesis(input.input, evidence, finalContent)
     );
   if (shouldHydrateEvidence) {
@@ -1405,6 +1415,63 @@ async function hydrateDirectReasoningEvidenceFromSearch(input: {
   return hydrated;
 }
 
+async function ensureDirectReasoningRequiredSearchEvidence(input: {
+  input: DirectReasoningInput;
+  deps: DirectReasoningDependencies;
+  graphEmitter?: DirectReasoningGraphEmitter | null;
+  artifactState: DirectReasoningArtifactState;
+  evidence: DirectReasoningEvidenceEntry[];
+  turn: number;
+}): Promise<number> {
+  if (!directReasoningRequiresSearchEvidence(input.input)) {
+    return 0;
+  }
+  if (input.evidence.some((entry) => entry.toolName === 'fs_search')) {
+    return 0;
+  }
+  const queries = selectDirectReasoningRequiredSearchQueries(input.input);
+  if (queries.length === 0) {
+    return 0;
+  }
+  recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_evidence_hydration', {
+    phase: 'required_search_started',
+    turn: input.turn,
+    queryCount: queries.length,
+    queries,
+  });
+  let searchCount = 0;
+  for (const query of queries) {
+    searchCount += 1;
+    await executeDirectReasoningToolCall({
+      toolCall: {
+        id: `required-search-${searchCount}`,
+        name: 'fs_search',
+        arguments: JSON.stringify({
+          path: selectDefaultDirectReasoningSearchPath(input.input),
+          query,
+          mode: 'content',
+          maxResults: DIRECT_SEARCH_DEFAULT_MAX_RESULTS,
+          maxDepth: DIRECT_SEARCH_DEFAULT_MAX_DEPTH,
+          maxFiles: DIRECT_SEARCH_DEFAULT_MAX_FILES,
+          maxFileBytes: DIRECT_SEARCH_DEFAULT_MAX_FILE_BYTES,
+        }),
+      },
+      input: input.input,
+      deps: input.deps,
+      graphEmitter: input.graphEmitter,
+      artifactState: input.artifactState,
+      turn: input.turn,
+      evidence: input.evidence,
+    });
+  }
+  recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_evidence_hydration', {
+    phase: 'required_search_completed',
+    turn: input.turn,
+    searchCount,
+  });
+  return searchCount;
+}
+
 async function hydrateDirectReasoningCandidateReads(input: {
   input: DirectReasoningInput;
   deps: DirectReasoningDependencies;
@@ -1436,6 +1503,53 @@ async function hydrateDirectReasoningCandidateReads(input: {
     hydrated += 1;
   }
   return hydrated;
+}
+
+function directReasoningRequiresSearchEvidence(input: DirectReasoningInput): boolean {
+  return requiredNonAnswerPlannedSteps(input.gateway?.decision).some((step) => {
+    if (step.kind === 'search') return true;
+    return step.expectedToolCategories?.some((category) => (
+      category === 'search'
+      || category === 'fs_search'
+      || category === 'repo_inspect'
+      || category === 'code_symbol_search'
+    )) === true;
+  });
+}
+
+function selectDirectReasoningRequiredSearchQueries(input: DirectReasoningInput): string[] {
+  const decision = input.gateway?.decision;
+  const requiredSearchSteps = requiredNonAnswerPlannedSteps(decision).filter((step) => (
+    step.kind === 'search'
+    || step.expectedToolCategories?.some((category) => (
+      category === 'search'
+      || category === 'fs_search'
+      || category === 'repo_inspect'
+      || category === 'code_symbol_search'
+    )) === true
+  ));
+  const candidates = [
+    ...requiredSearchSteps.map((step) => step.summary),
+    decision?.summary,
+    decision?.resolvedContent,
+    input.message,
+  ];
+  return uniqueStrings(candidates
+    .map((candidate) => normalizeDirectReasoningRequiredSearchQuery(candidate))
+    .filter((query): query is string => !!query))
+    .slice(0, 2);
+}
+
+function normalizeDirectReasoningRequiredSearchQuery(value: unknown): string | null {
+  const text = compactLine(stringValue(value))
+    .replace(/^search\s+(?:this\s+)?(?:workspace|repo(?:sitory)?|codebase|project)\s+(?:for\s+)?/i, '')
+    .replace(/^find\s+(?:the\s+)?/i, '')
+    .replace(/^inspect\s+(?:the\s+)?/i, '')
+    .replace(/\bdo\s+not\s+edit\s+anything\b\.?$/i, '')
+    .replace(/[.;:]+$/g, '')
+    .trim();
+  if (text.length < 4) return null;
+  return text.length > 180 ? text.slice(0, 180).trim() : text;
 }
 
 function selectDirectReasoningAutoReadCandidates(
@@ -2407,6 +2521,10 @@ function buildDirectReasoningSynthesisCoverageCompletion(input: {
   if (!directReasoningRequiresImplementationFileCoverage(input.input)) {
     return null;
   }
+  const definitionCallSiteCompletion = buildDirectReasoningDefinitionCallSiteCompletion(input);
+  if (definitionCallSiteCompletion) {
+    return definitionCallSiteCompletion;
+  }
   const summaries = selectDirectReasoningAnswerCoverageSummaries(
     input.evidence,
     MAX_DIRECT_REASONING_SYNTHESIS_COMPLETION_FILES,
@@ -2458,6 +2576,186 @@ function buildDirectReasoningSynthesisCoverageCompletion(input: {
     files: missing.map((summary) => summary.file),
     coverageFileCount: summaries.length,
   };
+}
+
+function buildDirectReasoningDefinitionCallSiteCompletion(input: {
+  content: string;
+  evidence: DirectReasoningEvidenceEntry[];
+  input: DirectReasoningInput;
+}): { content: string; files: string[]; coverageFileCount: number; replaceContent: boolean } | null {
+  if (!directReasoningRequestsDefinitionAndCallSite(input.input)) {
+    return null;
+  }
+  const summaries = selectDirectReasoningAnswerCoverageSummaries(
+    input.evidence,
+    MAX_DIRECT_REASONING_SYNTHESIS_COMPLETION_FILES,
+    input.input,
+  );
+  const selected = selectDirectReasoningDefinitionAndCallSiteEvidence({
+    evidence: input.evidence,
+    input: input.input,
+    summaries,
+  });
+  if (!selected) {
+    return null;
+  }
+  if (
+    directReasoningAnswerMentionsFile(input.content, selected.definition.file)
+    && directReasoningAnswerMentionsFile(input.content, selected.callSite.file)
+    && input.content.includes(selected.symbol)
+  ) {
+    return null;
+  }
+  return {
+    content: [
+      `- Defined in \`${selected.definition.file}\` as \`${selected.symbol}\`.`,
+      `- Called from \`${selected.callSite.file}\`.`,
+    ].join('\n'),
+    files: [selected.definition.file, selected.callSite.file],
+    coverageFileCount: summaries.length,
+    replaceContent: true,
+  };
+}
+
+function directReasoningRequestsDefinitionAndCallSite(input: DirectReasoningInput): boolean {
+  const normalized = normalizeIntentGatewayRepairText([
+    input.message,
+    input.gateway?.decision.resolvedContent,
+    input.gateway?.decision.summary,
+  ].filter(Boolean).join('\n'));
+  return /\b(?:defined?|definition)\b/.test(normalized)
+    && /\b(?:called?|call\s+site|usage|used)\b/.test(normalized);
+}
+
+function selectDirectReasoningDefinitionAndCallSiteEvidence(input: {
+  evidence: DirectReasoningEvidenceEntry[];
+  input: DirectReasoningInput;
+  summaries: DirectReasoningFileSummary[];
+}): {
+  symbol: string;
+  definition: DirectReasoningFileSummary;
+  callSite: DirectReasoningFileSummary;
+} | null {
+  const requestTerms = directReasoningNormalizedSearchTerms([
+    input.input.message,
+    input.input.gateway?.decision.resolvedContent,
+    input.input.gateway?.decision.summary,
+  ].filter(Boolean).join(' '));
+  const definitionCandidates: Array<{
+    symbol: string;
+    summary: DirectReasoningFileSummary;
+    score: number;
+  }> = [];
+  for (const summary of input.summaries) {
+    if (isLikelyTestFile(summary.file) || summary.declaredSymbols.size === 0) {
+      continue;
+    }
+    for (const symbol of summary.declaredSymbols) {
+      const symbolTerms = directReasoningNormalizedSearchTerms(symbol);
+      const overlap = [...symbolTerms].filter((term) => requestTerms.has(term)).length;
+      if (overlap < 2) {
+        continue;
+      }
+      const snippets = directReasoningEvidenceSnippetsForFile(input.evidence, summary.file);
+      if (!snippets.some((snippet) => isDirectReasoningDefinitionSnippetForSymbol(snippet, symbol))) {
+        continue;
+      }
+      definitionCandidates.push({
+        symbol,
+        summary,
+        score: overlap * 100
+          + (symbolTerms.has('emit') ? 40 : 0)
+          + Math.min(120, summary.readCount * 40)
+          + directReasoningAnswerCoverageFileScore(summary),
+      });
+    }
+  }
+  const definition = definitionCandidates.sort((left, right) => (
+    right.score - left.score
+    || left.summary.firstSeen - right.summary.firstSeen
+    || left.summary.file.localeCompare(right.summary.file)
+  ))[0];
+  if (!definition) {
+    return null;
+  }
+
+  const callSiteCandidates = input.summaries
+    .filter((summary) => summary.file !== definition.summary.file && !isLikelyTestFile(summary.file))
+    .map((summary) => ({
+      summary,
+      score: directReasoningCallSiteScore(summary, definition.symbol, input.evidence),
+    }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => (
+      right.score - left.score
+      || left.summary.firstSeen - right.summary.firstSeen
+      || left.summary.file.localeCompare(right.summary.file)
+    ));
+  const callSite = callSiteCandidates[0]?.summary;
+  if (!callSite) {
+    return null;
+  }
+  return {
+    symbol: definition.symbol,
+    definition: definition.summary,
+    callSite,
+  };
+}
+
+function directReasoningCallSiteScore(
+  summary: DirectReasoningFileSummary,
+  symbol: string,
+  evidence: DirectReasoningEvidenceEntry[],
+): number {
+  const snippets = directReasoningEvidenceSnippetsForFile(evidence, summary.file);
+  if (!snippets.some((snippet) => isDirectReasoningCallSnippetForSymbol(snippet, symbol))) {
+    return 0;
+  }
+  return directReasoningAnswerCoverageFileScore(summary)
+    + Math.min(180, summary.readCount * 60)
+    + Math.min(120, summary.searchCount * 40)
+    + (summary.file.startsWith('src/supervisor/') ? 80 : 0);
+}
+
+function directReasoningEvidenceSnippetsForFile(
+  evidence: DirectReasoningEvidenceEntry[],
+  file: string,
+): string[] {
+  return evidence.flatMap((entry) => entry.snippets)
+    .filter((snippet) => extractFilePathFromSnippet(snippet) === file);
+}
+
+function isDirectReasoningDefinitionSnippetForSymbol(snippet: string, symbol: string): boolean {
+  return new RegExp(`\\b(?:export\\s+)?(?:async\\s+)?(?:function|class|interface|type|const|enum)\\s+${escapeRegExp(symbol)}\\b`).test(snippet);
+}
+
+function isDirectReasoningCallSnippetForSymbol(snippet: string, symbol: string): boolean {
+  if (isDirectReasoningDefinitionSnippetForSymbol(snippet, symbol)) {
+    return false;
+  }
+  return new RegExp(`\\b${escapeRegExp(symbol)}\\s*\\(`).test(snippet);
+}
+
+function directReasoningNormalizedSearchTerms(value: string): Set<string> {
+  const expanded = value.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+  const normalized = normalizeIntentGatewayRepairText(expanded);
+  const terms = normalized.match(/[a-z0-9_]{3,}/g) ?? [];
+  return new Set(terms.flatMap(directReasoningSearchTermVariants));
+}
+
+function directReasoningSearchTermVariants(term: string): string[] {
+  const variants = new Set([term]);
+  if (term.endsWith('s') && term.length > 3) {
+    variants.add(term.slice(0, -1));
+  }
+  if (term.endsWith('ed') && term.length > 4) {
+    const stem = term.slice(0, -2);
+    variants.add(stem);
+    if (stem.length > 2 && stem.at(-1) === stem.at(-2)) {
+      variants.add(stem.slice(0, -1));
+    }
+  }
+  return [...variants].filter((variant) => variant.length >= 3);
 }
 
 function directReasoningRequiresImplementationFileCoverage(input: DirectReasoningInput): boolean {
@@ -3145,4 +3443,8 @@ function stringifyCompact(value: unknown): string {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

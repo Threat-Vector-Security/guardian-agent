@@ -12,6 +12,7 @@ import type { IntentGatewayDecision } from '../intent-gateway.js';
 import {
   hasRequiredReadOrSearchPlannedStep,
   hasRequiredReadWritePlan,
+  hasRequiredToolBackedAnswerPlan,
 } from '../intent/planned-steps.js';
 import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
 import type { PendingActionRecord } from '../pending-actions.js';
@@ -112,6 +113,13 @@ function shouldDeferFilesystemIntentToOrchestration(input: DirectFilesystemInten
   if (!decision) return false;
   const hasReadOrSearchStep = hasRequiredReadOrSearchPlannedStep(decision);
   if (hasRequiredReadWritePlan(decision)) {
+    return true;
+  }
+  const repoGroundedAnswer = decision.route === 'coding_task'
+    || decision.executionClass === 'repo_grounded'
+    || decision.requiresRepoGrounding === true
+    || decision.requireExactFileReferences === true;
+  if (repoGroundedAnswer && hasRequiredToolBackedAnswerPlan(decision)) {
     return true;
   }
   if (decision.operation === 'save' && decision.turnRelation !== 'new_request' && !hasReadOrSearchStep) {

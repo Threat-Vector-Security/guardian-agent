@@ -165,6 +165,7 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
       const normalizedQuery = caseSensitive ? query : query.toLowerCase();
       const searchNames = mode === 'name' || mode === 'auto';
       const searchContent = mode === 'content' || mode === 'auto';
+      const fallbackTerms = searchContent ? extractContentSearchFallbackTerms(query) : [];
 
       const matches: Array<{
         path: string;
@@ -172,6 +173,17 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
         matchType: 'name' | 'content';
         lineNumber?: number;
         snippet?: string;
+        score?: number;
+        matchedTerms?: string[];
+      }> = [];
+      const fallbackMatches: Array<{
+        path: string;
+        relativePath: string;
+        matchType: 'content';
+        lineNumber: number;
+        snippet: string;
+        score: number;
+        matchedTerms: string[];
       }> = [];
 
       const stack: Array<{ dir: string; depth: number }> = [{ dir: safeRoot, depth: 0 }];
@@ -255,7 +267,25 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
             });
             searchFrom = idx + Math.max(normalizedQuery.length, 1);
           }
+          if (fallbackTerms.length > 0) {
+            const fallbackMatch = buildContentSearchFallbackMatch({
+              text,
+              haystack,
+              terms: fallbackTerms,
+              path: fullPath,
+              relativePath,
+            });
+            if (fallbackMatch) {
+              fallbackMatches.push(fallbackMatch);
+            }
+          }
         }
+      }
+
+      if (matches.length === 0 && fallbackMatches.length > 0) {
+        matches.push(...fallbackMatches
+          .sort((left, right) => right.score - left.score || left.relativePath.localeCompare(right.relativePath))
+          .slice(0, maxResults));
       }
 
       const truncated = stack.length > 0 || scannedFiles >= maxFiles || matches.length >= maxResults;
@@ -635,6 +665,109 @@ function looksBinary(buf: Buffer): boolean {
     if (buf[i] === 0) return true;
   }
   return false;
+}
+
+const CONTENT_SEARCH_FALLBACK_STOP_WORDS = new Set([
+  'about',
+  'after',
+  'before',
+  'where',
+  'which',
+  'what',
+  'when',
+  'with',
+  'from',
+  'that',
+  'this',
+  'these',
+  'those',
+  'tell',
+  'file',
+  'files',
+  'path',
+  'paths',
+  'defined',
+  'definition',
+  'usage',
+  'used',
+  'uses',
+]);
+
+function extractContentSearchFallbackTerms(query: string): string[] {
+  const terms = query
+    .toLowerCase()
+    .match(/[a-z0-9_]{3,}/g)
+    ?.filter((term) => !CONTENT_SEARCH_FALLBACK_STOP_WORDS.has(term))
+    ?? [];
+  return [...new Set(terms)].slice(0, 12);
+}
+
+function buildContentSearchFallbackMatch(input: {
+  text: string;
+  haystack: string;
+  terms: string[];
+  path: string;
+  relativePath: string;
+}): {
+  path: string;
+  relativePath: string;
+  matchType: 'content';
+  lineNumber: number;
+  snippet: string;
+  score: number;
+  matchedTerms: string[];
+} | null {
+  const matched: Array<{ term: string; index: number }> = [];
+  for (const term of input.terms) {
+    const index = findAnyTermVariant(input.haystack, term);
+    if (index >= 0) {
+      matched.push({ term, index });
+    }
+  }
+  const minimumMatches = Math.min(3, input.terms.length);
+  if (matched.length < minimumMatches || matched.length / input.terms.length < 0.45) {
+    return null;
+  }
+  const best = matched.reduce((left, right) => (right.index < left.index ? right : left), matched[0]);
+  if (!best) return null;
+  return {
+    path: input.path,
+    relativePath: input.relativePath,
+    matchType: 'content',
+    lineNumber: countLineNumberAtIndex(input.text, best.index),
+    snippet: makeContentSnippet(input.text, best.index, best.term.length),
+    score: matched.length / input.terms.length,
+    matchedTerms: matched.map((entry) => entry.term),
+  };
+}
+
+function findAnyTermVariant(haystack: string, term: string): number {
+  let best = -1;
+  for (const variant of contentSearchTermVariants(term)) {
+    const index = haystack.indexOf(variant);
+    if (index >= 0 && (best < 0 || index < best)) {
+      best = index;
+    }
+  }
+  return best;
+}
+
+function contentSearchTermVariants(term: string): string[] {
+  const variants = new Set([term]);
+  if (term.endsWith('s') && term.length > 3) {
+    variants.add(term.slice(0, -1));
+  }
+  if (term.endsWith('ed') && term.length > 4) {
+    const stem = term.slice(0, -2);
+    variants.add(stem);
+    if (stem.length > 2 && stem.at(-1) === stem.at(-2)) {
+      variants.add(stem.slice(0, -1));
+    }
+  }
+  if (term.endsWith('ing') && term.length > 5) {
+    variants.add(term.slice(0, -3));
+  }
+  return [...variants].filter((variant) => variant.length >= 3);
 }
 
 function makeContentSnippet(text: string, matchIndex: number, queryLength: number): string {

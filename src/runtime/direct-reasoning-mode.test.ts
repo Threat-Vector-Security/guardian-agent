@@ -352,6 +352,153 @@ describe('direct reasoning mode', () => {
     expect((result.metadata?.responseSource as { model?: string }).model).not.toBe('moonshotai/kimi-k2.6');
   });
 
+  it('enforces required search evidence before synthesizing from guessed file reads', async () => {
+    let explorationCalls = 0;
+    let synthesisCalls = 0;
+    const chat = vi.fn(async (messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      if (options?.tools && options.tools.length > 0) {
+        explorationCalls += 1;
+        if (explorationCalls === 1) {
+          return chatResponse({
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'guessed-read',
+                name: 'fs_read',
+                arguments: JSON.stringify({ path: 'src/runtime/execution-graph/mutation-node.ts' }),
+              },
+            ],
+          });
+        }
+        return chatResponse({
+          content: 'The emitter is probably src/runtime/execution-graph/graph-events.ts.',
+        });
+      }
+
+      synthesisCalls += 1;
+      const prompt = messages.map((message) => message.content).join('\n');
+      expect(prompt).toContain('src/runtime/execution-graph/mutation-node.ts');
+      expect(prompt).toContain('src/supervisor/worker-manager.ts');
+      return chatResponse({
+        content: [
+          'Defined in `src/runtime/execution-graph/mutation-node.ts` as `emitMutationResumeGraphEvent`.',
+          'Called from `src/supervisor/worker-manager.ts`.',
+        ].join('\n'),
+      });
+    });
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'fs_search') {
+        return {
+          success: true,
+          status: 'succeeded',
+          output: {
+            query: String(args.query ?? ''),
+            matches: [
+              {
+                relativePath: 'src/runtime/execution-graph/mutation-node.ts',
+                matchType: 'content',
+                snippet: 'export function emitMutationResumeGraphEvent(input: { context: MutationNodeExecutionContext })',
+              },
+              {
+                relativePath: 'src/supervisor/worker-manager.ts',
+                matchType: 'content',
+                snippet: 'emitMutationResumeGraphEvent({ context, kind, payloadDetails, eventKey })',
+              },
+            ],
+          },
+        };
+      }
+      if (toolName === 'fs_read' && args.path === 'src/runtime/execution-graph/mutation-node.ts') {
+        return {
+          success: true,
+          status: 'succeeded',
+          output: {
+            path: args.path,
+            bytes: 220,
+            truncated: false,
+            content: [
+              "import { createExecutionGraphEvent } from './graph-events.js';",
+              'export function emitMutationResumeGraphEvent(input: { context: MutationNodeExecutionContext }) {',
+              '  return buildMutationResumeGraphEvent(input);',
+              '}',
+              'export function buildMutationResumeGraphEvent(input: unknown) {',
+              '  return createExecutionGraphEvent(input);',
+              '}',
+            ].join('\n'),
+          },
+        };
+      }
+      if (toolName === 'fs_read' && args.path === 'src/supervisor/worker-manager.ts') {
+        return {
+          success: true,
+          status: 'succeeded',
+          output: {
+            path: args.path,
+            bytes: 180,
+            truncated: false,
+            content: [
+              "import { emitMutationResumeGraphEvent } from '../runtime/execution-graph/mutation-node.js';",
+              'function resumeExecutionGraphPendingAction() {',
+              '  emitMutationResumeGraphEvent({ context, kind, payloadDetails, eventKey });',
+              '}',
+            ].join('\n'),
+          },
+        };
+      }
+      return {
+        success: true,
+        status: 'succeeded',
+        output: {
+          path: args.path,
+          bytes: 0,
+          truncated: false,
+          content: '',
+        },
+      };
+    });
+
+    const result = await handleDirectReasoningMode({
+      message: 'Search this workspace for where execution graph mutation approval resume events are emitted. Tell me the exact file where the event emitter is defined and one file where it is called. Do not edit anything.',
+      gateway: gateway({
+        operation: 'search',
+        summary: 'Search workspace for emitMutationResumeGraphEvent definition and one call site',
+        requireExactFileReferences: true,
+        requiresToolSynthesis: false,
+        preferredAnswerPath: 'direct',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Search this workspace for where execution graph mutation approval resume events are emitted.',
+            expectedToolCategories: ['repo_inspect'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Tell the user the exact definition file and one call site.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      selectedExecutionProfile: profile({ preferredAnswerPath: 'direct', expectedContextPressure: 'low' }),
+      workspaceRoot: 'S:/Development/GuardianAgent',
+      toolRequest: { origin: 'assistant', requestId: 'req-required-search' } as ToolExecutionRequest,
+      maxTurns: 3,
+      maxTotalTimeMs: 120_000,
+    }, {
+      chat,
+      executeTool,
+    });
+
+    expect(result.content).toContain('src/runtime/execution-graph/mutation-node.ts');
+    expect(result.content).toContain('src/supervisor/worker-manager.ts');
+    expect(executeTool).toHaveBeenCalledWith('fs_search', expect.objectContaining({
+      query: 'where execution graph mutation approval resume events are emitted',
+      mode: 'content',
+    }), expect.any(Object));
+    expect(synthesisCalls).toBe(1);
+  });
+
   it('does not select brokered direct reasoning when planned evidence requires web search', () => {
     expect(shouldHandleDirectReasoningMode({
       gateway: gateway({
