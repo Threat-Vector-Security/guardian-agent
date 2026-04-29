@@ -31,7 +31,7 @@ interface AssistantDashboardCallbackOptions {
 }
 
 const EMPTY_JOB_STATE = {
-  summary: { total: 0, running: 0, succeeded: 0, failed: 0 },
+  summary: { total: 0, running: 0, succeeded: 0, failed: 0, blocked: 0, cancelled: 0 },
   jobs: [],
 };
 

@@ -11,7 +11,7 @@ import {
   type OrchestrationRoleDescriptor,
 } from './orchestration-role-descriptors.js';
 
-export type AssistantJobStatus = 'running' | 'succeeded' | 'failed';
+export type AssistantJobStatus = 'running' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
 export type AssistantJobSource = 'manual' | 'scheduled' | 'system';
 export type DelegatedWorkerRunClass = 'in_invocation' | 'short_lived' | 'long_running' | 'automation_owned';
 export type DelegatedWorkerReportingMode = 'inline_response' | 'held_for_approval' | 'status_only' | 'held_for_operator';
@@ -38,6 +38,8 @@ export interface AssistantJobSummary {
   running: number;
   succeeded: number;
   failed: number;
+  blocked: number;
+  cancelled: number;
   lastStartedAt?: number;
   lastCompletedAt?: number;
 }
@@ -218,11 +220,40 @@ export class AssistantJobTracker {
     return { ...job };
   }
 
+  block(jobId: string, patch?: AssistantJobUpdate): AssistantJobRecord | null {
+    const job = this.jobs.find((entry) => entry.id === jobId);
+    if (!job) return null;
+    if (patch) this.update(jobId, patch);
+    const completedAt = this.now();
+    job.status = 'blocked';
+    job.completedAt = completedAt;
+    job.updatedAt = completedAt;
+    job.durationMs = Math.max(0, completedAt - job.startedAt);
+    return { ...job };
+  }
+
+  cancel(jobId: string, reason?: unknown, patch?: AssistantJobUpdate): AssistantJobRecord | null {
+    const job = this.jobs.find((entry) => entry.id === jobId);
+    if (!job) return null;
+    if (patch) this.update(jobId, patch);
+    const completedAt = this.now();
+    job.status = 'cancelled';
+    job.completedAt = completedAt;
+    job.updatedAt = completedAt;
+    job.durationMs = Math.max(0, completedAt - job.startedAt);
+    if (reason !== undefined) {
+      job.error = reason instanceof Error ? reason.message : String(reason);
+    }
+    return { ...job };
+  }
+
   getState(limit = 50): AssistantJobState {
     const jobs = this.jobs.slice(0, Math.max(1, limit));
     let running = 0;
     let succeeded = 0;
     let failed = 0;
+    let blocked = 0;
+    let cancelled = 0;
     let lastStartedAt: number | undefined;
     let lastCompletedAt: number | undefined;
 
@@ -236,6 +267,8 @@ export class AssistantJobTracker {
 
       if (job.status === 'running') running += 1;
       else if (job.status === 'succeeded') succeeded += 1;
+      else if (job.status === 'blocked') blocked += 1;
+      else if (job.status === 'cancelled') cancelled += 1;
       else failed += 1;
     }
 
@@ -245,6 +278,8 @@ export class AssistantJobTracker {
         running,
         succeeded,
         failed,
+        blocked,
+        cancelled,
         lastStartedAt,
         lastCompletedAt,
       },
@@ -511,6 +546,8 @@ export function mergeAssistantJobStates(states: AssistantJobState[], limit = 50)
   let running = 0;
   let succeeded = 0;
   let failed = 0;
+  let blocked = 0;
+  let cancelled = 0;
   let lastStartedAt: number | undefined;
   let lastCompletedAt: number | undefined;
 
@@ -523,6 +560,8 @@ export function mergeAssistantJobStates(states: AssistantJobState[], limit = 50)
     }
     if (job.status === 'running') running += 1;
     else if (job.status === 'succeeded') succeeded += 1;
+    else if (job.status === 'blocked') blocked += 1;
+    else if (job.status === 'cancelled') cancelled += 1;
     else failed += 1;
   }
 
@@ -532,6 +571,8 @@ export function mergeAssistantJobStates(states: AssistantJobState[], limit = 50)
       running,
       succeeded,
       failed,
+      blocked,
+      cancelled,
       lastStartedAt,
       lastCompletedAt,
     },
