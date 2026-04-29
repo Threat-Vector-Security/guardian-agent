@@ -45,6 +45,14 @@ describe('coding workflow recipes', () => {
     expect(plan.workflow?.label).toBe('Refactor');
     expect(plan.inspect).toEqual(['src/auth/middleware.ts', 'src/auth/middleware.test.ts']);
     expect(Array.isArray(plan.workflow?.stages)).toBe(true);
+    expect(plan.workflow?.stages?.map((stage) => stage.id)).toEqual([
+      'inspect',
+      'plan',
+      'implement',
+      'approve',
+      'verify',
+      'summarize',
+    ]);
     expect(plan.verification?.[0]).toMatch(/targeted tests/i);
     expect(plan.execution?.isolation).toMatchObject({
       level: 'available',
@@ -98,6 +106,34 @@ describe('coding workflow recipes', () => {
       updatedAt: 456,
     });
     expect(workflow?.nextAction).toMatch(/targeted tests|proof/i);
+  });
+
+  it('shows the approve stage while a coding approval is pending', () => {
+    const workflow = deriveCodeSessionWorkflowState({
+      focusSummary: 'Fix the auth failure.',
+      planSummary: 'Goal: Fix the auth failure.',
+      pendingApprovals: [{ id: 'approval-1' }],
+      recentJobs: [
+        {
+          id: 'job-1',
+          toolName: 'code_edit',
+          status: 'pending_approval',
+        },
+      ],
+      verification: [],
+      plannedWorkflowType: 'bug_fix',
+      hasRepoEvidence: true,
+      now: 567,
+    });
+
+    expect(workflow).toMatchObject({
+      type: 'bug_fix',
+      currentStage: 'approve',
+      status: 'blocked',
+      verificationState: 'pending',
+      updatedAt: 567,
+    });
+    expect(workflow?.blockedReason).toMatch(/pending approval/i);
   });
 
   it('completes specification-to-plan workflows after the plan is ready', () => {

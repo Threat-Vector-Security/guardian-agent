@@ -40,7 +40,8 @@ const TIMELINE_FOCUS_CONTEXT_RADIUS = 2;
 const INSPECTOR_TABS = ['investigate', 'flow', 'impact'];
 const SESSION_REFRESH_INTERVAL_MS = 5000;
 const CODE_WORKFLOW_TYPES = new Set(['implementation', 'bug_fix', 'code_review', 'refactor', 'test_repair', 'dependency_review', 'spec_to_plan']);
-const CODE_WORKFLOW_STAGES = new Set(['inspect', 'plan', 'implement', 'verify', 'summarize']);
+const CODE_WORKFLOW_STAGE_ORDER = ['inspect', 'plan', 'implement', 'approve', 'verify', 'summarize'];
+const CODE_WORKFLOW_STAGES = new Set(CODE_WORKFLOW_STAGE_ORDER);
 const CODE_WORKFLOW_STATUSES = new Set(['ready', 'in_progress', 'blocked', 'completed']);
 const CODE_WORKFLOW_VERIFICATION_STATES = new Set(['not_started', 'pending', 'running', 'passed', 'failed', 'not_required']);
 const STRUCTURE_PREVIEW_DEBOUNCE_MS = 350;
@@ -2631,6 +2632,7 @@ function deriveTaskItems(session) {
         ? `${workflow.blockedReason} ${workflow.nextAction}`.trim()
         : `${workflow.nextAction || workflow.summary || 'Workflow guidance is ready for this session.'}${workflow.isolation?.level === 'recommended' && workflow.isolation.reason ? ` ${workflow.isolation.reason}` : ''}`.trim(),
       meta: formatCodeWorkflowMeta(workflow),
+      bodyHtml: renderCodeWorkflowStageRail(workflow),
     });
   }
 
@@ -3178,6 +3180,40 @@ function formatCodeWorkflowMeta(workflow) {
   return parts.join(' • ');
 }
 
+function renderCodeWorkflowStageRail(workflow) {
+  if (!workflow) return '';
+  const currentIndex = Math.max(0, CODE_WORKFLOW_STAGE_ORDER.indexOf(workflow.currentStage));
+  return `
+    <div class="code-workflow-rail" aria-label="Coding workflow stages">
+      ${CODE_WORKFLOW_STAGE_ORDER.map((stage, index) => {
+        const state = resolveCodeWorkflowStageState(workflow, stage, index, currentIndex);
+        return `
+          <span
+            class="code-workflow-rail__stage is-${escAttr(state)}"
+            title="${escAttr(humanizeCodeWorkflowValue(stage))}"
+          >
+            ${esc(humanizeCodeWorkflowValue(stage))}
+          </span>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function resolveCodeWorkflowStageState(workflow, stage, index, currentIndex) {
+  if (!workflow) return 'pending';
+  if (workflow.status === 'completed') return 'done';
+  if (stage === workflow.currentStage) {
+    if (workflow.status === 'blocked') return 'blocked';
+    if (workflow.status === 'in_progress') return 'active';
+    return 'current';
+  }
+  if (index < currentIndex) return 'done';
+  if (stage === 'approve' && workflow.currentStage === 'implement') return 'pending';
+  if (stage === 'verify' && workflow.verificationState === 'failed') return 'blocked';
+  return 'pending';
+}
+
 function mapCodeWorkflowTone(workflow) {
   if (!workflow) return 'info';
   if (workflow.status === 'blocked') return 'blocked';
@@ -3541,9 +3577,30 @@ function queueSessionPersist(session) {
 function ensureSessionRefreshLoop() {
   if (sessionRefreshInterval) return;
   sessionRefreshInterval = setInterval(async () => {
-    const activeSession = getActiveSession();
-    if (!activeSession || !currentContainer) return;
+    if (!currentContainer) return;
     try {
+      const previousActiveSessionId = normalizeCodeSessionId(codeState.activeSessionId);
+      const previousAttachedSessionId = normalizeCodeSessionId(codeState.attachedSessionId);
+      const previousSessionSignature = (codeState.sessions || []).map((session) => session.id).join('|');
+      const previousActiveSession = getActiveSession();
+      const previousIndexRailSignature = getSessionRailRenderSignature(previousActiveSession);
+      await refreshSessionsIndex().catch(() => null);
+      const nextActiveSessionId = normalizeCodeSessionId(codeState.activeSessionId);
+      const nextAttachedSessionId = normalizeCodeSessionId(codeState.attachedSessionId);
+      const nextSessionSignature = (codeState.sessions || []).map((session) => session.id).join('|');
+      if (previousActiveSessionId !== nextActiveSessionId
+        || previousAttachedSessionId !== nextAttachedSessionId
+        || previousSessionSignature !== nextSessionSignature) {
+        rerenderFromState();
+        return;
+      }
+      const activeSession = getActiveSession();
+      if (!activeSession) return;
+      const indexRailChanged = getSessionRailRenderSignature(activeSession) !== previousIndexRailSignature;
+      if (indexRailChanged && codeState.activePanel === 'sessions' && !refreshVisibleSessionRail()) {
+        rerenderFromState();
+        return;
+      }
       const previousSignature = getSessionRenderSignature(activeSession);
       const previousActivitySignature = getSessionActivityRenderSignature(activeSession);
       const previousRailSignature = getSessionRailRenderSignature(activeSession);
@@ -4422,6 +4479,7 @@ function renderTaskList(session) {
             ${item.meta ? `<span class="code-status-card__meta">${esc(item.meta)}</span>` : ''}
           </div>
           <div class="code-status-card__detail">${esc(item.detail || '')}</div>
+          ${item.bodyHtml || ''}
           ${renderWorkspaceTrustFindingsMarkup(item.workspaceTrust)}
         </article>
       `).join('')}

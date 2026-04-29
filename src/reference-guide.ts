@@ -534,7 +534,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'If both Vercel and Daytona are available, Vercel is usually the quicker fit for short bounded runs, while Daytona is better for reusable or dependency-heavy workspaces.',
                   'Managed sandboxes show provider lifecycle state in the `Sandboxes` tab so you can monitor active resource usage directly.',
                   'The workbench activity rail shows the session timeline for approvals, verification, and recent work.',
-                  'The activity rail now also shows the active coding workflow recipe, current stage, and whether verification is still missing, running, failing, or complete.',
+                  'The activity rail now also shows the active coding workflow recipe and a stage rail for inspect, plan, implement, approve, verify, and summarize, including whether verification is still missing, running, failing, or complete.',
                   'When a ready isolated execution target exists, the workflow card can also flag that bounded jobs such as dependency install, build, or targeted verification should run through the configured sandbox instead of on the host.',
                   'When you want that isolated lane explicitly, Guardian can run one bounded repo command in the configured remote sandbox instead of on the host, and the normal code test/build/lint actions can use that same remote lane when requested.',
                   'Configure the remote sandbox lane from Cloud > Connections > Vercel or Cloud > Connections > Daytona.',
