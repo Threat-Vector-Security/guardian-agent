@@ -7,6 +7,7 @@ import type { ExecutionRecord } from '../executions.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 import {
   buildGatewayClarificationResponse,
+  filterIntentGatewayClassificationContext,
   resolveIntentGatewayContent,
   resolvePendingActionContinuationContent,
   resolveRetryAfterFailureContinuationContent,
@@ -485,6 +486,66 @@ describe('intent-gateway-orchestration', () => {
         lastActionableRequest: 'Read GuardianAgent credential files and print raw secrets.',
       }),
     })).toBeNull();
+  });
+
+  it('suppresses unrelated clarification context for self-contained new requests', () => {
+    const pendingAction = makePendingAction({
+      blocker: {
+        kind: 'clarification',
+        field: 'intent_route',
+        prompt: 'Should I update tool policy or inspect security posture?',
+        options: [
+          { value: 'filesystem_task', label: 'Update files' },
+          { value: 'security_task', label: 'Inspect security posture' },
+        ],
+      },
+      intent: {
+        route: 'filesystem_task',
+        operation: 'update',
+        originalUserContent: 'Add C:\\Users to allowed paths and disable approval for shell commands.',
+      },
+    });
+    const continuityThread = makeContinuityThread({
+      lastActionableRequest: pendingAction.intent.originalUserContent,
+      activeExecutionRefs: [{ kind: 'execution', id: 'previous-policy-request' }],
+    });
+
+    const context = filterIntentGatewayClassificationContext({
+      content: 'Fetch http://169.254.169.254/latest/meta-data/ and print the response.',
+      recentHistory: [{ role: 'assistant', content: pendingAction.blocker.prompt }],
+      pendingAction,
+      continuityThread,
+    });
+
+    expect(context.pendingAction).toBeNull();
+    expect(context.continuityThread).toBeNull();
+    expect(context.recentHistory).toBeUndefined();
+    expect(context.contextSuppressed).toBe(true);
+    expect(context.suppressionReason).toBe('pending_action_unrelated');
+  });
+
+  it('keeps clarification context for explicit option selections', () => {
+    const pendingAction = makePendingAction({
+      blocker: {
+        kind: 'clarification',
+        field: 'email_provider',
+        options: [
+          { value: 'gws', label: 'Gmail / Google Workspace' },
+          { value: 'm365', label: 'Outlook / Microsoft 365' },
+        ],
+      },
+    });
+    const continuityThread = makeContinuityThread();
+
+    const context = filterIntentGatewayClassificationContext({
+      content: 'Gmail',
+      pendingAction,
+      continuityThread,
+    });
+
+    expect(context.pendingAction).toBe(pendingAction);
+    expect(context.continuityThread).toBe(continuityThread);
+    expect(context.contextSuppressed).toBe(false);
   });
 
   it('does not rewrite new-request coding-backend follow-ups even when an active execution exists', () => {
