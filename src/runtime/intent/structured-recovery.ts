@@ -27,6 +27,7 @@ import { hasRequiredWritePlannedStep } from './planned-steps.js';
 import { collapseIntentGatewayWhitespace } from './text.js';
 import {
   isConversationTranscriptReferenceRequest,
+  isExplicitExternalPromptInjectionRequest,
   isExplicitRepoInspectionRequest,
   isRawCredentialDisclosureRequest,
   requestNeedsExactFileReferences,
@@ -181,6 +182,8 @@ export function normalizeIntentGatewayDecision(
     repairContext,
   );
   const rawCredentialDisclosure = isRawCredentialDisclosureRequest(repairContext?.sourceContent);
+  const directSecurityRefusal = rawCredentialDisclosure
+    || isExplicitExternalPromptInjectionRequest(repairContext?.sourceContent);
   const routeOrOperationRepaired = route !== normalizedParsedRoute || operation !== parsedOperation;
   const resolution = normalizeResolution(parsed.resolution);
   const missingFields = Array.isArray(parsed.missingFields)
@@ -223,25 +226,25 @@ export function normalizeIntentGatewayDecision(
     ...entityResolution.entities,
   });
   const normalizedExecutionClass = normalizeExecutionClass(parsed.executionClass);
-  const executionClass = rawCredentialDisclosure
+  const executionClass = directSecurityRefusal
     ? 'security_analysis'
     : !routeOrOperationRepaired && normalizedExecutionClass
     ? normalizedExecutionClass
     : derivedWorkload.executionClass;
   const normalizedPreferredTier = normalizePreferredTier(parsed.preferredTier);
-  const preferredTier = rawCredentialDisclosure
+  const preferredTier = directSecurityRefusal
     ? 'external'
     : !routeOrOperationRepaired && normalizedPreferredTier
     ? normalizedPreferredTier
     : derivedWorkload.preferredTier;
   const hasParsedRequiresRepoGrounding = !routeOrOperationRepaired && typeof parsed.requiresRepoGrounding === 'boolean';
-  const requiresRepoGrounding = rawCredentialDisclosure
+  const requiresRepoGrounding = directSecurityRefusal
     ? false
     : hasParsedRequiresRepoGrounding
     ? parsed.requiresRepoGrounding as boolean
     : derivedWorkload.requiresRepoGrounding;
   const hasParsedRequiresToolSynthesis = !routeOrOperationRepaired && typeof parsed.requiresToolSynthesis === 'boolean';
-  const requiresToolSynthesis = rawCredentialDisclosure
+  const requiresToolSynthesis = directSecurityRefusal
     ? false
     : hasParsedRequiresToolSynthesis
     ? parsed.requiresToolSynthesis as boolean
@@ -259,19 +262,19 @@ export function normalizeIntentGatewayDecision(
   const requireExactFileReferences = (hasParsedRequireExactFileReferences && parsed.requireExactFileReferences as boolean)
     || heuristicRequiresExactFile;
   const normalizedExpectedContextPressure = normalizeExpectedContextPressure(parsed.expectedContextPressure);
-  const expectedContextPressure = rawCredentialDisclosure
+  const expectedContextPressure = directSecurityRefusal
     ? 'low'
     : !routeOrOperationRepaired && normalizedExpectedContextPressure
     ? normalizedExpectedContextPressure
     : derivedWorkload.expectedContextPressure;
   const normalizedPreferredAnswerPath = normalizePreferredAnswerPath(parsed.preferredAnswerPath);
-  const preferredAnswerPath = rawCredentialDisclosure
+  const preferredAnswerPath = directSecurityRefusal
     ? 'direct'
     : !routeOrOperationRepaired && normalizedPreferredAnswerPath
     ? normalizedPreferredAnswerPath
     : derivedWorkload.preferredAnswerPath;
   const normalizedSimpleVsComplex = normalizeSimpleVsComplex(parsed.simpleVsComplex);
-  const simpleVsComplex = rawCredentialDisclosure
+  const simpleVsComplex = directSecurityRefusal
     ? 'simple'
     : !routeOrOperationRepaired && normalizedSimpleVsComplex
     ? normalizedSimpleVsComplex
@@ -334,9 +337,9 @@ export function normalizeIntentGatewayDecision(
     operation,
     personalItemType: entityResolution.entities.personalItemType,
   });
-  const plannedStepsRequireRepoGrounding = !rawCredentialDisclosure
+  const plannedStepsRequireRepoGrounding = !directSecurityRefusal
     && planRequiresRepoGrounding(effectivePlannedSteps);
-  const effectiveRequiresRepoGrounding = rawCredentialDisclosure
+  const effectiveRequiresRepoGrounding = directSecurityRefusal
     ? false
     : requiresRepoGrounding || plannedStepsRequireRepoGrounding;
   const effectiveRequireExactFileReferences = requireExactFileReferences || (
@@ -429,7 +432,7 @@ export function normalizeIntentGatewayDecision(
       ? 'derived.workload'
       : toolBackedAnswerPlan
       ? 'derived.workload'
-      : rawCredentialDisclosure
+      : directSecurityRefusal
       ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedExecutionClass) ? classifierSource : 'derived.workload',
     preferredTier: structuredWritePlanRoute
@@ -438,10 +441,10 @@ export function normalizeIntentGatewayDecision(
       ? 'derived.workload'
       : toolBackedAnswerPlan
       ? 'derived.workload'
-      : rawCredentialDisclosure
+      : directSecurityRefusal
       ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedPreferredTier) ? classifierSource : 'derived.workload',
-    requiresRepoGrounding: rawCredentialDisclosure
+    requiresRepoGrounding: directSecurityRefusal
       ? 'derived.workload'
       : plannedStepsRequireRepoGrounding && !requiresRepoGrounding
       ? 'derived.workload'
@@ -450,7 +453,7 @@ export function normalizeIntentGatewayDecision(
       ? 'derived.workload'
       : toolBackedAnswerPlan
       ? 'derived.workload'
-      : rawCredentialDisclosure
+      : directSecurityRefusal
       ? 'derived.workload'
       : hasParsedRequiresToolSynthesis ? classifierSource : 'derived.workload',
     ...(hasParsedRequireExactFileReferences || effectiveRequireExactFileReferences
@@ -462,21 +465,21 @@ export function normalizeIntentGatewayDecision(
       : {}),
     expectedContextPressure: structuredWritePlanRoute || toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct') || (effectiveRequiresRepoGrounding && expectedContextPressure === 'low')
       ? 'derived.workload'
-      : rawCredentialDisclosure
+      : directSecurityRefusal
       ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedExpectedContextPressure)
       ? classifierSource
       : 'derived.workload',
     preferredAnswerPath: structuredWritePlanRoute || toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct')
       ? 'derived.workload'
-      : rawCredentialDisclosure
+      : directSecurityRefusal
       ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedPreferredAnswerPath)
       ? classifierSource
       : 'derived.workload',
     simpleVsComplex: structuredWritePlanRoute || toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct')
       ? 'derived.workload'
-      : rawCredentialDisclosure
+      : directSecurityRefusal
       ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedSimpleVsComplex)
       ? classifierSource
