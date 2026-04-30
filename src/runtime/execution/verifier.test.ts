@@ -260,6 +260,71 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('rejects completed evidence-backed envelopes whose final answer is a generic fallback', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Check connector status and repo evidence, then return six bullets.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Check requested connector statuses.',
+          expectedToolCategories: ['vercel_status', 'whm_status', 'automation_list'],
+          required: true,
+        },
+        {
+          kind: 'search',
+          summary: 'Search the repo evidence.',
+          expectedToolCategories: ['repo_inspect'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return six short evidence-backed bullets.',
+          required: true,
+          dependsOn: ['step_1', 'step_2'],
+        },
+      ],
+      entities: {},
+    });
+    const finalAnswer = 'I could not generate a final response for that request.';
+    const stepReceipts: StepReceipt[] = taskContract.plan.steps.map((step, index) => ({
+      stepId: step.stepId,
+      status: 'satisfied',
+      evidenceReceiptIds: [`receipt-${index + 1}`],
+      summary: step.kind === 'answer' ? finalAnswer : step.summary,
+      startedAt: index + 1,
+      endedAt: index + 1,
+    }));
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        stepReceipts,
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['step_3'],
+    });
+  });
+
   it('rejects completed envelopes whose final answer promises another search before synthesis', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'general_assistant',
