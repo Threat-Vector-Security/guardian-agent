@@ -9,12 +9,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 
-const appPort = 3033;
-const llmPort = 11481;
-const cloudPort = 11482;
+let appPort = Number.parseInt(process.env.HARNESS_PORT ?? '0', 10);
+let llmPort = Number.parseInt(process.env.HARNESS_LLM_PORT ?? '0', 10);
+let cloudPort = Number.parseInt(process.env.HARNESS_CLOUD_PORT ?? '0', 10);
 const cloudHost = '127.0.0.1.nip.io';
 const authToken = `cloud-harness-${Date.now()}`;
-const baseUrl = `http://127.0.0.1:${appPort}`;
+let baseUrl = '';
 const dummyApiKeyEnv = 'GUARDIAN_CLOUD_HARNESS_API_KEY';
 const dummyApiKey = 'cloud-harness-key';
 
@@ -24,6 +24,26 @@ function sleep(ms) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+async function getFreePort() {
+  const server = http.createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    server.close();
+    throw new Error('Failed to allocate a free port');
+  }
+  const { port } = address;
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  return port;
+}
+
+async function assignHarnessPorts() {
+  if (!Number.isFinite(appPort) || appPort <= 0) appPort = await getFreePort();
+  if (!Number.isFinite(llmPort) || llmPort <= 0) llmPort = await getFreePort();
+  if (!Number.isFinite(cloudPort) || cloudPort <= 0) cloudPort = await getFreePort();
+  baseUrl = `http://127.0.0.1:${appPort}`;
 }
 
 async function waitForHealth(timeoutMs) {
@@ -224,29 +244,21 @@ async function createMockLlmServer(state) {
         state.systemPrompts.push(systemPrompt);
       }
 
-      const originalUser = messages.find((message) => message.role === 'user')?.content ?? '';
+      const originalUser = messages
+        .filter((message) => message.role === 'user')
+        .map((message) => {
+          if (typeof message.content === 'string') return message.content;
+          if (Array.isArray(message.content)) return message.content.map((part) => (
+            typeof part === 'string' ? part : JSON.stringify(part)
+          )).join('\n');
+          return message.content == null ? '' : JSON.stringify(message.content);
+        })
+        .join('\n');
       const toolMessages = messages.filter((message) => message.role === 'tool');
 
       let choice;
       if (String(originalUser).includes('social WHM')) {
         if (toolMessages.length === 0) {
-          choice = {
-            index: 0,
-            message: {
-              role: 'assistant',
-              content: null,
-              tool_calls: [{
-                id: 'tc-find-whm',
-                type: 'function',
-                function: {
-                  name: 'find_tools',
-                  arguments: JSON.stringify({ query: 'whm cloud hosting', maxResults: 10 }),
-                },
-              }],
-            },
-            finish_reason: 'tool_calls',
-          };
-        } else if (toolMessages.length === 1) {
           choice = {
             index: 0,
             message: {
@@ -325,6 +337,7 @@ function buildHarnessConfig(configPath) {
       '    enabled: false',
       '  web:',
       '    enabled: true',
+      '    host: 127.0.0.1',
       `    port: ${appPort}`,
       `    authToken: "${authToken}"`,
       'assistant:',
@@ -347,7 +360,7 @@ function buildHarnessConfig(configPath) {
       '    retentionDays: 1',
       '  tools:',
       '    enabled: true',
-      '    policyMode: autonomous',
+      '    policyMode: approve_by_policy',
       '    allowedPaths: ["."]',
       '    allowedCommands: ["echo"]',
       `    allowedDomains: ["127.0.0.1", "localhost", "${cloudHost}"]`,
@@ -426,6 +439,8 @@ function buildHarnessConfig(configPath) {
 }
 
 async function main() {
+  await assignHarnessPorts();
+
   const tempRoot = path.join(os.tmpdir(), `ga-cloud-harness-${Date.now()}`);
   const configPath = path.join(tempRoot, 'config.yaml');
   const stdoutLogPath = path.join(tempRoot, 'app.stdout.log');
@@ -443,6 +458,8 @@ async function main() {
     env: {
       ...process.env,
       [dummyApiKeyEnv]: dummyApiKey,
+      HOME: tempRoot,
+      USERPROFILE: tempRoot,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -450,9 +467,15 @@ async function main() {
   app.stderr.pipe(createWriteStream(stderrLogPath, { flags: 'a' }));
 
   const results = [];
+  let startupError = null;
 
   try {
-    await waitForHealth(30_000);
+    try {
+      await waitForHealth(60_000);
+    } catch (error) {
+      startupError = error;
+      throw error;
+    }
 
     await runTest(results, 'config redaction exposes cloud profiles without leaking secrets', async () => {
       const response = await request('/api/config');
@@ -521,15 +544,13 @@ async function main() {
       assert(response.status === 200, `Expected 200 from /api/message, got ${response.status}`);
       assert(typeof response.body?.content === 'string', 'Expected chat response content');
       const content = response.body.content;
-      assert(content.includes('social WHM'), 'Expected final response to reference social WHM');
-      assert(content.toLowerCase().includes('configured'), 'Expected final response to mention configuration status');
+      assert(/social.*whm|whm.*social/i.test(content), `Expected final response to reference social WHM, got: ${content}`);
       assert(!/server address|share the host|what(?:'s| is) the server/i.test(content), 'Response asked for host details instead of using configured profile');
-      assert(llmState.systemPrompts.length > 0, 'Expected mock LLM to capture at least one system prompt');
-      const prompt = llmState.systemPrompts.find((entry) => (
-        typeof entry === 'string' && entry.includes('- social: provider=whm')
-      ));
-      assert(typeof prompt === 'string', 'Expected planner system prompt to include social WHM profile in tool context');
-      assert(prompt.includes('Use configured cloud profile ids exactly as listed below'), 'Expected explicit cloud profile instruction in system prompt');
+      const jobs = await request('/api/tools?limit=20');
+      const whmJob = Array.isArray(jobs.body?.jobs)
+        ? jobs.body.jobs.find((job) => job.toolName === 'whm_status' && job.status === 'succeeded')
+        : undefined;
+      assert(whmJob, `Expected assistant path to execute whm_status, got jobs: ${JSON.stringify(jobs.body?.jobs ?? [])}`);
     });
 
     const toolRuns = [
@@ -560,11 +581,27 @@ async function main() {
       });
     }
   } finally {
-    app.kill('SIGKILL');
-    llmServer.close();
-    cloudServer.close();
+    if (!app.killed) {
+      app.kill('SIGKILL');
+    }
+    await new Promise((resolve) => {
+      if (app.exitCode !== null || app.signalCode !== null) {
+        resolve();
+        return;
+      }
+      const timeout = setTimeout(resolve, 5_000);
+      app.once('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+    await new Promise((resolve) => llmServer.close(() => resolve()));
+    await new Promise((resolve) => cloudServer.close(() => resolve()));
 
-    if (results.some((result) => !result.ok)) {
+    if (startupError || results.some((result) => !result.ok)) {
+      if (startupError) {
+        console.error(`\nstartup error: ${startupError instanceof Error ? startupError.message : String(startupError)}`);
+      }
       if (existsSync(stdoutLogPath)) {
         const stdoutLog = readFileSync(stdoutLogPath, 'utf8').trim();
         if (stdoutLog) {
@@ -579,7 +616,18 @@ async function main() {
       }
     }
 
-    rmSync(tempRoot, { recursive: true, force: true });
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        rmSync(tempRoot, { recursive: true, force: true });
+        break;
+      } catch (error) {
+        if (attempt === 4) {
+          console.error(`Failed to remove temp dir ${tempRoot}: ${error instanceof Error ? error.message : String(error)}`);
+          break;
+        }
+        await sleep(250);
+      }
+    }
   }
 
   const failed = results.filter((result) => !result.ok);

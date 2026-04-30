@@ -88,8 +88,21 @@ async function toolRun(toolName, args) {
   });
 }
 
+async function getPrivilegedTicket(action) {
+  const response = await request('POST', '/api/auth/ticket', { action });
+  if (typeof response?.ticket !== 'string' || response.ticket.length === 0) {
+    throw new Error(`Expected privileged ticket for ${action}: ${JSON.stringify(response)}`);
+  }
+  return response.ticket;
+}
+
 async function setPolicy(policy) {
-  return request('POST', '/api/tools/policy', policy);
+  const ticket = await getPrivilegedTicket('tools.policy');
+  const result = await request('POST', '/api/tools/policy', { ...policy, ticket });
+  if (result?.success !== true) {
+    throw new Error(`Expected tools policy update to succeed: ${JSON.stringify(result)}`);
+  }
+  return result;
 }
 
 async function approvalDecision(approvalId, decision, reason = 'harness test') {
@@ -569,6 +582,9 @@ async function run() {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        // This harness includes explicit autonomous-mode policy semantics checks.
+        // Dedicated security-baseline tests cover the production approval floor.
+        GUARDIAN_DISABLE_BASELINE: '1',
         HOME: TEMP_DIR,
         USERPROFILE: TEMP_DIR,
       },
