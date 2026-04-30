@@ -53,7 +53,7 @@ function preferredCandidatesForDecision(
     case 'personal_assistant_task':
       return ['personal_assistant'];
     case 'general_assistant':
-      if (plannedStepExpectedCategories(decision).some((category) => isManagedSandboxStatusCategory(category))) {
+      if (hasOnlyManagedSandboxStatusCategories(decision)) {
         return ['coding_session_control'];
       }
       return decision.executionClass === 'provider_crud'
@@ -222,6 +222,16 @@ function isManagedSandboxStatusCategory(category: string): boolean {
   return normalized === 'daytona_status'
     || normalized === 'managed_sandbox_status'
     || normalized === 'remote_sandbox_status';
+}
+
+function hasOnlyManagedSandboxStatusCategories(decision: IntentGatewayDecision): boolean {
+  const nonAnswerSteps = requiredPlannedSteps(decision).filter((step) => step.kind !== 'answer');
+  if (nonAnswerSteps.length <= 0) return false;
+  const categories = nonAnswerSteps
+    .flatMap((step) => expectedCategoriesForStep(step))
+    .map((category) => category.trim())
+    .filter(Boolean);
+  return categories.length > 0 && categories.every((category) => isManagedSandboxStatusCategory(category));
 }
 
 function isReadOnlyAutomationControlOperation(operation: IntentGatewayDecision['operation']): boolean {
