@@ -5007,6 +5007,45 @@ describe('ToolExecutor', () => {
     expect(executor.getPolicy().sandbox.allowedPaths).toEqual([globalRoot]);
   });
 
+  it('denies policy domain expansion to private metadata hosts before creating approval', async () => {
+    const globalRoot = createExecutorRoot();
+    const onPolicyUpdate = vi.fn();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentPolicyUpdates: {
+        allowedPaths: false,
+        allowedCommands: false,
+        allowedDomains: true,
+      },
+      onPolicyUpdate,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'update_tool_policy',
+      args: {
+        action: 'add_domain',
+        value: 'http://169.254.169.254/latest/meta-data/',
+      },
+      origin: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+      channel: 'web',
+      bypassApprovals: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('failed');
+    expect(result.approvalId).toBeUndefined();
+    expect(result.message).toMatch(/cannot add private\/internal address '169\.254\.169\.254'/i);
+    expect(executor.getPolicy().sandbox.allowedDomains).toEqual(['localhost']);
+    expect(onPolicyUpdate).not.toHaveBeenCalled();
+  });
+
   it('treats add_path for a subdirectory of an already-allowed root as a no-op before creating approval', async () => {
     const globalRoot = createExecutorRoot();
     const nestedRoot = join(globalRoot, 'nested');

@@ -415,6 +415,19 @@ function normalizeHttpUrlLikeInput(raw: string): string {
   return `https://${trimmed}`;
 }
 
+function getPolicyDomainUpdateBlockReason(action: string, value: unknown): string | null {
+  if (action.trim() !== 'add_domain') return null;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const host = new URL(normalizeHttpUrlLikeInput(value)).hostname.toLowerCase();
+    return isPrivateAddress(host)
+      ? `Blocked: cannot add private/internal address '${host}' to allowedDomains (SSRF protection).`
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 type ToolPreflightRequest = string | { name: string; args?: Record<string, unknown> };
 
 type ToolPreflightFix = {
@@ -4685,6 +4698,11 @@ export class ToolExecutor {
     args: Record<string, unknown>,
     request?: Partial<ToolExecutionRequest>,
   ): Promise<string | null> {
+    if (toolName === 'update_tool_policy') {
+      const domainUpdateBlockReason = getPolicyDomainUpdateBlockReason(asString(args.action), args.value);
+      if (domainUpdateBlockReason) return domainUpdateBlockReason;
+    }
+
     if (isMemoryMutationToolName(toolName)) {
       return this.getMemoryMutationReadOnlyError(args, request);
     }

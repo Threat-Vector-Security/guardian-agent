@@ -51,7 +51,7 @@ export interface IntentGatewayClassificationContext {
   pendingAction: PendingActionRecord | null;
   continuityThread: ContinuityThreadRecord | null;
   contextSuppressed: boolean;
-  suppressionReason?: 'approval_background_only';
+  suppressionReason?: 'approval_background_only' | 'pending_action_unrelated';
 }
 
 export interface IntentGatewayClarificationResponseInput {
@@ -423,7 +423,7 @@ export function filterIntentGatewayClassificationContext(input: {
 }): IntentGatewayClassificationContext {
   const pendingAction = input.pendingAction ?? null;
   const continuityThread = input.continuityThread ?? null;
-  if (!pendingAction || pendingAction.blocker.kind !== 'approval') {
+  if (!pendingAction) {
     return {
       recentHistory: input.recentHistory,
       pendingAction,
@@ -431,7 +431,7 @@ export function filterIntentGatewayClassificationContext(input: {
       contextSuppressed: false,
     };
   }
-  if (looksLikePendingActionContextTurn(input.content)) {
+  if (pendingActionAppliesToClassificationTurn(pendingAction, input.content)) {
     return {
       recentHistory: input.recentHistory,
       pendingAction,
@@ -444,8 +444,28 @@ export function filterIntentGatewayClassificationContext(input: {
     pendingAction: null,
     continuityThread: null,
     contextSuppressed: true,
-    suppressionReason: 'approval_background_only',
+    suppressionReason: pendingAction.blocker.kind === 'approval'
+      ? 'approval_background_only'
+      : 'pending_action_unrelated',
   };
+}
+
+function pendingActionAppliesToClassificationTurn(
+  pendingAction: PendingActionRecord,
+  content: string,
+): boolean {
+  if (looksLikePendingActionContextTurn(content)) return true;
+  if (pendingAction.blocker.kind !== 'clarification') return false;
+  const normalized = stripLeadingContextPrefix(content).trim().toLowerCase();
+  if (!normalized || normalized.length > 120) return false;
+  const options = pendingAction.blocker.options ?? [];
+  return options.some((option) => {
+    const value = option.value.trim().toLowerCase();
+    const label = option.label.trim().toLowerCase();
+    return normalized === value
+      || normalized === label
+      || (normalized.length >= 3 && label.includes(normalized));
+  });
 }
 
 export function resolvePendingActionContinuationContent(
