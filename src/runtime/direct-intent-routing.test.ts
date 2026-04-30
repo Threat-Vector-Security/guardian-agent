@@ -477,6 +477,72 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
+  it('does not let sandbox status preempt mixed connector and repo plans', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({
+        route: 'general_assistant',
+        operation: 'run',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Check configured connector statuses and list automations.',
+            expectedToolCategories: [
+              'managed_sandbox_status',
+              'whm_status',
+              'gmail_auth_status',
+              'm365_calendar_status',
+              'automation_list',
+            ],
+            required: true,
+          },
+          {
+            kind: 'search',
+            summary: 'Search the repo for an implementation symbol.',
+            expectedToolCategories: ['repo_inspect'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Return six bullets.',
+            required: true,
+            dependsOn: ['step_1', 'step_2'],
+          },
+        ],
+      }),
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual([]);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('keeps sandbox-only status plans on coding session control', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({
+        route: 'general_assistant',
+        operation: 'run',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Check Daytona and Vercel sandbox status.',
+            expectedToolCategories: ['managed_sandbox_status', 'daytona_status'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Summarize sandbox status.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual(['coding_session_control']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
   it('returns no direct candidates when the gateway is unavailable', () => {
     const result = resolveDirectIntentRoutingCandidates(
       null,
