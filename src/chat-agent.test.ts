@@ -9413,6 +9413,104 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(localChat).not.toHaveBeenCalled();
   });
 
+  it('handles structured security-event handoffs inline instead of nesting another delegated worker', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const localChat = vi.fn(async () => ({
+      content: 'Security event triage complete.',
+      toolCalls: [],
+      model: 'local-model',
+      finishReason: 'stop',
+    }));
+    const agent = new ChatAgent(
+      'security-triage',
+      'Security Triage Agent',
+    );
+    const workerManager = {
+      handleMessage: vi.fn(async () => ({
+        content: 'Delegated security verifier result.',
+      })),
+    };
+
+    const response = await agent.onMessage!({
+      id: 'msg-security-event-handoff-inline',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'scheduled',
+      content: 'Investigate this security event as the dedicated Security Triage Agent.',
+      timestamp: Date.now(),
+      metadata: attachPreRoutedIntentGatewayMetadata({
+        handoff: {
+          id: 'security-triage:security:native:provider:defender_threat_detected:1000',
+          sourceAgentId: 'security-triage-dispatcher',
+          targetAgentId: 'security-triage',
+          contextMode: 'user_only',
+          preserveTaint: false,
+          allowedCapabilities: ['execute_commands', 'network_access'],
+        },
+        securityEvent: {
+          type: 'security:native:provider',
+          sourceAgentId: 'windows-defender',
+          detailType: 'defender_threat_detected',
+          dedupeKey: 'security:native:provider:defender_threat_detected',
+          severity: 'warn',
+        },
+      }, {
+        available: true,
+        decision: {
+          route: 'security_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Triage a structured native provider alert.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'security_analysis',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'chat_synthesis',
+          simpleVsComplex: 'complex',
+          plannedSteps: [
+            {
+              kind: 'tool_call',
+              summary: 'Inspect security posture and alert evidence.',
+              expectedToolCategories: ['assistant_security_summary', 'assistant_security_findings'],
+              required: true,
+            },
+            {
+              kind: 'answer',
+              summary: 'Return the security assessment.',
+              required: true,
+            },
+          ],
+          entities: {},
+        },
+      }),
+    }, {
+      agentId: 'security-triage',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: ['read_files', 'execute_commands', 'network_access'],
+    }, workerManager as never);
+
+    expect(response.content).toBe('Security event triage complete.');
+    expect(workerManager.handleMessage).not.toHaveBeenCalled();
+    expect(localChat).toHaveBeenCalledOnce();
+  });
+
   it('still delegates explicit coding workloads when a coding session is attached', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
