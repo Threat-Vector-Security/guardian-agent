@@ -1721,6 +1721,8 @@ function bindTerminalListeners() {
     const tab = findTerminalTabByRuntimeId(payload?.terminalId);
     if (!tab) return;
     tab.connected = false;
+    tab.connecting = false;
+    tab.exited = true;
     tab.runtimeTerminalId = null;
     const exitCode = Number.isInteger(payload?.exitCode) ? payload.exitCode : 'unknown';
     tab.output = trimTerminalOutput(`${tab.output || ''}\n[process exited ${exitCode}]\n`);
@@ -4036,8 +4038,9 @@ async function ensureSessionTerminals(session) {
 }
 
 async function ensureTerminalConnected(session, tab) {
-  if (!tab || tab.runtimeTerminalId || tab.connecting || tab.openFailed) return;
+  if (!tab || tab.runtimeTerminalId || tab.connecting || tab.openFailed || tab.exited) return;
   tab.connecting = true;
+  tab.exited = false;
   tab.openError = '';
   if (!tab.output) {
     tab.output = 'Connecting to terminal...\n';
@@ -4054,6 +4057,7 @@ async function ensureTerminalConnected(session, tab) {
     });
     tab.runtimeTerminalId = result?.terminalId || null;
     tab.connected = !!tab.runtimeTerminalId;
+    tab.exited = false;
     tab.openFailed = false;
     tab.openError = '';
     if (tab.output === 'Connecting to terminal...\n') {
@@ -4063,6 +4067,7 @@ async function ensureTerminalConnected(session, tab) {
     const message = err instanceof Error ? err.message : String(err);
     tab.connected = false;
     tab.runtimeTerminalId = null;
+    tab.exited = false;
     tab.openFailed = true;
     tab.openError = message;
     tab.output = trimTerminalOutput(`${tab.output || ''}\n[terminal error: ${message}]\n`);
@@ -4081,6 +4086,8 @@ async function closeTerminal(tab) {
   }
   tab.runtimeTerminalId = null;
   tab.connected = false;
+  tab.connecting = false;
+  tab.exited = true;
   tab.openFailed = false;
   tab.openError = '';
 }
@@ -4449,7 +4456,7 @@ function renderTerminalPane(session, tab) {
     <div class="code-terminal-pane" data-pane-id="${escAttr(tab.id)}">
       <div class="code-terminal-pane__header">
         <span class="code-terminal-pane__name">${esc(tab.name)}</span>
-        <span class="code-terminal-pane__badge">${tab.connected ? 'connected' : tab.connecting ? 'connecting' : tab.openFailed ? 'error' : 'disconnected'}</span>
+        <span class="code-terminal-pane__badge">${tab.connected ? 'connected' : tab.connecting ? 'connecting' : tab.openFailed ? 'error' : tab.exited ? 'exited' : 'disconnected'}</span>
         <select class="code-terminal-pane__shell" data-code-shell-select="${escAttr(tab.id)}">
           ${shellOptions.map((option) => `<option value="${escAttr(option.id)}"${option.id === currentShell ? ' selected' : ''}>${esc(option.label)}</option>`).join('')}
         </select>
@@ -7416,6 +7423,7 @@ function bindEvents(container) {
         runtimeTerminalId: null,
         connecting: false,
         connected: false,
+        exited: false,
         output: index === 0 ? '' : tab.output || '',
       }));
       treeCache.clear();
@@ -7822,6 +7830,7 @@ function bindEvents(container) {
         await closeTerminal(tab);
         tab.shell = normalizeTerminalShell(select.value);
         tab.output = '';
+        tab.exited = false;
         tab.openFailed = false;
         tab.openError = '';
         saveState(codeState);
@@ -7992,6 +8001,7 @@ function normalizeTerminalTabs(value, existing = []) {
           : null,
         connecting: !!previousById.get(tab.id)?.connecting,
         connected: !!previousById.get(tab.id)?.connected,
+        exited: !!previousById.get(tab.id)?.exited || !!tab.exited,
         openFailed: !!previousById.get(tab.id)?.openFailed,
         openError: typeof previousById.get(tab.id)?.openError === 'string' ? previousById.get(tab.id).openError : '',
       }))
@@ -8019,6 +8029,7 @@ function saveState(state) {
               name: tab.name,
               shell: normalizeTerminalShell(tab.shell),
               output: typeof tab.output === 'string' ? trimTerminalOutput(tab.output) : '',
+              exited: !!tab.exited,
               openError: typeof tab.openError === 'string' ? tab.openError : '',
             }))
             : [],
@@ -8065,6 +8076,7 @@ function createTerminalTab(name, shell) {
     runtimeTerminalId: null,
     connecting: false,
     connected: false,
+    exited: false,
     openFailed: false,
     openError: '',
   };
