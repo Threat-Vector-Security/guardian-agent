@@ -1,4 +1,5 @@
 import { existsSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, isAbsolute, resolve, win32 as pathWin32 } from 'node:path';
 import type {
   AutomationAuthoringCompilation,
@@ -117,7 +118,7 @@ export async function validateAutomationCompilation(
       issues.push({
         severity: 'error',
         message: `${result.name}: ${result.reason}`,
-        fixes: result.fixes,
+        fixes: isNonRemediableScheduledAgentBlocker(compilation, request) ? [] : result.fixes,
       });
       continue;
     }
@@ -269,6 +270,10 @@ function buildScheduledAgentValidationPlan(requestText: string): {
     requests.push({ name: 'web_fetch', args: { url } });
   }
 
+  if (mentionsShellExecution(text)) {
+    requests.push({ name: 'shell_safe', args: { command: text } });
+  }
+
   return {
     requests: dedupeRequests(requests),
     inputPaths: [...inputPaths],
@@ -313,7 +318,7 @@ function registerOutputTarget(
 
 function extractExplicitPathMentions(text: string): Array<{ path: string; kind: 'input' | 'output' }> {
   const mentions: Array<{ path: string; kind: 'input' | 'output' }> = [];
-  const pattern = /(`([^`]+)`)|(?<![A-Za-z0-9])((?:\.{1,2}[\\/]|[A-Za-z]:[\\/])[^"',;\n\r]+)/g;
+  const pattern = /(`([^`]+)`)|(?<![A-Za-z0-9])((?:\.{1,2}[\\/]|~[\\/]|[A-Za-z]:[\\/])[^"',;\n\r]+)/g;
   for (const match of text.matchAll(pattern)) {
     const path = (match[2] || match[3] || '')
       .trim()
@@ -372,6 +377,11 @@ function extractExplicitUrls(text: string): string[] {
   return [...urls];
 }
 
+function mentionsShellExecution(text: string): boolean {
+  return /\b(?:shell|terminal|command(?: line)?|powershell|cmd(?:\.exe)?|bash)\b/i.test(text)
+    && /\b(?:run|runs|execute|executes|launch|start|invoke|upload|download|curl|wget|scp|rsync)\b/i.test(text);
+}
+
 function dedupeRequests(requests: ToolPreflightRequest[]): ToolPreflightRequest[] {
   const seen = new Set<string>();
   const deduped: ToolPreflightRequest[] = [];
@@ -411,6 +421,9 @@ function uniqueFixes(fixes: ToolPreflightFix[]): ToolPreflightFix[] {
 }
 
 function resolveWorkspacePath(workspaceRoot: string, candidate: string): string {
+  if (candidate.startsWith('~/') || candidate.startsWith('~\\')) {
+    return resolve(homedir(), candidate.slice(2));
+  }
   if (isWindowsAbsolutePath(candidate)) {
     return candidate.replaceAll('/', '\\');
   }
@@ -466,13 +479,28 @@ function normalizeMentionedPath(path: string): string {
     .replace(/\s+([\\/])/g, '$1')
     .replace(/([\\/])\s+/g, '$1')
     .replace(/([A-Za-z0-9._-])\s{2,}([A-Za-z0-9._-])/g, '$1$2')
-    .replace(/\s+\b(?:and|then|using|with|before|after|plus)\b[\s\S]*$/i, '')
+    .replace(/\s+\b(?:and|then|using|with|before|after|plus|to|from)\b[\s\S]*$/i, '')
     .replace(/[.,;!?]+$/g, '')
     .trim();
   if (isWindowsAbsolutePath(normalized)) {
     return normalized.replace(/[\\/]{2,}/g, '\\');
   }
   return normalized;
+}
+
+function isNonRemediableScheduledAgentBlocker(
+  compilation: AutomationAuthoringCompilation,
+  request: ToolPreflightRequest | undefined,
+): boolean {
+  if (compilation.shape !== 'scheduled_agent' || !request) return false;
+  if (request.name === 'shell_safe') return true;
+  if (request.name !== 'fs_read') return false;
+  const path = typeof request.args?.path === 'string' ? request.args.path.trim() : '';
+  if (!path) return false;
+  const normalizedPath = resolveWorkspacePath(process.cwd(), path).replaceAll('\\', '/').toLowerCase();
+  const normalizedHome = homedir().replaceAll('\\', '/').toLowerCase();
+  return normalizedPath === `${normalizedHome}/.guardianagent`
+    || normalizedPath.startsWith(`${normalizedHome}/.guardianagent/`);
 }
 
 function normalizeRequestPathsForWorkspace(
