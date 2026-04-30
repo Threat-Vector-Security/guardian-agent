@@ -18,6 +18,7 @@ import type {
   VerificationDecision,
 } from './types.js';
 import {
+  lacksUsableAssistantContent,
   looksLikeOngoingWorkResponse,
   looksLikeRawToolMarkup,
 } from '../../util/assistant-response-shape.js';
@@ -198,6 +199,16 @@ function verifyFinalAnswerIsTerminal(
       reasons: ['Delegated worker returned raw pseudo tool-call markup instead of a terminal user-facing answer.'],
       retryable: true,
       requiredNextAction: 'Complete the delegated task through real tool calls and return the final answer, not raw tool markup.',
+      missingEvidenceKinds: ['answer'],
+      ...(answerStepIds.length > 0 ? { unsatisfiedStepIds: answerStepIds } : {}),
+    };
+  }
+  if (lacksUsableAssistantContent(finalAnswer)) {
+    return {
+      decision: 'insufficient',
+      reasons: ['Delegated worker returned a generic fallback instead of a usable user-facing answer.'],
+      retryable: true,
+      requiredNextAction: 'Retry the delegated run and synthesize a concrete final answer from the collected evidence.',
       missingEvidenceKinds: ['answer'],
       ...(answerStepIds.length > 0 ? { unsatisfiedStepIds: answerStepIds } : {}),
     };
