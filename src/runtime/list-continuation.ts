@@ -85,12 +85,21 @@ export function resolvePagedListWindow(input: {
 
 export function hasPagedListFollowUpRequest(
   content: string,
-  _turnRelation: IntentGatewayDecision['turnRelation'] | undefined,
+  turnRelation: IntentGatewayDecision['turnRelation'] | undefined,
 ): boolean {
-  return /\b(additional|more|remaining|next)\b/i.test(content)
-    || /\brest\b/.test(content)
-    || /\bother\s+\d{1,3}\b/i.test(content)
-    || /\bother\s+(?:items|results|entries|messages|emails|automations|links|pages)\b/i.test(content);
+  const text = content.trim();
+  if (!text) return false;
+  const compact = text.replace(/\s+/g, ' ');
+  const wordCount = compact.split(/\s+/).filter(Boolean).length;
+  if (turnRelation === 'follow_up'
+    && wordCount <= 4
+    && /\b(?:more|next|rest|remaining|additional)\b/i.test(compact)) {
+    return true;
+  }
+  return /\b(?:next|another)\s+(?:page|items?|results?|entries|messages?|emails?|automations?|links?|pages?)\b/i.test(compact)
+    || /\b(?:show|list|display|get|give)\b[\s\S]{0,80}\b(?:additional|more|remaining|next|rest|other)\b/i.test(compact)
+    || /\bother\s+\d{1,3}\b/i.test(compact)
+    || /\bother\s+(?:items|results|entries|messages|emails|automations|links|pages)\b/i.test(compact);
 }
 
 export function resolvePagedListContinuationRoute(input: {

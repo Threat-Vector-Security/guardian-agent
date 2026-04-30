@@ -209,6 +209,17 @@ describe('resolveIntentCapabilityCandidates', () => {
     )).toEqual(['provider_read']);
   });
 
+  it('maps security tasks to the direct security guardrail candidate', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'security_task',
+        operation: 'read',
+        executionClass: 'security_analysis',
+        preferredAnswerPath: 'direct',
+      }),
+    )).toEqual(['security_guardrail']);
+  });
+
   it('maps structured managed sandbox status reads to coding session control', () => {
     expect(resolveIntentCapabilityCandidates(
       mockDecision({

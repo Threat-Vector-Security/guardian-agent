@@ -49,6 +49,7 @@ const ALL_CANDIDATES = [
   'workspace_read',
   'browser',
   'web_search',
+  'security_guardrail',
 ] as const;
 
 function assertNoAutomationControlForToolLikeCloudRequest() {
@@ -173,6 +174,15 @@ describe('resolveDirectIntentRoutingCandidates', () => {
       [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual(['personal_assistant']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('maps security tasks to the direct security guardrail candidate', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'security_task', operation: 'read' }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['security_guardrail']);
     expect(result.gatewayDirected).toBe(true);
   });
 

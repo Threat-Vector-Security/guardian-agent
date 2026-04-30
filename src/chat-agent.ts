@@ -3857,6 +3857,8 @@ interface DegradedDirectIntentResponseInput {
         return new Set(['browser_task']);
       case 'web_search':
         return new Set(['search_task']);
+      case 'security_guardrail':
+        return new Set(['security_task']);
       default:
         return new Set(['unknown']);
     }

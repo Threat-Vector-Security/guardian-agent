@@ -18,6 +18,7 @@ export type IntentCapabilityCandidate =
   | 'workspace_read'
   | 'browser'
   | 'web_search'
+  | 'security_guardrail'
   | 'coding_session_control';
 
 export function resolveIntentCapabilityCandidates(
@@ -69,6 +70,8 @@ function preferredCandidatesForDecision(
         : ['workspace_read', 'workspace_write'];
     case 'search_task':
       return ['web_search'];
+    case 'security_task':
+      return ['security_guardrail'];
     case 'memory_task':
       return decision.operation === 'save'
         ? ['memory_write']
@@ -91,7 +94,6 @@ function preferredCandidatesForDecision(
         : [];
     case 'coding_session_control':
       return ['coding_session_control'];
-    case 'security_task':
     case 'unknown':
     default:
       return [];
