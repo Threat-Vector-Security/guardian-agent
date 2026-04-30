@@ -2701,6 +2701,60 @@ describe('IntentGateway', () => {
     expect(confirmationUserPrompt).toContain('"route":"ui_control"');
   });
 
+  it('confirms low-confidence general answers for saved automation catalog requests', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+    let confirmationSystemPrompt = '';
+    let confirmationUserPrompt = '';
+
+    const result = await gateway.classify(
+      {
+        content: 'List my saved automations. Keep the answer short and include only names and whether each is enabled.',
+        channel: 'web',
+      },
+      async (messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          return {
+            content: JSON.stringify({
+              route: 'general_assistant',
+              confidence: 'low',
+              operation: 'read',
+              summary: 'Answer a request about saved automations.',
+            }),
+            model: 'test-model',
+            finishReason: 'stop',
+          } satisfies ChatResponse;
+        }
+
+        confirmationSystemPrompt = messages[0]?.content ?? '';
+        confirmationUserPrompt = messages[1]?.content ?? '';
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        return {
+          content: JSON.stringify({
+            route: 'automation_control',
+            confidence: 'high',
+            operation: 'read',
+            summary: 'List the saved automation catalog.',
+            automationReadView: 'catalog',
+          }),
+          model: 'confirm-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(2);
+    expect(result.mode).toBe('confirmation');
+    expect(result.decision.route).toBe('automation_control');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.automationReadView).toBe('catalog');
+    expect(confirmationSystemPrompt).toContain('list, show, read, inspect, or count saved automations');
+    expect(confirmationUserPrompt).toContain('Candidate routes: automation_control');
+    expect(confirmationUserPrompt).toContain('"route":"general_assistant"');
+  });
+
   it('re-derives explicit tool work as tool-loop general assistant workload when the classifier omits workload metadata', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
