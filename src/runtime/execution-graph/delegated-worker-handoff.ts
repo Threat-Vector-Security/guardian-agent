@@ -100,6 +100,12 @@ export function applyDelegatedFollowUpPolicy(
   }
 
   if (handoff.reportingMode !== 'status_only') {
+    if (handoff.reportingMode === 'held_for_approval') {
+      return {
+        content: formatHeldForApprovalDelegatedMessage(handoff, metadata),
+        metadata,
+      };
+    }
     if (handoff.reportingMode === 'held_for_operator') {
       return {
         content: formatHeldForOperatorDelegatedMessage(handoff),
@@ -266,6 +272,61 @@ function formatHeldForOperatorDelegatedMessage(handoff: DelegatedWorkerHandoff):
     handoff.nextAction,
   ].filter((value) => typeof value === 'string' && value.trim().length > 0);
   return [...new Set(parts)].join('\n');
+}
+
+function formatHeldForApprovalDelegatedMessage(
+  handoff: DelegatedWorkerHandoff,
+  metadata: Record<string, unknown>,
+): string {
+  const blockerPrompt = readPendingActionPrompt(metadata);
+  const progress = formatDelegatedProgressForApprovalPause(metadata);
+  const parts = [
+    'Delegated work is paused: approval required.',
+    blockerPrompt,
+    progress,
+    handoff.summary,
+    handoff.nextAction,
+  ].filter((value) => typeof value === 'string' && value.trim().length > 0);
+  return [...new Set(parts)].join('\n');
+}
+
+function formatDelegatedProgressForApprovalPause(metadata: Record<string, unknown>): string | undefined {
+  const envelope = readDelegatedResultEnvelope(metadata);
+  if (!envelope || envelope.evidenceReceipts.length === 0) {
+    return undefined;
+  }
+  const succeeded = uniqueSortedToolNames(envelope.evidenceReceipts
+    .filter((receipt) => receipt.sourceType === 'tool_call' && receipt.status === 'succeeded')
+    .map((receipt) => receipt.toolName));
+  const failed = uniqueSortedToolNames(envelope.evidenceReceipts
+    .filter((receipt) => receipt.sourceType === 'tool_call' && receipt.status === 'failed')
+    .map((receipt) => receipt.toolName));
+  const pending = uniqueSortedToolNames(envelope.evidenceReceipts
+    .filter((receipt) => receipt.sourceType === 'tool_call' && (receipt.status === 'pending_approval' || receipt.status === 'blocked'))
+    .map((receipt) => receipt.toolName));
+
+  const parts = [
+    `Partial progress: ${succeeded.length} succeeded, ${failed.length} failed, ${pending.length} pending.`,
+    succeeded.length > 0 ? `Succeeded tools: ${formatToolNameList(succeeded)}.` : undefined,
+    failed.length > 0 ? `Failed tools: ${formatToolNameList(failed)}.` : undefined,
+    pending.length > 0 ? `Pending tools: ${formatToolNameList(pending)}.` : undefined,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+  return parts.length > 1 ? parts.join('\n') : undefined;
+}
+
+function uniqueSortedToolNames(values: Array<string | undefined>): string[] {
+  return [...new Set(values
+    .map((value) => typeof value === 'string' ? value.trim() : '')
+    .filter((value) => value.length > 0))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function formatToolNameList(names: string[]): string {
+  const visible = names.slice(0, 8);
+  const remaining = names.length - visible.length;
+  return remaining > 0
+    ? `${visible.join(', ')} and ${remaining} more`
+    : visible.join(', ');
 }
 
 function readPendingActionPrompt(metadata: Record<string, unknown> | undefined): string | undefined {
