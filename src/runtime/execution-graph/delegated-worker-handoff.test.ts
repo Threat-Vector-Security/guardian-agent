@@ -40,6 +40,75 @@ describe('delegated worker handoff graph policy', () => {
     expect(resolveDelegatedWorkerLifecycle(metadata, handoff.unresolvedBlockerKind, verification)).toBe('blocked');
   });
 
+  it('surfaces safe partial progress when delegated work pauses for approval', () => {
+    const taskContract = delegatedTaskContract();
+    const metadata = {
+      ...buildDelegatedExecutionMetadata(buildDelegatedSyntheticEnvelope({
+        taskContract,
+        runStatus: 'suspended',
+        stopReason: 'approval_required',
+        operatorSummary: 'Waiting for approval.',
+        evidenceReceipts: [{
+          receiptId: 'receipt-vercel',
+          sourceType: 'tool_call',
+          toolName: 'vercel_status',
+          status: 'succeeded',
+          refs: ['tool:vercel_status'],
+          summary: 'raw token should not be surfaced: secret-token',
+          startedAt: 1,
+          endedAt: 2,
+        }, {
+          receiptId: 'receipt-whm',
+          sourceType: 'tool_call',
+          toolName: 'whm_status',
+          status: 'failed',
+          refs: ['tool:whm_status'],
+          summary: 'Unknown cloud profile "1".',
+          startedAt: 3,
+          endedAt: 4,
+        }, {
+          receiptId: 'receipt-gmail',
+          sourceType: 'tool_call',
+          toolName: 'gws',
+          status: 'pending_approval',
+          refs: ['tool:gws'],
+          summary: 'Waiting for approval to run gws - gmail users getprofile.',
+          startedAt: 5,
+          endedAt: 5,
+        }],
+      })),
+      pendingAction: {
+        blocker: {
+          kind: 'approval',
+          prompt: 'Waiting for approval to run gws - gmail users getprofile.',
+          approvalSummaries: [{ id: 'approval-1', toolName: 'gws', argsPreview: 'gmail users getprofile' }],
+        },
+      },
+    };
+    const verification: VerificationDecision = {
+      decision: 'blocked',
+      reasons: ['Waiting for approval to run gws - gmail users getprofile.'],
+      retryable: false,
+      requiredNextAction: 'Resolve the pending approval(s) to continue the delegated run.',
+    };
+
+    const handoff = buildDelegatedHandoff('Waiting for approval to run gws - gmail users getprofile.', metadata, 'short_lived', verification);
+    const result = applyDelegatedFollowUpPolicy(
+      { content: 'Waiting for approval to run gws - gmail users getprofile.', metadata },
+      handoff,
+      verification,
+    );
+
+    expect(result.content).toContain('Delegated work is paused: approval required.');
+    expect(result.content).toContain('Partial progress: 1 succeeded, 1 failed, 1 pending.');
+    expect(result.content).toContain('Succeeded tools: vercel_status.');
+    expect(result.content).toContain('Failed tools: whm_status.');
+    expect(result.content).toContain('Pending tools: gws.');
+    expect(result.content).toContain('Resolve the pending approval(s) to continue the delegated run.');
+    expect(result.content).not.toContain('secret-token');
+    expect(result.metadata?.delegatedHandoff).toEqual(handoff);
+  });
+
   it('renders policy blockers as status-only delegated pauses', () => {
     const verification: VerificationDecision = {
       decision: 'policy_blocked',

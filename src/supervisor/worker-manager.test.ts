@@ -2330,7 +2330,9 @@ describe('WorkerManager', () => {
       },
     });
 
-    expect(result.content).toBe('Waiting for approval to write the final report.');
+    expect(result.content).toContain('Delegated work is paused: approval required.');
+    expect(result.content).toContain('Waiting for approval to write the final report.');
+    expect(result.content).toContain('Resolve the pending approval(s) to continue the delegated run.');
     expect(result.metadata).toMatchObject({
       delegatedHandoff: {
         reportingMode: 'held_for_approval',
