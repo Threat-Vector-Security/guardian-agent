@@ -49,6 +49,9 @@ const CONFIRMATION_AUTOMATION_CONTROL_OPERATIONS = new Set([
   'toggle',
   'run',
   'inspect',
+  'read',
+  'search',
+  'navigate',
   'clone',
   'update',
 ]);
@@ -59,6 +62,7 @@ const INTENT_GATEWAY_CONFIRMATION_SYSTEM_PROMPT = [
   'Re-check the original request against the candidate routes and capability ownership hints.',
   'If the previous route is correct, keep it.',
   'If it is wrong, return the corrected route, operation, workload metadata, and entities.',
+  'Requests to list, show, read, inspect, or count saved automations belong to route=automation_control with operation=read or inspect and automationReadView=catalog or count; do not leave them as general_assistant.',
   'For tool-plan coverage checks, compare the original request with the prior planned_steps. If the prior plan omits a requested capability domain or action, return corrected planned_steps that cover every required action before the final answer.',
   'If the original request requires external web research plus repo comparison, return concrete planned_steps with expectedToolCategories=["web_search"] for the external search step, expectedToolCategories=["repo_inspect"] for the repo evidence step, and an answer step depending on both; keep the route general_assistant unless the request only asks for web search.',
   'If the original request asks for both existing Automations and Second Brain routines, use route=general_assistant with separate required read planned_steps for expectedToolCategories=["automation_list"] and expectedToolCategories=["second_brain_routine_list","second_brain_routine_catalog"], followed by an answer step depending on both.',

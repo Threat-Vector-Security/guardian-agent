@@ -227,7 +227,7 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
 const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Route definitions:',
   '- automation_authoring: creating a new automation or changing automation definition content from freeform requirements.',
-  '- automation_control: operating on an existing automation definition or run, such as rename, delete, toggle, clone, inspect, or run.',
+  '- automation_control: operating on an existing automation definition, catalog, or run, such as list saved automations, count saved automations, rename, delete, toggle, clone, inspect, or run.',
   '- automation_output_task: searching, reading, or analyzing previously stored output from a saved automation run.',
   '- ui_control: requests about Guardian UI pages or catalog surfaces such as automations, system, dashboard, config, or Guardian chat.',
   '- browser_task: external website navigation, reading, extraction, or interaction.',
