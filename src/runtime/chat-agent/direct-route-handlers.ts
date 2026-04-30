@@ -28,6 +28,7 @@ import { tryDirectGoogleWorkspaceRead, tryDirectGoogleWorkspaceWrite } from './d
 import { tryDirectMemoryRead, tryDirectMemorySave } from './direct-memory.js';
 import { tryDirectPersonalAssistant } from './direct-personal-assistant.js';
 import { tryDirectProviderRead } from './direct-provider-read.js';
+import { tryDirectSecurityGuardrail } from './direct-security-guardrail.js';
 import {
   buildDirectAutomationDeps,
   buildDirectMailboxDeps,
@@ -378,6 +379,11 @@ export function buildChatDirectRouteHandlers(input: BuildChatDirectRouteHandlers
       defaultToolResultProviderKind: input.defaultToolResultProviderKind,
       sanitizeToolResultForLlm: input.sanitizeToolResultForLlm,
       chatWithFallback: input.chatWithFallback,
+    }),
+    security_guardrail: () => tryDirectSecurityGuardrail({
+      message: input.routedMessage,
+      originalUserContent: input.message.content,
+      decision: input.decision,
     }),
   };
 }

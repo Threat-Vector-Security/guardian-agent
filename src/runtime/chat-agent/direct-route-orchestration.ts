@@ -41,6 +41,7 @@ export const CHAT_DIRECT_INTENT_CANDIDATES: readonly DirectIntentRoutingCandidat
   'workspace_read',
   'browser',
   'web_search',
+  'security_guardrail',
 ];
 
 type RecordIntentRoutingTrace = (
