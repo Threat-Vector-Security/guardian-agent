@@ -134,14 +134,14 @@ export function shouldAttachCodeSessionForRequest(
   if (!gatewayDecision) {
     return !sharedAttachment;
   }
-  if (gatewayDecision.requiresRepoGrounding) {
-    return true;
-  }
   if (gatewayDecision.route === 'coding_task') {
     return true;
   }
   if (gatewayDecision.route === 'filesystem_task') {
     return true;
+  }
+  if (gatewayDecision.requiresRepoGrounding) {
+    return !sharedAttachment;
   }
   return false;
 }
