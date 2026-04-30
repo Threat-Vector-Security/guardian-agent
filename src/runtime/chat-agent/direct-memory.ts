@@ -10,6 +10,7 @@ import {
   parseDirectMemorySaveRequest,
 } from '../../util/memory-intent.js';
 import { deriveAnswerConstraints } from '../intent/request-patterns.js';
+import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { ToolExecutor } from '../../tools/executor.js';
 import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
 import type { PendingActionRecord } from '../pending-actions.js';
@@ -100,6 +101,7 @@ function formatDirectMemoryRecallResponse(
   output: unknown,
   scope: 'global' | 'code_session' | 'both',
 ): string {
+  const maxEntriesPerScope = 12;
   const sourceLabel = (value: 'global' | 'code_session') => value === 'code_session' ? 'Code-session memory' : 'Global memory';
   const formatEntries = (entries: unknown): string[] => (
     Array.isArray(entries)
@@ -109,21 +111,32 @@ function formatDirectMemoryRecallResponse(
           const summary = toString(entry.summary).trim();
           const content = toString(entry.content).trim();
           const category = toString(entry.category).trim();
-          const combined = summary && content && !content.toLowerCase().includes(summary.toLowerCase())
-            ? `${summary} — ${content}`
-            : (content || summary || '(empty memory entry)');
+          const combined = summarizeMemoryRecallEntry(summary || content || '(empty memory entry)');
           return category ? `${category}: ${combined}` : combined;
         })
       : []
   );
+  const appendOverviewEntries = (lines: string[], entries: string[]): void => {
+    if (entries.length === 0) {
+      lines.push('- no stored entries');
+      return;
+    }
+    for (const entry of entries.slice(0, maxEntriesPerScope)) {
+      lines.push(`- ${entry}`);
+    }
+    const omitted = entries.length - maxEntriesPerScope;
+    if (omitted > 0) {
+      lines.push(`- ${omitted} additional ${omitted === 1 ? 'entry' : 'entries'} omitted. Search memory for a topic to narrow the list.`);
+    }
+  };
   if (scope === 'both' && isRecord(output)) {
     const globalEntries = formatEntries(isRecord(output.global) ? output.global.entries : []);
     const codeEntries = formatEntries(isRecord(output.codeSession) ? output.codeSession.entries : []);
-    const lines = ['Here is the current persistent memory state:'];
+    const lines = [`Persistent memory overview: ${globalEntries.length} global ${globalEntries.length === 1 ? 'entry' : 'entries'}, ${codeEntries.length} code-session ${codeEntries.length === 1 ? 'entry' : 'entries'}.`];
     lines.push(`${sourceLabel('global')}:`);
-    lines.push(...(globalEntries.length > 0 ? globalEntries.map((entry) => `- ${entry}`) : ['- no stored entries']));
+    appendOverviewEntries(lines, globalEntries);
     lines.push(`${sourceLabel('code_session')}:`);
-    lines.push(...(codeEntries.length > 0 ? codeEntries.map((entry) => `- ${entry}`) : ['- no stored entries']));
+    appendOverviewEntries(lines, codeEntries);
     return lines.join('\n');
   }
   const entries = formatEntries(isRecord(output) ? output.entries : []);
@@ -131,10 +144,15 @@ function formatDirectMemoryRecallResponse(
   if (entries.length === 0) {
     return `${label} is currently empty.`;
   }
-  return [
-    `Here is the current ${label.toLowerCase()} state:`,
-    ...entries.map((entry) => `- ${entry}`),
-  ].join('\n');
+  const lines = [`${label} overview: ${entries.length} stored ${entries.length === 1 ? 'entry' : 'entries'}.`];
+  appendOverviewEntries(lines, entries);
+  return lines.join('\n');
+}
+
+function summarizeMemoryRecallEntry(value: string): string {
+  const normalized = value.replace(/(?:\\[rnt]|[\s])+/g, ' ').trim();
+  if (normalized.length <= 180) return normalized;
+  return `${normalized.slice(0, 177).trimEnd()}...`;
 }
 
 export async function tryDirectMemorySave(input: {
@@ -277,6 +295,7 @@ export async function tryDirectMemoryRead(input: {
   agentId: string;
   message: UserMessage;
   ctx: AgentContext;
+  decision?: IntentGatewayDecision | null;
   codeContext?: { workspaceRoot?: string; sessionId?: string };
   originalUserContent?: string;
 }): Promise<MemoryResponse> {
@@ -284,9 +303,9 @@ export async function tryDirectMemoryRead(input: {
 
   const intent = parseDirectMemoryReadRequest(stripLeadingContextPrefix(input.message.content))
     ?? parseDirectMemoryReadRequest(stripLeadingContextPrefix(input.originalUserContent ?? ''));
-  if (!intent) return null;
+  if (!intent && !isGatewayDirectedMemoryRead(input.decision)) return null;
 
-  const scope = intent.scope ?? (input.codeContext?.sessionId ? 'both' : 'global');
+  const scope = intent?.scope ?? (input.codeContext?.sessionId ? 'both' : 'global');
   const toolRequest = {
     origin: 'assistant' as const,
     agentId: input.agentId,
@@ -305,7 +324,7 @@ export async function tryDirectMemoryRead(input: {
     } : {}),
   };
 
-  if (intent.mode === 'search' && intent.query) {
+  if (intent?.mode === 'search' && intent.query) {
     const toolResult = await input.tools.executeModelTool(
       'memory_search',
       {
@@ -346,6 +365,13 @@ export async function tryDirectMemoryRead(input: {
     return `I couldn't recall persistent memory: ${errorMessage}`;
   }
   return formatDirectMemoryRecallResponse(toolResult.output, scope);
+}
+
+function isGatewayDirectedMemoryRead(decision: IntentGatewayDecision | null | undefined): boolean {
+  if (!decision) return false;
+  return decision.route === 'memory_task'
+    && (decision.operation === 'read' || decision.operation === 'search')
+    && decision.resolution === 'ready';
 }
 
 function readStrictReplyOnlyDirective(content: string | undefined): string | null {

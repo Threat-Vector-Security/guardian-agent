@@ -99,6 +99,25 @@ function providerDecision(): IntentGatewayDecision {
   } as IntentGatewayDecision;
 }
 
+function memoryReadDecision(): IntentGatewayDecision {
+  return {
+    route: 'memory_task',
+    confidence: 'high',
+    operation: 'read',
+    summary: 'Reads stored memory.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+    executionClass: 'direct_assistant',
+    preferredTier: 'local',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: false,
+    expectedContextPressure: 'low',
+    preferredAnswerPath: 'direct',
+    entities: {},
+  } as IntentGatewayDecision;
+}
+
 describe('chat direct route handlers', () => {
   it('builds coding route dependencies with brokered tool authority metadata', async () => {
     const executeModelTool = vi.fn(async () => ({
@@ -715,6 +734,63 @@ describe('chat direct route handlers', () => {
       'memory_search',
       expect.objectContaining({
         query: 'UI-MEM-91827',
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('recalls persistent memory directly for broad gateway-routed memory reads', async () => {
+    const executeModelTool = vi.fn(async () => ({
+      success: true,
+      output: {
+        entries: [{
+          category: 'Context Flush',
+          summary: 'Transcript about approval routing.',
+          content: 'Transcript about approval routing.',
+        }, {
+          category: 'Automation Results',
+          summary: '',
+          content: 'Automation result reference\\nAutomation ID: smoke\\nRun ID: run-1',
+        }],
+      },
+    }));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool,
+      getApprovalSummaries: vi.fn(),
+    } as never;
+    const handlers = buildChatDirectRouteHandlers({
+      agentId: 'chat',
+      tools,
+      runtimeDeps: runtimeDeps(tools),
+      message: { ...originalMessage, content: 'What memories do I have?' },
+      routedMessage: { ...routedMessage, content: 'What memories do I have?' },
+      ctx,
+      userKey: 'owner:web',
+      conversationKey: { userId: 'owner', channel: 'web' },
+      stateAgentId: 'chat',
+      decision: memoryReadDecision(),
+      llmMessages: [],
+      defaultToolResultProviderKind: 'local',
+      sanitizeToolResultForLlm: vi.fn(),
+      chatWithFallback: vi.fn(),
+      executeStoredFilesystemSave: vi.fn(),
+      codingRoutes: codingRoutes(tools),
+    });
+
+    const result = await handlers.memory_read?.({
+      gatewayDirected: true,
+      gatewayUnavailable: false,
+      skipDirectWebSearch: false,
+    });
+
+    expect(result).toContain('Global memory overview: 2 stored entries.');
+    expect(result).toContain('Context Flush: Transcript about approval routing.');
+    expect(result).toContain('Automation Results: Automation result reference Automation ID: smoke Run ID: run-1');
+    expect(executeModelTool).toHaveBeenCalledWith(
+      'memory_recall',
+      expect.objectContaining({
+        scope: 'global',
       }),
       expect.any(Object),
     );

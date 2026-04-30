@@ -1,4 +1,4 @@
-const RAW_TOOL_MARKUP_PATTERN = /<\/?tool_results?\b|<\/?tool_calls?\b|<\/?tool_call\b|\[\s*\/?\s*tool_results?\s*\]|\[\s*\/?\s*tool_calls?\s*\]|\[\s*\/?\s*tool_call\s*\]/i;
+const RAW_TOOL_MARKUP_PATTERN = /<\/?tool_results?\b|<\/?tool_calls?\b|<\/?tool_call\b|<\|tool_(?:calls_section|call)(?:_begin|_end)?\|>|\[\s*\/?\s*tool_results?\s*\]|\[\s*\/?\s*tool_calls?\s*\]|\[\s*\/?\s*tool_call\s*\]/i;
 
 export function looksLikeRawToolMarkup(content: string | undefined): boolean {
   if (!content?.trim()) return false;

@@ -15,7 +15,7 @@ const EXACT_FILE_TARGET_PATTERN = /\b(?:web\s+pages?|client-side\s+files?|files?
 const IMPLEMENTATION_LOOKUP_PATTERN = /\b(?:implement|implements|implemented|define|defines|defined|render|renders|rendered|rendering|consume|consumes|consumed|consumer|consumers|import|imports|imported|use|uses|used|using|path|paths|function|functions|keep|keeps|kept|align|aligned|responsible)\b/i;
 
 const RAW_SECRET_DISCLOSURE_VERB_PATTERN = /\b(?:print|show|reveal|display|dump|extract|exfiltrate|leak|return|give|read|open|cat|list)\b/;
-const RAW_SECRET_TARGET_PATTERN = /\b(?:api\s*keys?|bearer\s*tokens?|telegram\s*(?:bot\s*)?tokens?|provider\s+credentials?|credential\s+values?|credentials?|secrets?|secret\s+store|access\s+tokens?|refresh\s+tokens?)\b/;
+const RAW_SECRET_TARGET_PATTERN = /\b(?:api\s*keys?|tokens?|bearer\s*tokens?|telegram\s*(?:bot\s*)?tokens?|provider\s+credentials?|credential\s+values?|credentials?|secrets?|secret\s+store|access\s+tokens?|refresh\s+tokens?)\b/;
 const RAW_SECRET_QUALIFIER_PATTERN = /\b(?:raw|actual|full|unredacted|plain\s*text|plaintext|values?)\b/;
 const RAW_SECRET_PROTECTED_SOURCE_PATTERN = /(?:^|[\\/\s.])\.guardianagent\b|\bguardianagent\b.{0,80}\b(?:config|configuration|credential|credentials|secrets?)\b|\b(?:config|configuration|credential|credentials?)\s+files?\b/;
 const RAW_SECRET_REDACTION_REQUEST_PATTERN = /\b(?:redacted|redact|masked|mask|sanitize|sanitized|without\s+(?:printing|revealing|showing|displaying)\s+(?:raw\s+)?(?:secrets?|credentials?|tokens?|api\s*keys?))\b/;
