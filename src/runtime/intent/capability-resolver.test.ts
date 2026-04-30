@@ -85,6 +85,37 @@ describe('resolveIntentCapabilityCandidates', () => {
     )).toEqual(['scheduled_email_automation', 'automation']);
   });
 
+  it('keeps deterministic browser automation authoring on the direct compiler path', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'automation_authoring',
+        operation: 'create',
+        executionClass: 'tool_orchestration',
+        requiresToolSynthesis: true,
+        plannedSteps: [
+          {
+            kind: 'write',
+            summary: 'Create the requested browser automation.',
+            expectedToolCategories: ['automation_save'],
+            required: true,
+          },
+          {
+            kind: 'read',
+            summary: 'Open and read the requested page when the automation runs.',
+            expectedToolCategories: ['web_fetch', 'browser'],
+            required: true,
+          },
+          {
+            kind: 'read',
+            summary: 'List saved automation details.',
+            expectedToolCategories: ['automation_list'],
+            required: true,
+          },
+        ],
+      }),
+    )).toEqual(['scheduled_email_automation', 'automation']);
+  });
+
   it('defers cross-domain automation plans to full orchestration', () => {
     expect(resolveIntentCapabilityCandidates(
       mockDecision({

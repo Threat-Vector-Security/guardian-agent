@@ -194,6 +194,7 @@ function isAutomationAuthoringDirectCategory(category: string): boolean {
   const normalized = category.trim();
   if (!normalized) return true;
   if (normalized === 'read' || normalized === 'search' || normalized === 'write') return true;
+  if (isWebSearchDirectCategory(normalized)) return true;
   return isAutomationDirectCategory(normalized);
 }
 
