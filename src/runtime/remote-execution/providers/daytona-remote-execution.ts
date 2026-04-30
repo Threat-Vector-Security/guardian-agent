@@ -87,6 +87,72 @@ function isDaytonaExecutionProxyError(error: string): boolean {
   return /\b(50[234]|bad gateway|gateway timeout|service unavailable|econn(?:reset|refused)|proxy|toolbox|upstream|fetch failed|socket hang up)\b/i.test(error);
 }
 
+function truncateDiagnostic(value: string): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length > 500 ? `${normalized.slice(0, 497)}...` : normalized;
+}
+
+function redactDaytonaDiagnostic(value: string, target: DaytonaRemoteExecutionResolvedTarget): string {
+  const replacements = [
+    target.apiKey,
+  ].filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+  let redacted = value;
+  for (const secret of replacements) {
+    redacted = redacted.split(secret).join('[redacted]');
+  }
+  return redacted;
+}
+
+function collectDaytonaApiErrorDetails(errorRecord: Record<string, unknown> | null): string[] {
+  const details: string[] = [];
+  const response = errorRecord?.response && typeof errorRecord.response === 'object'
+    ? errorRecord.response as { status?: unknown; statusText?: unknown }
+    : null;
+  const status = typeof response?.status === 'number' ? response.status : null;
+  const statusText = typeof response?.statusText === 'string' && response.statusText.trim()
+    ? response.statusText.trim()
+    : '';
+  if (status !== null) {
+    details.push(`HTTP ${status}${statusText ? ` ${statusText}` : ''}`);
+  }
+  const json = errorRecord?.json && typeof errorRecord.json === 'object'
+    ? errorRecord.json as Record<string, unknown>
+    : null;
+  const apiCode = typeof json?.code === 'string' && json.code.trim() ? json.code.trim() : '';
+  const apiMessage = typeof json?.message === 'string' && json.message.trim() ? json.message.trim() : '';
+  if (apiCode) details.push(`apiCode=${apiCode}`);
+  if (apiMessage) details.push(apiMessage);
+  if (details.length === 0 && typeof errorRecord?.text === 'string' && errorRecord.text.trim()) {
+    details.push(errorRecord.text);
+  }
+  return details;
+}
+
+function formatDaytonaExecutionError(
+  error: unknown,
+  target: DaytonaRemoteExecutionResolvedTarget,
+): string {
+  const errorRecord = error && typeof error === 'object' && !Array.isArray(error)
+    ? error as Record<string, unknown>
+    : null;
+  const message = error instanceof Error ? error.message : String(error);
+  const details = [
+    ...collectDaytonaApiErrorDetails(errorRecord),
+    `profileId=${target.profileId}`,
+    `apiUrl=${target.apiUrl ?? 'https://app.daytona.io/api'}`,
+    target.target ? `target=${target.target}` : '',
+    target.language ? `language=${target.language}` : '',
+    target.snapshot ? `snapshot=${target.snapshot}` : '',
+    `networkMode=${target.networkMode}`,
+    target.allowedCidrs.length > 0 ? `allowedCidrs=${target.allowedCidrs.join(',')}` : '',
+  ].filter(Boolean);
+  const uniqueDetails = [...new Set(details)];
+  const formatted = uniqueDetails.length > 0
+    ? `${message}\n${uniqueDetails.map((entry) => `- ${truncateDiagnostic(entry)}`).join('\n')}`
+    : message;
+  return redactDaytonaDiagnostic(formatted, target);
+}
+
 function encodeArtifact(pathValue: string, buffer: Buffer, maxBytes: number): RemoteExecutionArtifact {
   const truncated = buffer.length > maxBytes;
   const output = truncated ? buffer.subarray(0, maxBytes) : buffer;
@@ -167,10 +233,12 @@ function buildDaytonaExecutionUnavailableError(input: {
   state?: string;
   action: string;
   reason: string;
+  target?: DaytonaRemoteExecutionResolvedTarget;
 }): Error {
   const normalizedState = input.state?.trim() || 'unknown';
+  const reason = input.target ? formatDaytonaExecutionError(input.reason, input.target) : input.reason;
   return new Error(
-    `Daytona sandbox '${input.sandboxId}' reported lifecycle state '${normalizedState}' but ${input.action} could not reach the toolbox command endpoint. ${input.reason}`,
+    `Daytona sandbox '${input.sandboxId}' reported lifecycle state '${normalizedState}' but ${input.action} could not reach the toolbox command endpoint. ${reason}`,
   );
 }
 
@@ -232,6 +300,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
       await this.ensureExecutionReady(session, {
         timeoutSec,
         action: 'readiness probe',
+        target,
       });
       const checkedAt = Date.now();
       return {
@@ -253,7 +322,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
         profileId: target.profileId,
         profileName: target.profileName,
         healthState: 'unreachable',
-        reason: error instanceof Error ? error.message : String(error),
+        reason: formatDaytonaExecutionError(error, target),
         checkedAt,
         durationMs: checkedAt - startedAt,
         sandboxId: session?.sandboxId,
@@ -289,6 +358,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
             timeoutSec,
             action: 'lease inspection',
             lifecycleStateHint: session.state,
+            target,
           });
           reason = `Managed Daytona sandbox is execution-ready (state: ${session.state?.trim() ?? 'unknown'}).`;
         } catch (error) {
@@ -317,7 +387,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
         profileId: target.profileId,
         profileName: target.profileName,
         healthState: 'unreachable',
-        reason: error instanceof Error ? error.message : String(error),
+        reason: formatDaytonaExecutionError(error, target),
         checkedAt,
         durationMs: checkedAt - startedAt,
         sandboxId: existingLease.sandboxId,
@@ -398,6 +468,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
       timeoutSec,
       action: 'sandbox resume',
       lifecycleStateHint: lifecycleState,
+      target,
     });
     const acquiredAt = Date.now();
     return {
@@ -506,6 +577,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
           state: extractDaytonaSandboxState(session.state),
           action: `executing '${request.command.requestedCommand}'`,
           reason: message,
+          target,
         });
       }
     }
@@ -598,7 +670,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
         leaseReused: false,
       };
     } catch (error) {
-      const stderr = error instanceof Error ? error.message : String(error);
+      const stderr = formatDaytonaExecutionError(error, target);
       const completedAt = Date.now();
       return {
         targetId: target.id,
@@ -650,6 +722,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
       timeoutSec: number;
       action: string;
       lifecycleStateHint?: string;
+      target: DaytonaRemoteExecutionResolvedTarget;
     },
   ): Promise<void> {
     let lastReason = 'Unknown Daytona execution readiness failure.';
@@ -678,6 +751,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
           state: lifecycleState,
           action: input.action,
           reason: lastReason,
+          target: input.target,
         });
       }
       if (isDaytonaStartingState(lifecycleState)) {
@@ -694,6 +768,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
           state: lifecycleState,
           action: input.action,
           reason: lastReason,
+          target: input.target,
         });
       }
       await delay(DAYTONA_EXECUTION_READINESS_RETRY_DELAY_MS);

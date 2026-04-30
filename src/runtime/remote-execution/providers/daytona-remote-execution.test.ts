@@ -368,6 +368,36 @@ describe('DaytonaRemoteExecutionProvider', () => {
     expect(session.destroy).toHaveBeenCalled();
   });
 
+  it('includes redacted Daytona profile context for sandbox reachability failures', async () => {
+    const provider = new DaytonaRemoteExecutionProvider({
+      client: new DaytonaSandboxClient({
+        sandboxFactory: vi.fn(async () => {
+          const error = new Error(`Request failed with status code 502 using ${TARGET.apiKey}`) as Error & {
+            response?: { status: number; statusText: string };
+            json?: { code: string; message: string };
+          };
+          error.response = { status: 502, statusText: 'Bad Gateway' };
+          error.json = {
+            code: 'bad_gateway',
+            message: 'Daytona toolbox upstream did not respond.',
+          };
+          throw error;
+        }),
+      }),
+    });
+
+    const result = await provider.probe(TARGET);
+
+    expect(result.healthState).toBe('unreachable');
+    expect(result.reason).toContain('HTTP 502 Bad Gateway');
+    expect(result.reason).toContain('apiCode=bad_gateway');
+    expect(result.reason).toContain('profileId=daytona-main');
+    expect(result.reason).toContain('apiUrl=https://app.daytona.io/api');
+    expect(result.reason).toContain('networkMode=cidr_allowlist');
+    expect(result.reason).not.toContain(TARGET.apiKey);
+    expect(result.reason).toContain('[redacted]');
+  });
+
   it('treats stopped managed Daytona sandboxes as restartable during inspection', async () => {
     const session: DaytonaSandboxSession = {
       sandboxId: 'daytona_existing',
