@@ -1870,7 +1870,7 @@ export class ToolExecutor {
       }
     }
     if (this.options.microsoftService) {
-      for (const toolName of ['m365', 'm365_schema', 'outlook_draft']) {
+      for (const toolName of ['m365_status', 'm365', 'm365_schema', 'outlook_draft']) {
         const def = this.registry.get(toolName)?.definition;
         if (def) definitions.push(def);
       }

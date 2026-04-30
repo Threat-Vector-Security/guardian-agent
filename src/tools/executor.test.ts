@@ -5752,6 +5752,73 @@ describe('ToolExecutor', () => {
     };
   }
 
+  function mockMicrosoftService(overrides?: any): any {
+    return {
+      execute: async () => ({ success: true, data: {} }),
+      schema: () => ({ success: true, data: {} }),
+      sendOutlookMessage: async () => ({ success: true, data: {} }),
+      createOutlookDraft: async () => ({ success: true, data: {} }),
+      isServiceEnabled: (svc: string) => ['mail', 'calendar', 'onedrive', 'contacts'].includes(svc),
+      getEnabledServices: () => ['mail', 'calendar', 'onedrive', 'contacts'],
+      isAuthenticated: () => true,
+      getAccessToken: async () => 'mock-token',
+      ...overrides,
+    };
+  }
+
+  it('exposes Microsoft 365 status without reading calendar contents', async () => {
+    const root = createExecutorRoot();
+    const execute = vi.fn(async () => ({ success: true, data: { value: [{ subject: 'private event' }] } }));
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      microsoftService: mockMicrosoftService({
+        execute,
+        getEnabledServices: () => ['mail', 'calendar'],
+        isServiceEnabled: (svc: string) => ['mail', 'calendar'].includes(svc),
+      }),
+    });
+
+    const run = await executor.runTool({
+      toolName: 'm365_status',
+      args: {},
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.status).toBe('succeeded');
+    expect(run.output).toMatchObject({
+      configured: true,
+      authenticated: true,
+      services: ['mail', 'calendar'],
+      calendarEnabled: true,
+      mailEnabled: true,
+      oneDriveEnabled: false,
+      contactsEnabled: false,
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('includes Microsoft 365 status in the always-loaded workspace tools when connected', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      microsoftService: mockMicrosoftService(),
+    });
+
+    const names = executor.listAlwaysLoadedDefinitions().map((tool) => tool.name);
+    expect(names).toContain('m365_status');
+  });
+
   it('hot-applies Google Workspace service availability without rebuilding the executor', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
