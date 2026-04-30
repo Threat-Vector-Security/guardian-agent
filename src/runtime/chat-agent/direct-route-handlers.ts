@@ -317,6 +317,7 @@ export function buildChatDirectRouteHandlers(input: BuildChatDirectRouteHandlers
       agentId: input.agentId,
       message: input.routedMessage,
       ctx: input.ctx,
+      decision: input.decision ?? undefined,
       codeContext: input.codeContext,
       originalUserContent: input.message.content,
     }),
