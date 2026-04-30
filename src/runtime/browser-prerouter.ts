@@ -1,4 +1,5 @@
 import type { AgentContext, UserMessage } from '../agent/types.js';
+import { validateUrlForSsrf, type SsrfCheckResult } from '../guardian/ssrf-protection.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
 import type { ContinuityThreadRecord } from './continuity-threads.js';
 import type { IntentGatewayDecision } from './intent-gateway.js';
@@ -21,6 +22,7 @@ export interface BrowserPreRouteResult {
   metadata?: {
     pendingAction?: Record<string, unknown>;
     continuationState?: Record<string, unknown> | null;
+    security?: Record<string, unknown>;
   };
 }
 
@@ -78,6 +80,8 @@ export async function tryBrowserPreRoute(
 ): Promise<BrowserPreRouteResult | null> {
   const gatewayBrowser = options?.intentDecision?.route === 'browser_task';
   if (!gatewayBrowser) return null;
+  const unsafeUrlBlock = await detectUnsafeGatewayUrl(options?.intentDecision?.entities.urls);
+  if (unsafeUrlBlock) return unsafeUrlBlock;
   const intent = parseDirectBrowserIntent(params.message.content)
     ?? resolveBrowserListContinuationIntent(
       params.continuityThread,
@@ -143,6 +147,54 @@ export async function tryBrowserPreRoute(
       return executeDirectBrowserAction(params, toolRequest, intent, 'type');
     default:
       return null;
+  }
+}
+
+async function detectUnsafeGatewayUrl(urls: string[] | undefined): Promise<BrowserPreRouteResult | null> {
+  if (!Array.isArray(urls) || urls.length === 0) return null;
+  for (const url of urls) {
+    const value = typeof url === 'string' ? url.trim() : '';
+    if (!value) continue;
+    const result = await validateUrlForSsrf(value);
+    if (!result.safe) {
+      return {
+        content: formatSsrfDirectBlock(value, result),
+        metadata: {
+          security: {
+            blocked: true,
+            guardrail: 'ssrf',
+            reason: result.reason ?? 'private_ip',
+          },
+        },
+      };
+    }
+  }
+  return null;
+}
+
+function formatSsrfDirectBlock(url: string, result: SsrfCheckResult): string {
+  const host = safeUrlHost(url) ?? url;
+  const reason = result.reason === 'cloud_metadata'
+    ? 'cloud metadata endpoint'
+    : result.reason === 'link_local'
+      ? 'link-local/internal address'
+      : result.reason === 'loopback'
+        ? 'loopback address'
+        : result.reason === 'obfuscated_ip'
+          ? 'obfuscated internal address'
+          : 'private/internal address';
+  return [
+    `I can't fetch ${url} because ${host} is a ${reason}.`,
+    '',
+    'Guardian blocks browser and web requests to private networks and cloud metadata endpoints to prevent SSRF and credential exposure.',
+  ].join('\n');
+}
+
+function safeUrlHost(url: string): string | null {
+  try {
+    return new URL(url).hostname || null;
+  } catch {
+    return null;
   }
 }
 
