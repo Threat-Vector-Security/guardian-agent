@@ -786,7 +786,12 @@ function compactToolOutputForLLM(toolName: string, output: unknown): unknown {
         mode: truncateText(toString(obj.mode), 40) || undefined,
         scannedDirs: toNumber(obj.scannedDirs) ?? undefined,
         scannedFiles: toNumber(obj.scannedFiles) ?? undefined,
+        maxDurationMs: toNumber(obj.maxDurationMs) ?? undefined,
+        timedOut: toBoolean(obj.timedOut),
         truncated: toBoolean(obj.truncated),
+        skippedDirs: Array.isArray(obj.skippedDirs)
+          ? (obj.skippedDirs as unknown[]).slice(0, 20).map((entry) => truncateText(toString(entry), 160)).filter(Boolean)
+          : undefined,
         matches: compactMatches,
         ...(matches.length > compactMatches.length ? { moreMatches: matches.length - compactMatches.length } : {}),
       };

@@ -1059,6 +1059,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         maxDepth: 20,
         maxFiles: 25_000,
         maxFileBytes: 1_000_000,
+        maxDurationMs: 15_000,
       }, request);
     },
   );

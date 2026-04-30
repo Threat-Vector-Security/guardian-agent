@@ -5984,6 +5984,7 @@ export class ToolExecutor {
       requireStringAllowEmpty,
       asString,
       asNumber,
+      now: this.now,
       guardAction: (request, action, details) => this.guardAction(request, action, details),
       resolveAllowedPath: (inputPath, request) => this.resolveAllowedPath(inputPath, request),
       maxSearchResults: MAX_SEARCH_RESULTS,

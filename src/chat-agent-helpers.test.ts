@@ -84,6 +84,29 @@ describe('formatToolResultForLLM', () => {
     expect(rendered).not.toContain('[Object omitted]');
   });
 
+  it('preserves filesystem search budget diagnostics for follow-on reasoning', () => {
+    const rendered = formatToolResultForLLM('fs_search', {
+      success: true,
+      status: 'succeeded',
+      output: {
+        root: 'S:\\Development\\GuardianAgent',
+        query: 'approval resume',
+        mode: 'content',
+        scannedDirs: 4,
+        scannedFiles: 51,
+        maxDurationMs: 100,
+        timedOut: true,
+        truncated: true,
+        skippedDirs: ['node_modules', 'dist'],
+        matches: [],
+      },
+    });
+
+    expect(rendered).toContain('"timedOut":true');
+    expect(rendered).toContain('"maxDurationMs":100');
+    expect(rendered).toContain('node_modules');
+  });
+
   it('keeps filesystem list results flat instead of collapsing directory entries', () => {
     const rendered = formatToolResultForLLM('fs_list', {
       success: true,
