@@ -3197,15 +3197,22 @@ function renderCodeWorkflowStageRail(workflow) {
   if (!workflow) return '';
   const currentIndex = Math.max(0, CODE_WORKFLOW_STAGE_ORDER.indexOf(workflow.currentStage));
   return `
-    <div class="code-workflow-rail" aria-label="Coding workflow stages">
+    <div class="code-workflow-rail" role="list" aria-label="Coding workflow stages">
       ${CODE_WORKFLOW_STAGE_ORDER.map((stage, index) => {
         const state = resolveCodeWorkflowStageState(workflow, stage, index, currentIndex);
+        const stageLabel = humanizeCodeWorkflowValue(stage);
+        const stateLabel = humanizeCodeWorkflowValue(state);
+        const isCurrent = state === 'current' || state === 'active' || state === 'blocked';
         return `
           <span
             class="code-workflow-rail__stage is-${escAttr(state)}"
-            title="${escAttr(humanizeCodeWorkflowValue(stage))}"
+            role="listitem"
+            aria-label="${escAttr(`${stageLabel}: ${stateLabel}`)}"
+            ${isCurrent ? 'aria-current="step"' : ''}
+            title="${escAttr(`${stageLabel}: ${stateLabel}`)}"
           >
-            ${esc(humanizeCodeWorkflowValue(stage))}
+            <span class="code-workflow-rail__stage-dot" aria-hidden="true"></span>
+            <span class="code-workflow-rail__stage-label">${esc(stageLabel)}</span>
           </span>
         `;
       }).join('')}
