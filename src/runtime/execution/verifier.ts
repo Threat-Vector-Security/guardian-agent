@@ -672,17 +672,6 @@ function verifyRepoEvidenceQuality(
   if (successfulRepoReceipts.length <= 0) {
     return null;
   }
-  const successfulRepoReceiptIds = new Set(successfulRepoReceipts.map((receipt) => receipt.receiptId));
-  const repoFileClaims = envelope.claims.filter((claim) => (
-    (claim.kind === 'file_reference' || claim.kind === 'implementation_file')
-    && claim.evidenceReceiptIds.some((receiptId) => successfulRepoReceiptIds.has(receiptId))
-  ));
-  const hasRepoEvidenceRefs = successfulRepoReceipts.some((receipt) => receipt.refs.length > 0)
-    || repoFileClaims.length > 0;
-  if (hasRepoEvidenceRefs) {
-    return null;
-  }
-
   const requiresLocationEvidence = envelope.taskContract.requireExactFileReferences === true
     || envelope.taskContract.answerConstraints?.requiresImplementationFiles === true
     || envelope.taskContract.answerConstraints?.requiresSymbolNames === true
@@ -690,11 +679,39 @@ function verifyRepoEvidenceQuality(
   if (!requiresLocationEvidence) {
     return null;
   }
+  const supportArtifactsAreTargets = contractTargetsSupportArtifacts(envelope);
+  const successfulRepoConfirmationReceiptIds = new Set(
+    successfulRepoReceipts
+      .filter((receipt) => receipt.toolName === 'fs_read' || receipt.toolName === 'code_symbol_search')
+      .map((receipt) => receipt.receiptId),
+  );
+  const implementationClaims = envelope.claims.filter((claim) => (
+    claim.kind === 'implementation_file'
+    && claim.evidenceReceiptIds.some((receiptId) => successfulRepoConfirmationReceiptIds.has(receiptId))
+    && (supportArtifactsAreTargets || !isSupportFileReference(claim.subject, claim.value))
+  ));
+  if (implementationClaims.length > 0) {
+    return null;
+  }
+  const repoReadReceiptClaims = buildFileClaimsFromReceipts(
+    envelope,
+    (receipt) => successfulRepoConfirmationReceiptIds.has(receipt.receiptId),
+    supportArtifactsAreTargets ? undefined : isProductionFileReference,
+  );
+  const repoReadFileClaims = envelope.claims.filter((claim) => (
+    claim.kind === 'file_reference'
+    && claim.evidenceReceiptIds.some((receiptId) => successfulRepoConfirmationReceiptIds.has(receiptId))
+    && (supportArtifactsAreTargets || isProductionFileReference(claim.subject, claim.value))
+  ));
+  const confirmedRepoFileClaims = [...repoReadReceiptClaims, ...repoReadFileClaims];
+  if (confirmedRepoFileClaims.length > 0 && finalAnswerCitesFileReference(answer, confirmedRepoFileClaims)) {
+    return null;
+  }
   const repoStepIds = findRepoEvidenceStepIds(envelope.taskContract.plan.steps);
   const answerStepIds = findAnswerStepIds(envelope.taskContract.plan);
   return {
     decision: 'insufficient',
-    reasons: ['Delegated worker reported no repo matches for an implementation-location request without backed repo file evidence.'],
+    reasons: ['Delegated worker reported no repo matches for an implementation-location request without confirmed production repo evidence.'],
     retryable: true,
     requiredNextAction: 'Retry the delegated run with targeted repo inspection; broaden or adjust the source query and inspect likely directories before concluding no implementation path exists.',
     missingEvidenceKinds: ['repo_evidence'],
@@ -772,17 +789,11 @@ function verifyRepoEvidenceDepth(
     (receipt) => successfulRepoConfirmationReceiptIds.has(receipt.receiptId),
     supportArtifactsAreTargets ? undefined : isProductionFileReference,
   );
-  if (repoReadReceiptClaims.length > 0 && finalAnswerCitesFileReference(answer, repoReadReceiptClaims)) {
-    return null;
-  }
   const repoReadFileClaims = envelope.claims.filter((claim) => (
     claim.kind === 'file_reference'
     && claim.evidenceReceiptIds.some((receiptId) => successfulRepoConfirmationReceiptIds.has(receiptId))
     && (supportArtifactsAreTargets || isProductionFileReference(claim.subject, claim.value))
   ));
-  if (repoReadFileClaims.length > 0 && finalAnswerCitesFileReference(answer, repoReadFileClaims)) {
-    return null;
-  }
   const finalAnswerFileReferences = extractFinalAnswerFileReferences(answer);
   const confirmedRepoFileClaims = [...repoReadReceiptClaims, ...repoReadFileClaims];
   if (
@@ -802,6 +813,17 @@ function verifyRepoEvidenceDepth(
       missingEvidenceKinds: ['implementation_file_claim'],
       unsatisfiedStepIds: [...new Set([...repoStepIds, ...answerStepIds])],
     };
+  }
+  const semanticSupportDecision = verifyImplementationLocationSemanticSupport(
+    envelope,
+    answer,
+    confirmedRepoFileClaims,
+  );
+  if (semanticSupportDecision) {
+    return semanticSupportDecision;
+  }
+  if (confirmedRepoFileClaims.length > 0 && finalAnswerCitesFileReference(answer, confirmedRepoFileClaims)) {
+    return null;
   }
   const repoFileClaims = envelope.claims.filter((claim) => (
     claim.kind === 'file_reference'
@@ -825,6 +847,127 @@ function verifyRepoEvidenceDepth(
     missingEvidenceKinds: ['implementation_file_claim'],
     unsatisfiedStepIds: [...new Set([...repoStepIds, ...answerStepIds])],
   };
+}
+
+function verifyImplementationLocationSemanticSupport(
+  envelope: DelegatedResultEnvelope,
+  answer: string,
+  confirmedRepoFileClaims: Claim[],
+): VerificationDecision | null {
+  if (envelope.taskContract.requireExactFileReferences === true) {
+    return null;
+  }
+  const requestTerms = extractImplementationLocationRequestTerms(envelope);
+  if (requestTerms.length <= 0) {
+    return null;
+  }
+  const citedConfirmedClaims = confirmedRepoFileClaims.filter((claim) => finalAnswerCitesFileReference(answer, [claim]));
+  if (citedConfirmedClaims.length <= 0) {
+    return null;
+  }
+  if (citedConfirmedClaims.some((claim) => claimEvidenceSupportsRequestTerms(envelope, claim, requestTerms))) {
+    return null;
+  }
+  const repoStepIds = findRepoEvidenceStepIds(envelope.taskContract.plan.steps);
+  const answerStepIds = findAnswerStepIds(envelope.taskContract.plan);
+  return {
+    decision: 'insufficient',
+    reasons: ['Delegated worker cited confirmed repo files that did not semantically support the key implementation-location terms.'],
+    retryable: true,
+    requiredNextAction: 'Retry the delegated run with targeted repo inspection; read files whose content matches the key implementation-location terms before citing them as the answer.',
+    missingEvidenceKinds: ['implementation_file_claim'],
+    unsatisfiedStepIds: [...new Set([...repoStepIds, ...answerStepIds])],
+  };
+}
+
+const IMPLEMENTATION_LOCATION_STOP_TERMS = new Set([
+  'answer',
+  'before',
+  'called',
+  'calls',
+  'collect',
+  'defined',
+  'emitted',
+  'events',
+  'exact',
+  'files',
+  'findings',
+  'function',
+  'functions',
+  'grounded',
+  'handled',
+  'implemented',
+  'inspect',
+  'inspected',
+  'locate',
+  'read',
+  'relevant',
+  'repo',
+  'repository',
+  'return',
+  'search',
+  'source',
+  'symbol',
+  'symbols',
+  'where',
+  'which',
+  'workspace',
+]);
+
+function extractImplementationLocationRequestTerms(envelope: DelegatedResultEnvelope): string[] {
+  const repoStepIds = new Set(findRepoEvidenceStepIds(envelope.taskContract.plan.steps));
+  const text = envelope.taskContract.plan.steps
+    .filter((step) => repoStepIds.has(step.stepId))
+    .map((step) => step.summary)
+    .join(' ');
+  const terms = new Set<string>();
+  for (const rawToken of text.match(/[A-Za-z][A-Za-z0-9_:-]{4,}/g) ?? []) {
+    for (const token of splitImplementationLocationToken(rawToken)) {
+      const normalized = normalizeImplementationLocationTerm(token);
+      if (
+        normalized.length >= 6
+        && !IMPLEMENTATION_LOCATION_STOP_TERMS.has(normalized)
+        && !/^\d+$/u.test(normalized)
+      ) {
+        terms.add(normalized);
+      }
+    }
+  }
+  return [...terms].slice(0, 8);
+}
+
+function splitImplementationLocationToken(token: string): string[] {
+  const separated = token
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_:-]+/g, ' ');
+  return [token, ...separated.split(/\s+/u)].filter(Boolean);
+}
+
+function normalizeImplementationLocationTerm(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function claimEvidenceSupportsRequestTerms(
+  envelope: DelegatedResultEnvelope,
+  claim: Claim,
+  requestTerms: string[],
+): boolean {
+  const evidenceReceiptIds = new Set(claim.evidenceReceiptIds);
+  const evidenceText = [
+    claim.subject,
+    claim.value,
+    ...envelope.evidenceReceipts
+      .filter((receipt) => evidenceReceiptIds.has(receipt.receiptId))
+      .map((receipt) => receipt.summary),
+  ]
+    .join(' ')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ');
+  const compactEvidenceText = evidenceText.replace(/\s+/g, '');
+  return requestTerms.every((term) => (
+    evidenceText.includes(term)
+    || compactEvidenceText.includes(term)
+  ));
 }
 
 function buildFileClaimsFromReceipts(

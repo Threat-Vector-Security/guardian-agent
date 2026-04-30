@@ -583,9 +583,7 @@ function synthesizeDelegatedEvidenceReceiptsFromJobs(
       toolName: snapshot.toolName,
       status: receiptStatus,
       refs: extractDelegatedEvidenceRefs(snapshot.argsPreview, snapshot.resultPreview),
-      summary: snapshot.error?.trim()
-        || snapshot.resultPreview?.trim()
-        || `${snapshot.toolName} ${snapshot.status}.`,
+      summary: buildDelegatedJobEvidenceSummary(snapshot),
       startedAt: snapshot.startedAt ?? snapshot.createdAt ?? 0,
       endedAt: snapshot.completedAt ?? snapshot.startedAt ?? snapshot.createdAt ?? 0,
     });
@@ -600,6 +598,17 @@ function synthesizeDelegatedEvidenceReceiptsFromJobs(
       interruptions: [],
     }),
   };
+}
+
+function buildDelegatedJobEvidenceSummary(snapshot: DelegatedJobSnapshot): string {
+  const parts = [
+    snapshot.error?.trim() ? `Error: ${snapshot.error.trim()}` : '',
+    snapshot.argsPreview?.trim() ? `Args: ${snapshot.argsPreview.trim()}` : '',
+    snapshot.resultPreview?.trim() ? `Result: ${snapshot.resultPreview.trim()}` : '',
+  ].filter(Boolean);
+  return parts.length > 0
+    ? parts.join('\n')
+    : `${snapshot.toolName} ${snapshot.status}.`;
 }
 
 function describeMissingDelegatedEnvelope(
