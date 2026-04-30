@@ -44,6 +44,32 @@ describe('shouldAttachCodeSessionForRequest', () => {
     })).toBe(true);
   });
 
+  it('drops shared code-session context for mixed general-assistant repo grounding on another surface', () => {
+    expect(shouldAttachCodeSessionForRequest({
+      content: 'Search the web for a title, search this workspace for approval resume events, and search memory for SMOKE-MEM-42801.',
+      channel: 'web',
+      surfaceId: 'fresh-api-surface',
+      resolvedCodeSession: sharedSession,
+      gatewayDecision: {
+        route: 'general_assistant',
+        requiresRepoGrounding: true,
+      },
+    })).toBe(false);
+  });
+
+  it('keeps same-surface code-session context for mixed general-assistant repo grounding', () => {
+    expect(shouldAttachCodeSessionForRequest({
+      content: 'Search the web for a title, search this workspace for approval resume events, and search memory for SMOKE-MEM-42801.',
+      channel: 'web',
+      surfaceId: 'code-panel',
+      resolvedCodeSession: sharedSession,
+      gatewayDecision: {
+        route: 'general_assistant',
+        requiresRepoGrounding: true,
+      },
+    })).toBe(true);
+  });
+
   it('does not treat workspace-root-only metadata as an explicit shared-session attachment for non-code turns', () => {
     expect(shouldAttachCodeSessionForRequest({
       content: 'What was the temporary marker in my immediately previous message? Reply with only the marker.',
