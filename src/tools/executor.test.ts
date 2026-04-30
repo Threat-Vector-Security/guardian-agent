@@ -7443,6 +7443,85 @@ describe('ToolExecutor', () => {
     expect(output.matches[0]?.snippet).toContain('emitMutationResumeGraphEvent');
   });
 
+  it('skips dependency and build directories during workspace searches by default', async () => {
+    const root = createExecutorRoot();
+    mkdirSync(join(root, 'node_modules', 'pkg'), { recursive: true });
+    await writeFile(join(root, 'node_modules', 'pkg', 'only-vendor-marker.txt'), 'vendor-only-search-marker', 'utf-8');
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const defaultRun = await executor.runTool({
+      toolName: 'fs_search',
+      args: { path: '.', query: 'vendor-only-search-marker', mode: 'content' },
+      origin: 'web',
+    });
+    expect(defaultRun.success).toBe(true);
+    const defaultOutput = defaultRun.output as {
+      skippedDirs: string[];
+      matches: Array<{ relativePath: string }>;
+    };
+    expect(defaultOutput.matches).toEqual([]);
+    expect(defaultOutput.skippedDirs).toContain('node_modules');
+
+    const includedRun = await executor.runTool({
+      toolName: 'fs_search',
+      args: { path: '.', query: 'vendor-only-search-marker', mode: 'content', includeIgnored: true },
+      origin: 'web',
+    });
+    expect(includedRun.success).toBe(true);
+    const includedOutput = includedRun.output as { matches: Array<{ relativePath: string }> };
+    expect(includedOutput.matches).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relativePath: 'node_modules/pkg/only-vendor-marker.txt' }),
+    ]));
+  });
+
+  it('returns partial search diagnostics when the workspace search budget expires', async () => {
+    const root = createExecutorRoot();
+    mkdirSync(join(root, 'src'), { recursive: true });
+    for (let index = 0; index < 60; index += 1) {
+      await writeFile(join(root, 'src', `file-${index}.txt`), `line ${index}`, 'utf-8');
+    }
+    let clock = 1_000;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      now: () => {
+        clock += 50;
+        return clock;
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'fs_search',
+      args: { path: '.', query: 'missing-search-marker', mode: 'content', maxDurationMs: 100 },
+      origin: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    const output = result.output as {
+      maxDurationMs: number;
+      timedOut: boolean;
+      truncated: boolean;
+      scannedFiles: number;
+    };
+    expect(output.maxDurationMs).toBe(100);
+    expect(output.timedOut).toBe(true);
+    expect(output.truncated).toBe(true);
+    expect(output.scannedFiles).toBeLessThan(60);
+  });
+
   it('searches large text files by content with the default search budget', async () => {
     const root = createExecutorRoot();
     mkdirSync(join(root, 'src'), { recursive: true });

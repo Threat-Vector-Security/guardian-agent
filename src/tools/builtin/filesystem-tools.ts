@@ -11,6 +11,7 @@ interface FilesystemToolRegistrarContext {
   requireStringAllowEmpty: (value: unknown, field: string) => string;
   asString: (value: unknown, fallback?: string) => string;
   asNumber: (value: unknown, fallback: number) => number;
+  now?: () => number;
   guardAction: (request: ToolExecutionRequest, action: string, details: Record<string, unknown>) => void;
   resolveAllowedPath: (inputPath: string, request?: Partial<ToolExecutionRequest>) => Promise<string>;
   maxSearchResults: number;
@@ -25,6 +26,25 @@ export const CRITICAL_FILESYSTEM_PATH_PATTERNS = [
   /(^|[\\\/])\.guardianagent([\\\/]|$)/i,
   /(^|[\\\/])\.env(\..*)?$/i,
 ];
+
+const DEFAULT_SEARCH_TIMEOUT_MS = 15_000;
+const MAX_SEARCH_TIMEOUT_MS = 60_000;
+const DEFAULT_SEARCH_IGNORED_DIRS = new Set([
+  '.cache',
+  '.git',
+  '.guardianagent',
+  '.next',
+  '.nuxt',
+  '.pnpm-store',
+  '.turbo',
+  '.vercel',
+  'build',
+  'coverage',
+  'dist',
+  'node_modules',
+  'out',
+  'tmp',
+]);
 
 export function isCriticalFilesystemPath(path: string): boolean {
   const normalized = path.replace(/\\/g, '/');
@@ -44,6 +64,7 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
     requireStringAllowEmpty,
     asString,
     asNumber,
+    now = Date.now,
     maxSearchResults,
     maxSearchFiles,
     maxSearchFileBytes,
@@ -132,6 +153,8 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
           maxDepth: { type: 'number', description: 'Maximum directory recursion depth (max 40).' },
           maxFiles: { type: 'number', description: `Maximum files to scan before stopping (max ${maxSearchFiles}).` },
           maxFileBytes: { type: 'number', description: `Maximum bytes per file for content search (max ${maxSearchFileBytes}).` },
+          maxDurationMs: { type: 'number', description: `Maximum wall-clock search duration before returning partial results (max ${MAX_SEARCH_TIMEOUT_MS}).` },
+          includeIgnored: { type: 'boolean', description: 'Also search common dependency, build, cache, and runtime directories skipped by default.' },
           caseSensitive: { type: 'boolean', description: 'Enable case-sensitive matching.' },
         },
         required: ['query'],
@@ -161,11 +184,22 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
       const maxDepth = Math.max(0, Math.min(40, asNumber(args.maxDepth, 12)));
       const maxFiles = Math.max(50, Math.min(maxSearchFiles, asNumber(args.maxFiles, 20_000)));
       const maxFileBytes = Math.max(256, Math.min(maxSearchFileBytes, asNumber(args.maxFileBytes, maxSearchFileBytes)));
+      const maxDurationMs = Math.max(100, Math.min(MAX_SEARCH_TIMEOUT_MS, asNumber(args.maxDurationMs, DEFAULT_SEARCH_TIMEOUT_MS)));
+      const deadline = now() + maxDurationMs;
+      const includeIgnored = args.includeIgnored === true;
       const caseSensitive = !!args.caseSensitive;
       const normalizedQuery = caseSensitive ? query : query.toLowerCase();
       const searchNames = mode === 'name' || mode === 'auto';
       const searchContent = mode === 'content' || mode === 'auto';
       const fallbackTerms = searchContent ? extractContentSearchFallbackTerms(query) : [];
+      const skippedDirs: string[] = [];
+      let timedOut = false;
+
+      const isTimedOut = () => {
+        if (now() <= deadline) return false;
+        timedOut = true;
+        return true;
+      };
 
       const matches: Array<{
         path: string;
@@ -190,7 +224,8 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
       let scannedDirs = 0;
       let scannedFiles = 0;
 
-      while (stack.length > 0 && matches.length < maxResults && scannedFiles < maxFiles) {
+      while (stack.length > 0 && matches.length < maxResults && scannedFiles < maxFiles && !timedOut) {
+        if (isTimedOut()) break;
         const current = stack.pop();
         if (!current) break;
 
@@ -203,10 +238,15 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
         scannedDirs += 1;
 
         for (const entry of entries) {
-          if (matches.length >= maxResults || scannedFiles >= maxFiles) break;
+          if (matches.length >= maxResults || scannedFiles >= maxFiles || isTimedOut()) break;
 
           const fullPath = resolve(current.dir, entry.name);
           if (entry.isDirectory()) {
+            if (!includeIgnored && DEFAULT_SEARCH_IGNORED_DIRS.has(entry.name)) {
+              const rel = relative(safeRoot, fullPath);
+              skippedDirs.push(rel ? rel.split(sep).join('/') : entry.name);
+              continue;
+            }
             if (current.depth < maxDepth) {
               stack.push({ dir: fullPath, depth: current.depth + 1 });
             }
@@ -255,7 +295,7 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
           const text = content.toString('utf-8');
           const haystack = caseSensitive ? text : text.toLowerCase();
           let searchFrom = 0;
-          while (matches.length < maxResults) {
+          while (matches.length < maxResults && !isTimedOut()) {
             const idx = haystack.indexOf(normalizedQuery, searchFrom);
             if (idx < 0) break;
             matches.push({
@@ -288,7 +328,7 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
           .slice(0, maxResults));
       }
 
-      const truncated = stack.length > 0 || scannedFiles >= maxFiles || matches.length >= maxResults;
+      const truncated = timedOut || stack.length > 0 || scannedFiles >= maxFiles || matches.length >= maxResults;
       return {
         success: true,
         output: {
@@ -298,8 +338,11 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
           caseSensitive,
           maxResults,
           maxFileBytes,
+          maxDurationMs,
           scannedDirs,
           scannedFiles,
+          skippedDirs: skippedDirs.slice(0, 100),
+          timedOut,
           truncated,
           matches,
         },
