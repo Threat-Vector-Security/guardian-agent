@@ -1928,6 +1928,7 @@ interface DegradedDirectIntentResponseInput {
       selectedExecutionProfile,
       currentProviderName: ctx.llm?.name,
     });
+    const handleSecurityEventHandoffInline = this.shouldHandleSecurityEventHandoffInline(message);
     const handleDirectReasoning = shouldHandleDirectReasoningModeRuntime({
       gateway: earlyGateway,
       selectedExecutionProfile,
@@ -2030,7 +2031,7 @@ interface DegradedDirectIntentResponseInput {
       }
     }
 
-    if (workerManager && delegatedOrchestration && !handleDirectAssistantInline) {
+    if (workerManager && delegatedOrchestration && !handleDirectAssistantInline && !handleSecurityEventHandoffInline) {
       try {
         const promptKnowledge = this.loadPromptKnowledgeBases(scopedCodeSession, knowledgeBaseQuery);
         const workerSystemPrompt = this.buildScopedSystemPrompt(scopedCodeSession, message);
@@ -2364,6 +2365,15 @@ interface DegradedDirectIntentResponseInput {
       surfaceId: message.surfaceId,
       userId: message.userId,
     });
+  }
+
+  private shouldHandleSecurityEventHandoffInline(message: UserMessage): boolean {
+    const metadata = message.metadata;
+    if (!metadata) return false;
+    const handoff = isRecord(metadata.handoff) ? metadata.handoff : null;
+    const securityEvent = isRecord(metadata.securityEvent) ? metadata.securityEvent : null;
+    if (!handoff || !securityEvent) return false;
+    return handoff.targetAgentId === this.id && securityEvent.type != null;
   }
 
   private resolveCodeSessionContext(message: UserMessage): ResolvedCodeSessionContext | null {
