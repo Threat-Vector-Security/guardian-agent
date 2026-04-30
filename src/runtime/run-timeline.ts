@@ -1796,9 +1796,12 @@ function deriveCodeSessionBaseStatus(
   if (runVerification.some((entry) => entry.status === 'fail')) return 'failed';
   if (runVerification.some((entry) => entry.status === 'not_run')) return 'running';
   if (runJobs.length > 0 || runVerification.length > 0) return 'completed';
-  if (session.workState.workflow?.status === 'blocked') return 'blocked';
-  if (session.workState.workflow?.status === 'in_progress') return 'running';
-  if (session.workState.workflow?.status === 'completed') return 'completed';
+  const workflow = session.workState.workflow;
+  if (workflow?.status === 'blocked') return 'blocked';
+  if (workflow?.verificationState === 'failed') return 'failed';
+  if (workflow?.status === 'in_progress') return 'running';
+  if (workflow?.verificationState === 'pending' || workflow?.verificationState === 'running') return 'verification_pending';
+  if (workflow?.status === 'completed') return 'completed';
   return 'queued';
 }
 

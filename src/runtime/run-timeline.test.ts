@@ -231,6 +231,33 @@ describe('RunTimelineStore', () => {
     }));
   });
 
+  it('promotes failed coding workflow verification to the run summary status', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestCodeSession(createCodeSession('code-workflow-failed', 260, {
+      workflow: {
+        type: 'implementation',
+        recipeId: 'coding.inspect-plan-implement-verify',
+        label: 'Implementation',
+        summary: 'Inspect, plan, implement, verify, and summarize.',
+        verificationMode: 'required',
+        currentStage: 'plan',
+        status: 'ready',
+        verificationState: 'failed',
+        nextAction: 'Run targeted tests, lint, or build proof before treating the workflow as complete.',
+        updatedAt: 260,
+      },
+    }));
+
+    const run = store.getRun('code-session:code-workflow-failed:unscoped');
+    expect(run?.summary.status).toBe('failed');
+    expect(run?.liveSummary.label).toBe('Failed');
+    expect(run?.items).toContainEqual(expect.objectContaining({
+      id: 'workflow:coding.inspect-plan-implement-verify:plan',
+      status: 'failed',
+      title: 'Coding stage: Plan',
+    }));
+  });
+
   it('strips the web-ui context prefix from assistant run titles and details', () => {
     const store = new RunTimelineStore({ now: () => 500 });
     store.ingestAssistantTrace(createTrace({
