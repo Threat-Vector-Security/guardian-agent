@@ -20,6 +20,9 @@ const RAW_SECRET_QUALIFIER_PATTERN = /\b(?:raw|actual|full|unredacted|plain\s*te
 const RAW_SECRET_PROTECTED_SOURCE_PATTERN = /(?:^|[\\/\s.])\.guardianagent\b|\bguardianagent\b.{0,80}\b(?:config|configuration|credential|credentials|secrets?)\b|\b(?:config|configuration|credential|credentials?)\s+files?\b/;
 const RAW_SECRET_REDACTION_REQUEST_PATTERN = /\b(?:redacted|redact|masked|mask|sanitize|sanitized|without\s+(?:printing|revealing|showing|displaying)\s+(?:raw\s+)?(?:secrets?|credentials?|tokens?|api\s*keys?))\b/;
 const NEGATED_RAW_SECRET_DISCLOSURE_CLAUSE_PATTERN = /\b(?:(?:do\s+not|don't|never)\s+(?:expose|include|print|show|reveal|display|dump|extract|exfiltrate|leak|return|give|read|open|cat|list)|without\s+(?:exposing|including|printing|revealing|showing|displaying|dumping|extracting|exfiltrating|leaking|returning|giving|reading|opening|listing))\b[^.!?\n]{0,180}\b(?:raw\s+)?(?:api\s*keys?|bearer\s*tokens?|telegram\s*(?:bot\s*)?tokens?|provider\s+credentials?|credential\s+values?|credentials?|secrets?|secret\s+store|access\s+tokens?|refresh\s+tokens?)\b[^.!?\n]*/g;
+const EXTERNAL_INSTRUCTION_SOURCE_PATTERN = /\b(?:web\s*(?:page|site)?|website|url|link|external\s+(?:content|page|site)|browser\s+content|page|document|search\s+result|https?:\/\/)\b/;
+const FOLLOW_EXTERNAL_INSTRUCTION_PATTERN = /\b(?:follow|obey|execute|apply|use|honou?r|trust)\b[^.!?\n]{0,120}\b(?:instructions?|prompt|system\s+prompt|rules?|commands?)\b/;
+const PROMPT_INJECTION_PAYLOAD_PATTERN = /\b(?:reveal|print|show|display|dump|include|expose|leak|return)\b[^.!?\n]{0,120}\b(?:secrets?|system\s+prompt|developer\s+(?:message|instructions?)|hidden\s+(?:prompt|instructions?)|api\s*keys?|tokens?|credentials?)\b|\b(?:change|modify|replace|override|ignore|bypass)\b[^.!?\n]{0,120}\b(?:system\s+prompt|instructions?|rules?|guardrails?|policy|policies)\b/;
 const DIRECT_REPLY_LEAD_PATTERN = /^(?:reply|respond|answer|say)\b/;
 const DIRECT_REPLY_EXACTNESS_PATTERN = /\b(?:exactly|no other text|only this|just this|marker)\b/;
 const DIRECT_REPLY_INSTRUCTION_PATTERN = /(?:^|[.!?]\s+)(?:reply|respond|answer|say)\s+(?:with\s+)?(?:exactly|only|just)\b/;
@@ -95,6 +98,14 @@ export function isRawCredentialDisclosureRequest(request: string | undefined): b
   if (!RAW_SECRET_TARGET_PATTERN.test(positiveCandidate)) return false;
   return RAW_SECRET_QUALIFIER_PATTERN.test(positiveCandidate)
     || RAW_SECRET_PROTECTED_SOURCE_PATTERN.test(positiveCandidate);
+}
+
+export function isExplicitExternalPromptInjectionRequest(request: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(request);
+  if (!normalized) return false;
+  return EXTERNAL_INSTRUCTION_SOURCE_PATTERN.test(normalized)
+    && FOLLOW_EXTERNAL_INSTRUCTION_PATTERN.test(normalized)
+    && PROMPT_INJECTION_PAYLOAD_PATTERN.test(normalized);
 }
 
 export function isExplicitComplexPlanningRequest(content: string | undefined): boolean {
