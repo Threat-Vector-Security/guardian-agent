@@ -224,6 +224,41 @@ export function registerBuiltinWorkspaceTools(context: WorkspaceToolRegistrarCon
 
   context.registry.register(
     {
+      name: 'm365_status',
+      description:
+        'Report Microsoft 365 / Outlook / calendar connection status without reading mailbox, calendar, OneDrive, or contact contents. ' +
+        'Use this for Microsoft 365 auth/status, Outlook status, and Microsoft calendar status checks. ' +
+        'Do not use the general m365 event or message list APIs when the user only asks for status.',
+      shortDescription: 'Report Microsoft 365 auth and enabled-service status without reading content.',
+      risk: 'read_only',
+      category: 'workspace',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    async (_args, request) => {
+      context.guardAction(request, 'read_docs', { provider: 'microsoft-native', surface: 'm365_status' });
+      const msService = context.getMicrosoftService();
+      const services = msService?.getEnabledServices() ?? [];
+      return {
+        success: true,
+        output: {
+          configured: !!msService,
+          authenticated: msService?.isAuthenticated() ?? false,
+          services,
+          calendarEnabled: msService?.isServiceEnabled('calendar') ?? false,
+          mailEnabled: msService?.isServiceEnabled('mail') ?? false,
+          oneDriveEnabled: msService?.isServiceEnabled('onedrive') ?? false,
+          contactsEnabled: msService?.isServiceEnabled('contacts') ?? false,
+        },
+      };
+    },
+  );
+
+  context.registry.register(
+    {
       name: 'outlook_draft',
       description: 'Create one plain-text Outlook draft using the configured Microsoft 365 connection. Authentication is automatic. Mutating — requires approval outside autonomous mode. Requires draft_email capability.',
       shortDescription: 'Create one Outlook draft with automatic Microsoft auth.',
@@ -305,6 +340,7 @@ export function registerBuiltinWorkspaceTools(context: WorkspaceToolRegistrarCon
         'Execute a Microsoft Graph API call (Outlook Mail, Calendar, OneDrive, Contacts). ' +
         'Uses direct REST calls with OAuth 2.0 PKCE. ' +
         'AUTHENTICATION IS AUTOMATIC. Do NOT ask the user for an access token or credentials. ' +
+        'For Microsoft 365, Outlook, or calendar auth/status checks, use m365_status instead of listing messages or events. ' +
         'IMPORTANT: resource paths use forward slashes (e.g. me/messages, me/events). ' +
         'Common calls:\n' +
         '  List emails:    service="mail", resource="me/messages", method="list", params={"$top":10,"$select":"subject,from,receivedDateTime"}\n' +

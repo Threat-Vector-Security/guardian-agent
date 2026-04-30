@@ -448,6 +448,73 @@ describe('task plan receipt accounting', () => {
     expect(plannedTask.allowAdditionalSteps).toBe(true);
   });
 
+  it('maps Microsoft and Google status tools to connector status categories', () => {
+    const plannedTask: PlannedTask = {
+      planId: 'plan:connector-status:1',
+      allowAdditionalSteps: false,
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'read',
+          summary: 'Check Microsoft calendar and Google Workspace auth status.',
+          expectedToolCategories: ['m365', 'm365_calendar_status', 'gmail_auth_status'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'answer',
+          summary: 'Return status summary.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    };
+
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'm365_status',
+      args: {},
+    })).toBe('step_1');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'gws',
+      args: { service: 'gmail', resource: 'users labels', method: 'list' },
+    })).toBe('step_1');
+
+    const stepReceipts = buildStepReceipts({
+      plannedTask,
+      evidenceReceipts: [
+        {
+          receiptId: 'receipt-m365-status',
+          sourceType: 'tool_call',
+          toolName: 'm365_status',
+          status: 'succeeded',
+          refs: [],
+          summary: 'Microsoft 365 calendar is authenticated.',
+          startedAt: 1,
+          endedAt: 2,
+        },
+        {
+          receiptId: 'receipt-answer',
+          sourceType: 'model_answer',
+          status: 'succeeded',
+          refs: [],
+          summary: 'Status summary.',
+          startedAt: 3,
+          endedAt: 4,
+        },
+      ],
+      toolReceiptStepIds: new Map([['receipt-m365-status', 'step_1']]),
+      finalAnswerReceiptId: 'receipt-answer',
+    });
+
+    expect(stepReceipts).toMatchObject([
+      { stepId: 'step_1', status: 'satisfied', evidenceReceiptIds: ['receipt-m365-status'] },
+      { stepId: 'step_2', status: 'satisfied', evidenceReceiptIds: ['receipt-answer'] },
+    ]);
+    expect(computeWorkerRunStatus(plannedTask, stepReceipts, [], 'end_turn')).toBe('completed');
+  });
+
   it('allows semantic write steps to be satisfied by Second Brain mutation tools', () => {
     const plannedTask: PlannedTask = {
       planId: 'plan:complex_planning_task:run:2',

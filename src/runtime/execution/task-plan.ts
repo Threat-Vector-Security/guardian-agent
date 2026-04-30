@@ -47,6 +47,21 @@ const AUTOMATION_WRITE_TOOL_NAMES = new Set([
   'automation_save',
   'automation_set_enabled',
 ]);
+const M365_STATUS_TOOL_CATEGORIES = new Set([
+  'm365_calendar_status',
+  'microsoft_calendar_status',
+  'microsoft_status',
+  'microsoft_auth_status',
+  'outlook_status',
+  'workspace_auth_status',
+]);
+const GWS_STATUS_TOOL_CATEGORIES = new Set([
+  'gmail_auth_status',
+  'google_workspace_status',
+  'google_auth_status',
+  'gws_status',
+  'workspace_auth_status',
+]);
 
 export interface ToolStepMatchInput {
   hintStepId?: string;
@@ -1093,7 +1108,11 @@ function expectedToolCategoryMatchesTool(
         ? toolName === 'memory_save'
         : MEMORY_READ_TOOL_NAMES.has(toolName)
     ))
-    || (normalized === 'automation' && toolName.startsWith('automation_'));
+    || (normalized === 'automation' && toolName.startsWith('automation_'))
+    || (M365_STATUS_TOOL_CATEGORIES.has(normalized) && toolName === 'm365_status')
+    || (GWS_STATUS_TOOL_CATEGORIES.has(normalized) && (toolName === 'gws_status' || toolName === 'gws'))
+    || (normalized === 'm365' && toolName.startsWith('m365'))
+    || (normalized === 'gws' && (toolName === 'gws' || toolName === 'gws_schema'));
 }
 
 function receiptSatisfiesStep(step: PlannedStep, receipt: EvidenceReceipt): boolean {
