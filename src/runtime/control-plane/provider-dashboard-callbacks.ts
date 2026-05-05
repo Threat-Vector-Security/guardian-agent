@@ -1,6 +1,8 @@
 import type { DashboardCallbacks, DashboardProviderInfo } from '../../channels/web-types.js';
 import type { LLMConfig } from '../../config/types.js';
 import { getProviderRegistry } from '../../llm/provider.js';
+import { inferModelCapabilities } from '../../llm/model-capabilities.js';
+import type { ModelInfo } from '../../llm/types.js';
 
 type ProviderDashboardCallbacks = Pick<
   DashboardCallbacks,
@@ -22,7 +24,7 @@ interface ProviderRegistryLike {
   }>;
   hasProvider(name: string): boolean;
   createProvider(config: LLMConfig): {
-    listModels(): Promise<Array<{ id: string }>>;
+    listModels(): Promise<ModelInfo[]>;
   };
 }
 
@@ -70,8 +72,26 @@ export function createProviderDashboardCallbacks(
       }
 
       const models = await providerRegistry.createProvider(providerConfig).listModels();
+      const modelIds = models.map((model) => model.id);
+      const activeModel = providerConfig.model;
+      const capabilities = inferModelCapabilities({
+        providerType,
+        model: activeModel,
+        liveModels: models,
+      });
       return {
-        models: models.map((model) => model.id),
+        models: modelIds,
+        capabilities,
+        capabilitiesByModel: Object.fromEntries(
+          models.map((model) => [
+            model.id,
+            inferModelCapabilities({
+              providerType,
+              model: model.id,
+              liveModels: models,
+            }),
+          ]),
+        ),
       };
     },
   };

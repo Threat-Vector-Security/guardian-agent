@@ -96,6 +96,11 @@ function buildNextLlmConfig(
       ...(providerUpdates.baseUrl !== undefined ? { baseUrl: providerUpdates.baseUrl } : {}),
       ...(providerUpdates.maxTokens !== undefined ? { maxTokens: providerUpdates.maxTokens } : {}),
       ...(providerUpdates.temperature !== undefined ? { temperature: providerUpdates.temperature } : {}),
+      ...(providerUpdates.topP !== undefined ? { topP: providerUpdates.topP } : {}),
+      ...(providerUpdates.reasoning !== undefined ? { reasoning: providerUpdates.reasoning } : {}),
+      ...(providerUpdates.verbosity !== undefined ? { verbosity: providerUpdates.verbosity } : {}),
+      ...(providerUpdates.parallelToolCalls !== undefined ? { parallelToolCalls: providerUpdates.parallelToolCalls } : {}),
+      ...(providerUpdates.toolChoice !== undefined ? { toolChoice: providerUpdates.toolChoice } : {}),
       ...(providerUpdates.timeoutMs !== undefined ? { timeoutMs: providerUpdates.timeoutMs } : {}),
       ...(providerUpdates.keepAlive !== undefined ? { keepAlive: providerUpdates.keepAlive } : {}),
       ...(providerUpdates.think !== undefined ? { think: providerUpdates.think } : {}),
@@ -436,6 +441,29 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
             }
             if (providerUpdates.temperature !== undefined) {
               llmSection[name].temperature = providerUpdates.temperature;
+            }
+            if (providerUpdates.topP !== undefined) {
+              llmSection[name].topP = providerUpdates.topP;
+            }
+            if (providerUpdates.reasoning !== undefined) {
+              if (
+                typeof providerUpdates.reasoning === 'object'
+                && providerUpdates.reasoning !== null
+                && Object.keys(providerUpdates.reasoning).length > 0
+              ) {
+                llmSection[name].reasoning = providerUpdates.reasoning;
+              } else {
+                delete llmSection[name].reasoning;
+              }
+            }
+            if (providerUpdates.verbosity !== undefined) {
+              llmSection[name].verbosity = providerUpdates.verbosity;
+            }
+            if (providerUpdates.parallelToolCalls !== undefined) {
+              llmSection[name].parallelToolCalls = providerUpdates.parallelToolCalls;
+            }
+            if (providerUpdates.toolChoice !== undefined) {
+              llmSection[name].toolChoice = providerUpdates.toolChoice;
             }
             if (providerUpdates.timeoutMs !== undefined) {
               llmSection[name].timeoutMs = providerUpdates.timeoutMs;

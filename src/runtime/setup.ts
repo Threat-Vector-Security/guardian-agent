@@ -3,7 +3,13 @@
  */
 
 import type { GuardianAgentConfig } from '../config/types.js';
-import type { OllamaOptionsConfig, OllamaThinkConfig } from '../config/types.js';
+import type {
+  LLMReasoningConfig,
+  LLMToolChoiceConfig,
+  LLMVerbosityConfig,
+  OllamaOptionsConfig,
+  OllamaThinkConfig,
+} from '../config/types.js';
 import type { DashboardProviderInfo } from '../channels/web-types.js';
 import type { SandboxHealth } from '../sandbox/types.js';
 import {
@@ -36,6 +42,11 @@ export interface SetupApplyInput {
   baseUrl?: string;
   maxTokens?: number;
   temperature?: number;
+  topP?: number;
+  reasoning?: LLMReasoningConfig;
+  verbosity?: LLMVerbosityConfig;
+  parallelToolCalls?: boolean;
+  toolChoice?: LLMToolChoiceConfig;
   timeoutMs?: number;
   keepAlive?: string | number;
   think?: OllamaThinkConfig;

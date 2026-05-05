@@ -61,6 +61,9 @@ import type { ProviderLocality, ProviderTier } from '../llm/provider-metadata.js
 import type {
   AssistantConnectorPackConfig,
   AssistantConnectorPlaybookDefinition,
+  LLMReasoningConfig,
+  LLMToolChoiceConfig,
+  LLMVerbosityConfig,
   AssistantResponseStyleLevel,
   ConnectorExecutionMode,
   OllamaOptionsConfig,
@@ -930,6 +933,33 @@ export interface DashboardProviderModelsInput {
   baseUrl?: string;
 }
 
+export interface DashboardModelSettingCapability {
+  supported: boolean;
+  source: 'api' | 'provider_metadata' | 'model_heuristic' | 'fallback';
+  values?: string[];
+  default?: string | number | boolean;
+  note?: string;
+}
+
+export interface DashboardModelCapabilities {
+  providerType: string;
+  model: string;
+  liveModelListed: boolean;
+  contextWindow?: number;
+  settings: {
+    maxTokens: DashboardModelSettingCapability;
+    temperature: DashboardModelSettingCapability;
+    topP: DashboardModelSettingCapability;
+    reasoningEffort: DashboardModelSettingCapability;
+    reasoningSummary: DashboardModelSettingCapability;
+    verbosity: DashboardModelSettingCapability;
+    parallelToolCalls: DashboardModelSettingCapability;
+    toolChoice: DashboardModelSettingCapability;
+    ollamaThink: DashboardModelSettingCapability;
+    nativeOllamaOptions: DashboardModelSettingCapability;
+  };
+}
+
 /** Assistant orchestrator snapshot for UI/CLI visibility. */
 export interface DashboardAssistantState {
   orchestrator: AssistantOrchestratorState;
@@ -1314,7 +1344,11 @@ export interface DashboardCallbacks {
   onProviders?: () => DashboardProviderInfo[];
   onProviderTypes?: () => DashboardProviderTypeInfo[];
   onProvidersStatus?: (input?: { force?: boolean }) => Promise<DashboardProviderInfo[]>;
-  onProviderModels?: (input: DashboardProviderModelsInput) => Promise<{ models: string[] }>;
+  onProviderModels?: (input: DashboardProviderModelsInput) => Promise<{
+    models: string[];
+    capabilities?: DashboardModelCapabilities;
+    capabilitiesByModel?: Record<string, DashboardModelCapabilities>;
+  }>;
   onCodingBackendStatus?: (sessionId?: string) => DashboardCodingBackendSession[];
   onAssistantState?: () => DashboardAssistantState;
   onAssistantJobFollowUpAction?: (input: {
@@ -2058,6 +2092,11 @@ export interface ConfigUpdate {
     baseUrl?: string;
     maxTokens?: number;
     temperature?: number;
+    topP?: number;
+    reasoning?: LLMReasoningConfig;
+    verbosity?: LLMVerbosityConfig;
+    parallelToolCalls?: boolean;
+    toolChoice?: LLMToolChoiceConfig;
     timeoutMs?: number;
     keepAlive?: string | number;
     think?: OllamaThinkConfig;

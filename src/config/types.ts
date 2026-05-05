@@ -111,6 +111,16 @@ export type PreferredProviderKey = 'local' | 'managedCloud' | 'frontier' | 'exte
 export type AutoModelSelectionPolicy = 'balanced' | 'quality_first';
 export type ManagedCloudRoutingRole = 'general' | 'direct' | 'toolLoop' | 'coding';
 export type ManagedCloudRoleBindingMap = Partial<Record<ManagedCloudRoutingRole, string>>;
+export type LLMReasoningEffortConfig = 'minimal' | 'low' | 'medium' | 'high';
+export type LLMReasoningSummaryConfig = 'auto' | 'concise' | 'detailed' | 'none';
+export type LLMVerbosityConfig = 'low' | 'medium' | 'high';
+export type LLMToolChoiceConfig = 'auto' | 'none' | 'required';
+
+export interface LLMReasoningConfig {
+  effort?: LLMReasoningEffortConfig;
+  summary?: LLMReasoningSummaryConfig;
+  budgetTokens?: number;
+}
 
 export interface OllamaOptionsConfig {
   numa?: boolean;
@@ -211,6 +221,16 @@ export interface LLMConfig {
   maxTokens?: number;
   /** Temperature for generation. */
   temperature?: number;
+  /** Nucleus sampling override when supported by the selected provider/model path. */
+  topP?: number;
+  /** Reasoning controls for providers/models that expose explicit reasoning settings. */
+  reasoning?: LLMReasoningConfig;
+  /** Response verbosity control for providers/models that expose it. */
+  verbosity?: LLMVerbosityConfig;
+  /** Whether the provider may issue multiple tool calls in one turn when supported. */
+  parallelToolCalls?: boolean;
+  /** Tool-choice behavior when tools are supplied and the provider supports explicit control. */
+  toolChoice?: LLMToolChoiceConfig;
   /** Request timeout in milliseconds. */
   timeoutMs?: number;
   /** Priority for failover ordering (lower = higher priority, default: 10). */

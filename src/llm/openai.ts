@@ -23,6 +23,11 @@ export class OpenAIProvider implements LLMProvider {
   private model: string;
   private maxTokens: number;
   private temperature: number;
+  private topP: number | undefined;
+  private reasoningEffort: 'minimal' | 'low' | 'medium' | 'high' | undefined;
+  private verbosity: 'low' | 'medium' | 'high' | undefined;
+  private parallelToolCalls: boolean | undefined;
+  private toolChoice: 'auto' | 'none' | 'required' | undefined;
   private providerLabel: string;
   private baseUrl: string | undefined;
 
@@ -38,6 +43,11 @@ export class OpenAIProvider implements LLMProvider {
     this.model = config.model;
     this.maxTokens = config.maxTokens ?? 4096;
     this.temperature = config.temperature ?? 0.7;
+    this.topP = config.topP;
+    this.reasoningEffort = config.reasoning?.effort;
+    this.verbosity = config.verbosity;
+    this.parallelToolCalls = config.parallelToolCalls;
+    this.toolChoice = config.toolChoice;
   }
 
   async chat(messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> {
@@ -192,6 +202,21 @@ export class OpenAIProvider implements LLMProvider {
         : { max_tokens: options?.maxTokens ?? this.maxTokens }),
     } satisfies Record<string, unknown>;
 
+    const topP = options?.topP ?? this.topP;
+    if (typeof topP === 'number') {
+      Object.assign(params, { top_p: topP });
+    }
+
+    const reasoningEffort = options?.reasoningEffort ?? this.reasoningEffort;
+    if (reasoningEffort && shouldSendOpenAIReasoningEffort(this.name, selectedModel)) {
+      Object.assign(params, { reasoning_effort: reasoningEffort });
+    }
+
+    const verbosity = options?.verbosity ?? this.verbosity;
+    if (verbosity && shouldSendOpenAIVerbosity(this.name, selectedModel)) {
+      Object.assign(params, { verbosity });
+    }
+
     if (this.shouldUseOpenRouterAutoFallback(selectedModel)) {
       Object.assign(params, {
         models: [selectedModel, 'openrouter/auto'],
@@ -210,6 +235,16 @@ export class OpenAIProvider implements LLMProvider {
           },
         })),
       });
+      const parallelToolCalls = options?.parallelToolCalls ?? this.parallelToolCalls;
+      if (typeof parallelToolCalls === 'boolean') {
+        Object.assign(params, { parallel_tool_calls: parallelToolCalls });
+      }
+      const toolChoice = options?.toolChoice ?? this.toolChoice;
+      if (toolChoice) {
+        Object.assign(params, {
+          tool_choice: toolChoice === 'required' ? 'required' : toolChoice,
+        });
+      }
     }
 
     if (options?.responseFormat?.type === 'json_object') {
@@ -276,6 +311,17 @@ function shouldRetryWithMaxCompletionTokens(err: unknown): boolean {
   return status === 400
     && /max_tokens/i.test(raw)
     && /max_completion_tokens/i.test(raw);
+}
+
+function shouldSendOpenAIReasoningEffort(providerName: string, model: string): boolean {
+  if (providerName !== 'openai') return false;
+  const normalized = model.trim().toLowerCase();
+  return /^(?:o\d(?:-|$)|gpt-5(?:[.-]|$)|gpt-4\.1(?:[.-]|$))/.test(normalized);
+}
+
+function shouldSendOpenAIVerbosity(providerName: string, model: string): boolean {
+  if (providerName !== 'openai') return false;
+  return /^gpt-5(?:[.-]|$)/i.test(model.trim());
 }
 
 /** Wrap OpenAI-compatible SDK errors into user-friendly messages. */

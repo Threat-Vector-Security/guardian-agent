@@ -639,7 +639,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Advanced Settings',
                 items: [
                   'Local Ollama and Ollama Cloud both use the same native Ollama request controls inside Guardian.',
-                  'Use the advanced section when you need to tune local Ollama behavior such as max tokens, temperature, timeout, keep-alive, think mode, or native Ollama options JSON.',
+                  'Use the advanced section when you need to tune model behavior such as max tokens, temperature, top-p, timeout, keep-alive, think mode, or native Ollama options JSON.',
+                  'When model discovery is available, Guardian shows only the model-specific controls it can safely apply, such as reasoning effort or verbosity on supported model paths.',
                   'Leave advanced settings empty unless you have a concrete reason to override the defaults.',
                 ],
               },
@@ -685,6 +686,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Advanced Settings',
                 items: [
                   'Ollama Cloud profiles support the same Ollama-native controls as local Ollama, including keep-alive, think mode, and native options JSON.',
+                  'Managed-cloud profiles can also persist shared model controls such as max tokens, temperature, top-p, and supported tool-call controls.',
+                  'When model discovery returns enough information, the editor narrows reasoning and verbosity controls to model paths that support them.',
                   'OpenRouter and NVIDIA Cloud profiles use OpenAI-compatible base URL paths; leave the defaults unless you have a deliberate reason to override them.',
                 ],
               },
@@ -759,6 +762,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Usage Notes',
                 items: [
                   'Use the web chat provider selector when you want one turn to go through a specific enabled provider profile, or use CLI `/mode` when you want to force `local`, `managed cloud`, or `frontier` directly.',
+                  'Advanced hosted settings can persist supported model controls such as max tokens, temperature, top-p, reasoning effort, verbosity, tool-choice behavior, and parallel tool-call preference.',
+                  'Capability-aware controls are populated from live model discovery when available, then constrained by Guardian provider metadata so unsupported settings are not presented as universal.',
                   'Auto mode chooses between local, managed cloud, and frontier based on your saved provider policy and the kind of request you asked for.',
                   'Auto mode only considers enabled provider profiles. Disabled profiles stay saved in the config UI but are ignored until you re-enable them.',
                   'Guardian still requires at least one enabled AI profile overall, so disabling the last remaining provider is rejected.',

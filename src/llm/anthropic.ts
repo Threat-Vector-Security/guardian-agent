@@ -22,6 +22,7 @@ export class AnthropicProvider implements LLMProvider {
   private model: string;
   private maxTokens: number;
   private temperature: number;
+  private topP: number | undefined;
 
   constructor(config: LLMConfig) {
     this.client = new Anthropic({
@@ -32,6 +33,7 @@ export class AnthropicProvider implements LLMProvider {
     this.model = config.model;
     this.maxTokens = config.maxTokens ?? 4096;
     this.temperature = config.temperature ?? 0.7;
+    this.topP = config.topP;
   }
 
   async chat(messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> {
@@ -43,6 +45,11 @@ export class AnthropicProvider implements LLMProvider {
       temperature: options?.temperature ?? this.temperature,
       messages: userMessages,
     };
+
+    const topP = options?.topP ?? this.topP;
+    if (typeof topP === 'number') {
+      params.top_p = topP;
+    }
 
     if (systemPrompt) {
       // Prompt caching: mark system prompt as ephemeral for Anthropic cache

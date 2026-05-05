@@ -212,8 +212,8 @@ describe('createProviderDashboardCallbacks', () => {
       hasProvider: vi.fn((name: string) => name === 'ollama' || name === 'openai'),
       createProvider: vi.fn((_config: LLMConfig) => ({
         listModels: vi.fn(async () => [
-          { id: 'gpt-4o' },
-          { id: 'gpt-4.1' },
+          { id: 'gpt-4o', name: 'gpt-4o', provider: 'openai' },
+          { id: 'gpt-4.1', name: 'gpt-4.1', provider: 'openai' },
         ]),
       })),
     };
@@ -252,6 +252,19 @@ describe('createProviderDashboardCallbacks', () => {
       credentialRef: 'llm.primary.local',
     })).resolves.toEqual({
       models: ['gpt-4o', 'gpt-4.1'],
+      capabilities: expect.objectContaining({
+        providerType: 'openai',
+        model: 'gpt-4o',
+        liveModelListed: true,
+        settings: expect.objectContaining({
+          maxTokens: expect.objectContaining({ supported: true }),
+          temperature: expect.objectContaining({ supported: true }),
+        }),
+      }),
+      capabilitiesByModel: expect.objectContaining({
+        'gpt-4o': expect.objectContaining({ model: 'gpt-4o', liveModelListed: true }),
+        'gpt-4.1': expect.objectContaining({ model: 'gpt-4.1', liveModelListed: true }),
+      }),
     });
     expect(providerRegistry.createProvider).toHaveBeenCalledWith({
       provider: 'openai',

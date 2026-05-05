@@ -1295,6 +1295,12 @@ function createProviderPanel(config, providers, panel) {
                 <div class="cfg-form-grid" style="margin-top:0.85rem;">
                   <div class="cfg-field"><label>Max Tokens</label><input id="cfg-local-max-tokens" class="cfg-provider-number" type="number" min="1" placeholder="2048"></div>
                   <div class="cfg-field"><label>Temperature</label><input id="cfg-local-temperature" class="cfg-provider-number" type="number" step="0.1" placeholder="0.7"></div>
+                  <div class="cfg-field"><label>Top P</label><input id="cfg-local-top-p" class="cfg-provider-number" type="number" min="0" max="1" step="0.01" placeholder="1"></div>
+                  <div class="cfg-field cfg-cap-reasoning"><label>Reasoning Effort</label><select id="cfg-local-reasoning-effort"><option value="">Default</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
+                  <div class="cfg-field cfg-cap-reasoning-summary"><label>Reasoning Summary</label><select id="cfg-local-reasoning-summary"><option value="">Default</option><option value="auto">Auto</option><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="none">None</option></select></div>
+                  <div class="cfg-field cfg-cap-verbosity"><label>Verbosity</label><select id="cfg-local-verbosity"><option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
+                  <div class="cfg-field cfg-cap-tools"><label>Parallel Tools</label><select id="cfg-local-parallel-tools"><option value="">Default</option><option value="true">On</option><option value="false">Off</option></select></div>
+                  <div class="cfg-field cfg-cap-tools"><label>Tool Choice</label><select id="cfg-local-tool-choice"><option value="">Default</option><option value="auto">Auto</option><option value="none">None</option><option value="required">Required</option></select></div>
                   <div class="cfg-field"><label>Timeout (ms)</label><input id="cfg-local-timeout" class="cfg-provider-number" type="number" min="1" placeholder="120000"></div>
                   <div class="cfg-field"><label>Keep Alive</label><input id="cfg-local-keep-alive" type="text" placeholder="5m or 300"></div>
                   <div class="cfg-field"><label>Think Mode</label><select id="cfg-local-think"><option value="">Default</option><option value="false">Off</option><option value="true">On</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
@@ -1337,6 +1343,12 @@ function createProviderPanel(config, providers, panel) {
                 <div class="cfg-form-grid" style="margin-top:0.85rem;">
                   <div class="cfg-field"><label>Max Tokens</label><input id="cfg-mcloud-max-tokens" class="cfg-provider-number" type="number" min="1" placeholder="2048"></div>
                   <div class="cfg-field"><label>Temperature</label><input id="cfg-mcloud-temperature" class="cfg-provider-number" type="number" step="0.1" placeholder="0.7"></div>
+                  <div class="cfg-field"><label>Top P</label><input id="cfg-mcloud-top-p" class="cfg-provider-number" type="number" min="0" max="1" step="0.01" placeholder="1"></div>
+                  <div class="cfg-field cfg-cap-reasoning"><label>Reasoning Effort</label><select id="cfg-mcloud-reasoning-effort"><option value="">Default</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
+                  <div class="cfg-field cfg-cap-reasoning-summary"><label>Reasoning Summary</label><select id="cfg-mcloud-reasoning-summary"><option value="">Default</option><option value="auto">Auto</option><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="none">None</option></select></div>
+                  <div class="cfg-field cfg-cap-verbosity"><label>Verbosity</label><select id="cfg-mcloud-verbosity"><option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
+                  <div class="cfg-field cfg-cap-tools"><label>Parallel Tools</label><select id="cfg-mcloud-parallel-tools"><option value="">Default</option><option value="true">On</option><option value="false">Off</option></select></div>
+                  <div class="cfg-field cfg-cap-tools"><label>Tool Choice</label><select id="cfg-mcloud-tool-choice"><option value="">Default</option><option value="auto">Auto</option><option value="none">None</option><option value="required">Required</option></select></div>
                   <div class="cfg-field"><label>Timeout (ms)</label><input id="cfg-mcloud-timeout" class="cfg-provider-number" type="number" min="1" placeholder="120000"></div>
                   <div class="cfg-field"><label>Keep Alive</label><input id="cfg-mcloud-keep-alive" type="text" placeholder="5m or 300"></div>
                   <div class="cfg-field"><label>Think Mode</label><select id="cfg-mcloud-think"><option value="">Default</option><option value="false">Off</option><option value="true">On</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
@@ -1375,11 +1387,17 @@ function createProviderPanel(config, providers, panel) {
               <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
                 Simple mode: paste a key once and Guardian stores it in the encrypted local secret store. Advanced mode: leave API Key blank and use an environment-backed Credential Ref. App-managed local secrets stay automatic and do not show up in the advanced field.
               </div>
-              <details id="cfg-ext-advanced-wrap" style="margin-top:1rem;display:none;">
+              <details id="cfg-ext-advanced-wrap" style="margin-top:1rem;">
                 <summary style="cursor:pointer;font-weight:600;">Advanced Hosted Settings</summary>
                 <div class="cfg-form-grid" style="margin-top:0.85rem;">
                   <div class="cfg-field"><label>Max Tokens</label><input id="cfg-ext-max-tokens" class="cfg-provider-number" type="number" min="1" placeholder="2048"></div>
                   <div class="cfg-field"><label>Temperature</label><input id="cfg-ext-temperature" class="cfg-provider-number" type="number" step="0.1" placeholder="0.7"></div>
+                  <div class="cfg-field"><label>Top P</label><input id="cfg-ext-top-p" class="cfg-provider-number" type="number" min="0" max="1" step="0.01" placeholder="1"></div>
+                  <div class="cfg-field cfg-cap-reasoning"><label>Reasoning Effort</label><select id="cfg-ext-reasoning-effort"><option value="">Default</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
+                  <div class="cfg-field cfg-cap-reasoning-summary"><label>Reasoning Summary</label><select id="cfg-ext-reasoning-summary"><option value="">Default</option><option value="auto">Auto</option><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="none">None</option></select></div>
+                  <div class="cfg-field cfg-cap-verbosity"><label>Verbosity</label><select id="cfg-ext-verbosity"><option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
+                  <div class="cfg-field cfg-cap-tools"><label>Parallel Tools</label><select id="cfg-ext-parallel-tools"><option value="">Default</option><option value="true">On</option><option value="false">Off</option></select></div>
+                  <div class="cfg-field cfg-cap-tools"><label>Tool Choice</label><select id="cfg-ext-tool-choice"><option value="">Default</option><option value="auto">Auto</option><option value="none">None</option><option value="required">Required</option></select></div>
                   <div class="cfg-field"><label>Timeout (ms)</label><input id="cfg-ext-timeout" class="cfg-provider-number" type="number" min="1" placeholder="120000"></div>
                   <div class="cfg-field"><label>Keep Alive</label><input id="cfg-ext-keep-alive" type="text" placeholder="5m or 300"></div>
                   <div class="cfg-field"><label>Think Mode</label><select id="cfg-ext-think"><option value="">Default</option><option value="false">Off</option><option value="true">On</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
@@ -1389,7 +1407,7 @@ function createProviderPanel(config, providers, panel) {
                   <textarea id="cfg-ext-ollama-options" rows="7" placeholder='{"num_ctx": 32768, "repeat_penalty": 1.1}' style="width:100%;"></textarea>
                 </div>
                 <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-                  These fields are unused for frontier providers and are only retained for shared editor behavior.
+                  Capability-aware controls are saved only when set. Ollama-only fields are hidden for hosted providers.
                 </div>
               </details>
               <div id="cfg-ext-secret-note" style="margin-top:0.35rem;font-size:0.72rem;color:var(--text-muted);"></div>
@@ -1495,6 +1513,12 @@ function createProviderPanel(config, providers, panel) {
     const advancedWrapEl = section.querySelector(`#${prefix}-advanced-wrap`);
     const maxTokensEl = section.querySelector(`#${prefix}-max-tokens`);
     const temperatureEl = section.querySelector(`#${prefix}-temperature`);
+    const topPEl = section.querySelector(`#${prefix}-top-p`);
+    const reasoningEffortEl = section.querySelector(`#${prefix}-reasoning-effort`);
+    const reasoningSummaryEl = section.querySelector(`#${prefix}-reasoning-summary`);
+    const verbosityEl = section.querySelector(`#${prefix}-verbosity`);
+    const parallelToolsEl = section.querySelector(`#${prefix}-parallel-tools`);
+    const toolChoiceEl = section.querySelector(`#${prefix}-tool-choice`);
     const timeoutEl = section.querySelector(`#${prefix}-timeout`);
     const keepAliveEl = section.querySelector(`#${prefix}-keep-alive`);
     const thinkEl = section.querySelector(`#${prefix}-think`);
@@ -1516,6 +1540,7 @@ function createProviderPanel(config, providers, panel) {
       : null;
     const shouldOpenNewDraft = activeProviderSelection?.side === side && activeProviderSelection.mode === 'new';
     let liveModelsRequestId = 0;
+    let liveModelCapabilities = {};
 
     function syncTestButtonState() {
       if (!testBtnEl) return;
@@ -1623,22 +1648,68 @@ function createProviderPanel(config, providers, panel) {
 
     function toggleAdvancedVisibility(providerType = typeEl?.value) {
       if (!advancedWrapEl) return;
-      advancedWrapEl.style.display = isOllamaProviderType(providerType) ? '' : 'none';
+      advancedWrapEl.style.display = '';
       if (!isOllamaProviderType(providerType)) {
-        if (maxTokensEl) maxTokensEl.value = '';
-        if (temperatureEl) temperatureEl.value = '';
-        if (timeoutEl) timeoutEl.value = '';
         if (keepAliveEl) keepAliveEl.value = '';
         if (thinkEl) thinkEl.value = '';
         if (ollamaOptionsEl) ollamaOptionsEl.value = '';
+      }
+      [
+        keepAliveEl?.closest('.cfg-field'),
+        thinkEl?.closest('.cfg-field'),
+        ollamaOptionsEl?.closest('.cfg-field') || ollamaOptionsEl?.parentElement,
+      ].forEach((el) => {
+        if (el) el.style.display = isOllamaProviderType(providerType) ? '' : 'none';
+      });
+    }
+
+    function setCapabilityFieldVisibility(el, capability) {
+      const field = el?.closest('.cfg-field');
+      if (!field) return;
+      field.style.display = capability?.supported ? '' : 'none';
+      if (!capability?.supported) {
+        el.value = '';
+      }
+    }
+
+    function applyModelCapabilities(capabilities, providerType = typeEl?.value) {
+      toggleAdvancedVisibility(providerType);
+      if (!capabilities?.settings) {
+        [
+          reasoningEffortEl,
+          reasoningSummaryEl,
+          verbosityEl,
+          parallelToolsEl,
+          toolChoiceEl,
+        ].forEach((el) => setCapabilityFieldVisibility(el, { supported: false }));
+        setCapabilityFieldVisibility(topPEl, { supported: true });
+        return;
+      }
+      setCapabilityFieldVisibility(topPEl, capabilities.settings.topP);
+      setCapabilityFieldVisibility(reasoningEffortEl, capabilities.settings.reasoningEffort);
+      setCapabilityFieldVisibility(reasoningSummaryEl, capabilities.settings.reasoningSummary);
+      setCapabilityFieldVisibility(verbosityEl, capabilities.settings.verbosity);
+      setCapabilityFieldVisibility(parallelToolsEl, capabilities.settings.parallelToolCalls);
+      setCapabilityFieldVisibility(toolChoiceEl, capabilities.settings.toolChoice);
+      if (isOllamaProviderType(providerType) && capabilities.settings.reasoningEffort?.supported) {
+        setCapabilityFieldVisibility(thinkEl, capabilities.settings.ollamaThink);
+        setCapabilityFieldVisibility(reasoningEffortEl, { supported: false });
       }
     }
 
     function setAdvancedValues(entry, providerType = typeEl?.value) {
       toggleAdvancedVisibility(providerType);
-      if (!advancedWrapEl || !isOllamaProviderType(providerType)) return;
+      if (!advancedWrapEl) return;
       if (maxTokensEl) maxTokensEl.value = entry?.maxTokens ?? '';
       if (temperatureEl) temperatureEl.value = entry?.temperature ?? '';
+      if (topPEl) topPEl.value = entry?.topP ?? '';
+      if (reasoningEffortEl) reasoningEffortEl.value = entry?.reasoning?.effort ?? '';
+      if (reasoningSummaryEl) reasoningSummaryEl.value = entry?.reasoning?.summary ?? '';
+      if (verbosityEl) verbosityEl.value = entry?.verbosity ?? '';
+      if (parallelToolsEl) parallelToolsEl.value = entry?.parallelToolCalls === true ? 'true'
+        : entry?.parallelToolCalls === false ? 'false'
+          : '';
+      if (toolChoiceEl) toolChoiceEl.value = entry?.toolChoice ?? '';
       if (timeoutEl) timeoutEl.value = entry?.timeoutMs ?? '';
       if (keepAliveEl) keepAliveEl.value = entry?.keepAlive ?? '';
       if (thinkEl) thinkEl.value = entry?.think === true ? 'true'
@@ -1668,6 +1739,8 @@ function createProviderPanel(config, providers, panel) {
         modelSelectEl.style.display = 'none';
         modelInputEl.style.display = '';
       }
+      const capabilities = liveModelCapabilities[currentModel] || null;
+      applyModelCapabilities(capabilities, typeEl?.value);
     }
 
     function getSelectedEntry() {
@@ -1733,7 +1806,9 @@ function createProviderPanel(config, providers, panel) {
       const requestId = ++liveModelsRequestId;
       if (!providerType || !isKnownProviderType(side, providerType)) {
         if (requestId !== liveModelsRequestId) return;
+        liveModelCapabilities = {};
         updateModelSelector([], currentModel);
+        applyModelCapabilities(null, providerType);
         if (!modelEl.value.trim()) modelEl.value = currentModel;
         return;
       }
@@ -1741,8 +1816,10 @@ function createProviderPanel(config, providers, panel) {
       const effectiveCredentialRef = getEffectiveCredentialRef(providerType);
       if (!isLocal && !keyEl?.value.trim() && !effectiveCredentialRef) {
         if (requestId !== liveModelsRequestId) return;
+        liveModelCapabilities = {};
         updateModelSelector([], currentModel);
         modelInputEl.value = currentModel;
+        applyModelCapabilities(null, providerType);
         activeNoteEl.textContent = `Paste ${getProviderCredentialLabel(providerType)} or choose an env-backed credential ref to load the live model list.`;
         return;
       }
@@ -1758,6 +1835,12 @@ function createProviderPanel(config, providers, panel) {
         });
         if (requestId !== liveModelsRequestId) return;
         const models = Array.isArray(result?.models) ? result.models.filter(Boolean) : [];
+        liveModelCapabilities = result?.capabilitiesByModel && typeof result.capabilitiesByModel === 'object'
+          ? result.capabilitiesByModel
+          : {};
+        if (result?.capabilities?.model) {
+          liveModelCapabilities[result.capabilities.model] = result.capabilities;
+        }
         if (models.length > 0) {
           const sortedModels = [...new Set(models)].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
           updateModelSelector(models, currentModel);
@@ -1765,16 +1848,20 @@ function createProviderPanel(config, providers, panel) {
             modelEl.value = sortedModels[0];
             markModelEdited(false);
           }
+          applyModelCapabilities(liveModelCapabilities[modelEl.value.trim()] || result?.capabilities || null, providerType);
           activeNoteEl.textContent = `${providerDisplayName} models loaded.`;
         } else {
           updateModelSelector([], currentModel);
           modelInputEl.value = currentModel;
+          applyModelCapabilities(result?.capabilities || null, providerType);
           activeNoteEl.textContent = `${providerDisplayName} did not return any models. You can still enter a model ID manually.`;
         }
       } catch (err) {
         if (requestId !== liveModelsRequestId) return;
+        liveModelCapabilities = {};
         updateModelSelector([], currentModel);
         modelInputEl.value = currentModel;
+        applyModelCapabilities(null, providerType);
         const reason = err instanceof Error ? err.message : String(err);
         activeNoteEl.textContent = `Could not load ${providerDisplayName} models yet: ${reason}`;
       }
@@ -2169,10 +2256,12 @@ function createProviderPanel(config, providers, panel) {
     modelInputEl?.addEventListener('input', () => {
       cancelPendingLiveModels();
       markModelEdited(true);
+      applyModelCapabilities(liveModelCapabilities[modelInputEl.value.trim()] || null, typeEl?.value);
     });
     modelSelectEl?.addEventListener('change', () => {
       cancelPendingLiveModels();
       markModelEdited(true);
+      applyModelCapabilities(liveModelCapabilities[modelSelectEl.value] || null, typeEl?.value);
     });
 
     urlEl.addEventListener('change', () => {
@@ -2225,6 +2314,12 @@ function createProviderPanel(config, providers, panel) {
       const providerType = typeEl?.value.trim().toLowerCase() || (isLocal ? 'ollama' : 'openai');
       const maxTokens = parseOptionalNumberInput(maxTokensEl?.value);
       const temperature = parseOptionalNumberInput(temperatureEl?.value);
+      const topP = parseOptionalNumberInput(topPEl?.value);
+      const reasoningEffort = parseOptionalStringInput(reasoningEffortEl?.value);
+      const reasoningSummary = parseOptionalStringInput(reasoningSummaryEl?.value);
+      const verbosity = parseOptionalStringInput(verbosityEl?.value);
+      const parallelToolCalls = parseOptionalBooleanInput(parallelToolsEl?.value);
+      const toolChoice = parseOptionalStringInput(toolChoiceEl?.value);
       const timeoutMs = parseOptionalNumberInput(timeoutEl?.value);
       const keepAlive = parseOptionalKeepAliveInput(keepAliveEl?.value);
       const think = parseThinkModeInput(thinkEl?.value);
@@ -2243,8 +2338,13 @@ function createProviderPanel(config, providers, panel) {
         statusEl.style.color = 'var(--error)';
         return;
       }
-      if (Number.isNaN(maxTokens) || Number.isNaN(temperature) || Number.isNaN(timeoutMs)) {
-        statusEl.textContent = 'Advanced numeric Ollama settings must be valid numbers.';
+      if (Number.isNaN(maxTokens) || Number.isNaN(temperature) || Number.isNaN(topP) || Number.isNaN(timeoutMs)) {
+        statusEl.textContent = 'Advanced numeric model settings must be valid numbers.';
+        statusEl.style.color = 'var(--error)';
+        return;
+      }
+      if (topP !== undefined && (topP < 0 || topP > 1)) {
+        statusEl.textContent = 'Top P must be between 0 and 1.';
         statusEl.style.color = 'var(--error)';
         return;
       }
@@ -2267,11 +2367,21 @@ function createProviderPanel(config, providers, panel) {
         baseUrl: baseUrl || undefined,
         apiKey: keyEl?.value.trim() || undefined,
         credentialRef: credentialRefCheckbox?.checked && credentialRefEl ? credentialRefEl.value.trim() : undefined,
+        maxTokens: maxTokens === undefined ? undefined : maxTokens,
+        temperature: temperature === undefined ? undefined : temperature,
+        topP: topP === undefined ? undefined : topP,
+        reasoning: reasoningEffort || reasoningSummary
+          ? {
+              effort: reasoningEffort,
+              summary: reasoningSummary,
+            }
+          : undefined,
+        verbosity,
+        parallelToolCalls,
+        toolChoice,
+        timeoutMs: timeoutMs === undefined ? undefined : timeoutMs,
         ...(isOllamaProviderType(providerType)
           ? {
-              maxTokens: maxTokens === undefined ? undefined : maxTokens,
-              temperature: temperature === undefined ? undefined : temperature,
-              timeoutMs: timeoutMs === undefined ? undefined : timeoutMs,
               keepAlive,
               think,
               ollamaOptions,
@@ -2511,6 +2621,19 @@ function parseThinkModeInput(value) {
   if (trimmed === 'true') return true;
   if (trimmed === 'false') return false;
   return trimmed;
+}
+
+function parseOptionalStringInput(value) {
+  const trimmed = String(value || '').trim();
+  return trimmed || undefined;
+}
+
+function parseOptionalBooleanInput(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return undefined;
+  if (trimmed === 'true') return true;
+  if (trimmed === 'false') return false;
+  return undefined;
 }
 
 function getCredentialRefRegistry(config = sharedConfig) {

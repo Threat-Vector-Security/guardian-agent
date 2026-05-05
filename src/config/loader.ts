@@ -220,6 +220,39 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     if (llm.keepAlive !== undefined && typeof llm.keepAlive !== 'string' && typeof llm.keepAlive !== 'number') {
       errors.push(`llm.${name}.keepAlive must be a string or number`);
     }
+    if (llm.topP !== undefined && (typeof llm.topP !== 'number' || llm.topP < 0 || llm.topP > 1)) {
+      errors.push(`llm.${name}.topP must be a number between 0 and 1`);
+    }
+    if (llm.reasoning !== undefined && (typeof llm.reasoning !== 'object' || llm.reasoning === null || Array.isArray(llm.reasoning))) {
+      errors.push(`llm.${name}.reasoning must be an object`);
+    }
+    if (
+      llm.reasoning?.effort !== undefined
+      && !['minimal', 'low', 'medium', 'high'].includes(llm.reasoning.effort)
+    ) {
+      errors.push(`llm.${name}.reasoning.effort must be minimal, low, medium, or high`);
+    }
+    if (
+      llm.reasoning?.summary !== undefined
+      && !['auto', 'concise', 'detailed', 'none'].includes(llm.reasoning.summary)
+    ) {
+      errors.push(`llm.${name}.reasoning.summary must be auto, concise, detailed, or none`);
+    }
+    if (
+      llm.reasoning?.budgetTokens !== undefined
+      && (typeof llm.reasoning.budgetTokens !== 'number' || llm.reasoning.budgetTokens < 1)
+    ) {
+      errors.push(`llm.${name}.reasoning.budgetTokens must be a positive number`);
+    }
+    if (llm.verbosity !== undefined && !['low', 'medium', 'high'].includes(llm.verbosity)) {
+      errors.push(`llm.${name}.verbosity must be low, medium, or high`);
+    }
+    if (llm.parallelToolCalls !== undefined && typeof llm.parallelToolCalls !== 'boolean') {
+      errors.push(`llm.${name}.parallelToolCalls must be a boolean`);
+    }
+    if (llm.toolChoice !== undefined && !['auto', 'none', 'required'].includes(llm.toolChoice)) {
+      errors.push(`llm.${name}.toolChoice must be auto, none, or required`);
+    }
     if (
       llm.think !== undefined
       && typeof llm.think !== 'boolean'

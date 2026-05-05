@@ -36,6 +36,7 @@ export class OllamaProvider implements LLMProvider {
   private readonly apiKey?: string;
   private readonly maxTokens: number;
   private readonly temperature: number;
+  private readonly topP: number | undefined;
   private readonly timeoutMs: number;
   private readonly keepAlive?: string | number;
   private readonly think?: LLMConfig['think'];
@@ -48,6 +49,7 @@ export class OllamaProvider implements LLMProvider {
     this.apiKey = config.apiKey?.trim() || undefined;
     this.maxTokens = config.maxTokens ?? 2048;
     this.temperature = config.temperature ?? 0.7;
+    this.topP = config.topP;
     this.timeoutMs = config.timeoutMs ?? 120_000;
     this.keepAlive = config.keepAlive;
     this.think = config.think;
@@ -154,12 +156,16 @@ export class OllamaProvider implements LLMProvider {
 
     const maxTokens = options?.maxTokens ?? this.maxTokens;
     const temperature = options?.temperature ?? this.temperature;
+    const topP = options?.topP ?? this.topP;
 
     if (requestOptions.num_predict === undefined) {
       requestOptions.num_predict = maxTokens;
     }
     if (requestOptions.temperature === undefined) {
       requestOptions.temperature = temperature;
+    }
+    if (typeof topP === 'number' && requestOptions.top_p === undefined) {
+      requestOptions.top_p = topP;
     }
 
     return {

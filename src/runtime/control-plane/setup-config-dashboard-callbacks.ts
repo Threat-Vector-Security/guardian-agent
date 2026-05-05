@@ -265,6 +265,11 @@ export function createSetupConfigDashboardCallbacks(
                 baseUrl: input.baseUrl?.trim() || getDefaultBaseUrlForProviderType(providerType),
                 maxTokens: input.maxTokens,
                 temperature: input.temperature,
+                topP: input.topP,
+                reasoning: input.reasoning,
+                verbosity: input.verbosity,
+                parallelToolCalls: input.parallelToolCalls,
+                toolChoice: input.toolChoice,
                 timeoutMs: input.timeoutMs,
                 keepAlive: input.keepAlive,
                 think: input.think,
@@ -352,6 +357,16 @@ export function createSetupConfigDashboardCallbacks(
           else delete rawLLM[providerName].maxTokens;
           if (input.temperature !== undefined) rawLLM[providerName].temperature = input.temperature;
           else delete rawLLM[providerName].temperature;
+          if (input.topP !== undefined) rawLLM[providerName].topP = input.topP;
+          else delete rawLLM[providerName].topP;
+          if (input.reasoning !== undefined && Object.keys(input.reasoning).length > 0) rawLLM[providerName].reasoning = input.reasoning;
+          else delete rawLLM[providerName].reasoning;
+          if (input.verbosity !== undefined) rawLLM[providerName].verbosity = input.verbosity;
+          else delete rawLLM[providerName].verbosity;
+          if (input.parallelToolCalls !== undefined) rawLLM[providerName].parallelToolCalls = input.parallelToolCalls;
+          else delete rawLLM[providerName].parallelToolCalls;
+          if (input.toolChoice !== undefined) rawLLM[providerName].toolChoice = input.toolChoice;
+          else delete rawLLM[providerName].toolChoice;
           if (input.timeoutMs !== undefined) rawLLM[providerName].timeoutMs = input.timeoutMs;
           else delete rawLLM[providerName].timeoutMs;
           if (input.keepAlive !== undefined) rawLLM[providerName].keepAlive = input.keepAlive;

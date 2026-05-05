@@ -93,6 +93,16 @@ export interface ChatOptions {
   maxTokens?: number;
   /** Override temperature. */
   temperature?: number;
+  /** Override nucleus sampling when supported. */
+  topP?: number;
+  /** Override provider reasoning effort when supported. */
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  /** Override provider response verbosity when supported. */
+  verbosity?: 'low' | 'medium' | 'high';
+  /** Allow providers to emit multiple tool calls in one turn when supported. */
+  parallelToolCalls?: boolean;
+  /** Explicit tool-choice behavior when supported. */
+  toolChoice?: 'auto' | 'none' | 'required';
   /** Ask the provider to constrain the response shape when supported. */
   responseFormat?: (
     | { type: 'json_object' }
