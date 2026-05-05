@@ -925,6 +925,7 @@ function isMeaningfulLiveSummaryItem(item: DashboardRunTimelineItem | undefined)
 function isGenericWorkingLiveSummaryTitle(title: string | undefined): boolean {
   const normalized = nonEmptyText(title)?.toLowerCase();
   return normalized === 'agent is working'
+    || normalized === 'running assistant'
     || normalized === 'working…'
     || normalized === 'working...';
 }
@@ -933,7 +934,7 @@ function isLowSignalLiveSummaryItem(item: DashboardRunTimelineItem | undefined):
   const title = nonEmptyText(item?.title)?.toLowerCase() ?? '';
   if (!title) return true;
   if (isGenericWorkingLiveSummaryTitle(title)) return true;
-  if (title === 'prepared request' || title === 'agent is working' || title === 'retrying with fallback') {
+  if (title === 'prepared request' || title === 'preparing request' || title === 'agent is working' || title === 'retrying with fallback') {
     return true;
   }
   if (title === 'assembled context' || title.startsWith('model response')) {
@@ -1461,7 +1462,7 @@ function buildAssistantTraceItems(trace: AssistantDispatchTrace): DashboardRunTi
   }
 
   for (const step of trace.steps) {
-    const mapped = mapAssistantTraceStep(step.name, step.status);
+    const mapped = mapAssistantTraceStep(step.name, step.status, step.detail);
     if (!mapped) continue;
     items.push({
       id: `step:${trace.requestId}:${step.name}`,
@@ -1524,6 +1525,7 @@ function buildAssistantTraceItems(trace: AssistantDispatchTrace): DashboardRunTi
 function mapAssistantTraceStep(
   stepName: string,
   stepStatus: AssistantDispatchTrace['steps'][number]['status'],
+  stepDetail?: string,
 ): { title: string; status: DashboardRunTimelineItem['status']; detail?: string } | null {
   const normalized = nonEmptyText(stepName);
   if (!normalized || normalized === 'queue_wait' || normalized === 'handler') {
@@ -1538,19 +1540,46 @@ function mapAssistantTraceStep(
 
   switch (normalized) {
     case 'message_built':
-      return { title: 'Prepared request', status };
+      return {
+        title: 'Preparing request',
+        status,
+        detail: 'Message and channel context are ready.',
+      };
     case 'runtime_dispatch_message':
-      return { title: 'Agent is working', status };
+      return {
+        title: 'Running assistant',
+        status,
+        detail: formatRuntimeDispatchDetail(stepDetail),
+      };
     case 'runtime_dispatch_fallback':
-      return { title: 'Retrying with fallback', status };
+      return { title: 'Retrying with fallback', status, detail: formatTraceStepDetail(stepDetail) };
     case 'quick_action_prompt_built':
-      return { title: 'Prepared quick action', status };
+      return { title: 'Prepared quick action', status, detail: formatTraceStepDetail(stepDetail) };
     default:
       return {
         title: humanizeTraceStepName(normalized),
         status,
+        ...(formatTraceStepDetail(stepDetail) ? { detail: formatTraceStepDetail(stepDetail) } : {}),
       };
   }
+}
+
+function formatRuntimeDispatchDetail(value: string | undefined): string | undefined {
+  const detail = formatTraceStepDetail(value);
+  if (!detail) return 'Dispatching through the shared runtime.';
+  const agentMatch = /\bagent=([^\s;]+)/i.exec(detail);
+  if (agentMatch?.[1]) {
+    return `Dispatching through ${agentMatch[1]}.`;
+  }
+  return detail;
+}
+
+function formatTraceStepDetail(value: string | undefined): string | undefined {
+  const sanitized = sanitizeTimelineText(value);
+  if (!sanitized) return undefined;
+  return sanitized
+    .replace(/\bmessageId=[^\s;]+/gi, 'message ready')
+    .replace(/\brequestId=[^\s;]+/gi, 'request ready');
 }
 
 function humanizeTraceStepName(stepName: string): string {

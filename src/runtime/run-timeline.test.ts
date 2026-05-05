@@ -315,19 +315,27 @@ describe('RunTimelineStore', () => {
           startedAt: 112,
           completedAt: 112,
           durationMs: 0,
+          detail: 'messageId=msg-1',
         },
         {
           name: 'runtime_dispatch_message',
           status: 'running',
           startedAt: 115,
+          detail: 'agent=coder',
         },
       ],
       nodes: [],
     }));
 
     const run = store.getRun('req-steps');
-    expect(run?.items.some((item) => item.title === 'Prepared request')).toBe(true);
-    expect(run?.items.some((item) => item.title === 'Agent is working')).toBe(true);
+    expect(run?.items).toContainEqual(expect.objectContaining({
+      title: 'Preparing request',
+      detail: 'Message and channel context are ready.',
+    }));
+    expect(run?.items).toContainEqual(expect.objectContaining({
+      title: 'Running assistant',
+      detail: 'Dispatching through coder.',
+    }));
   });
 
   it('renders provider-call trace nodes with bounded usage detail', () => {
