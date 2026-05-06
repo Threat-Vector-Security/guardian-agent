@@ -1,6 +1,6 @@
 # Coding Assistant Curated Uplifts — Implementation Plan
 
-**Status:** Draft
+**Status:** Implementation in progress
 **Date:** 2026-03-27
 **Primary source proposal:** [Coding Assistant Curated Uplifts Proposal](../proposals/CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md)
 
@@ -62,19 +62,17 @@ Do not pull these into the near-term implementation plan:
 
 ### Foundations already landed or partially landed
 
-- web chat, Code UI, and CLI now have shared structural live feedback
-- mode/source badging is wired through to the UI
-- forced lane behavior and tier-provider rebinding have been tightened
-- the initial process-skill uplift has already started
-- route-aware layout guardrails for wider chat surfaces have already started
+- web chat, Code UI, CLI, and Telegram now have shared structural live feedback appropriate to each channel
+- mode/source badging is wired through to the UI and final response labels
+- forced lane behavior, tier-provider rebinding, and same-tier external failover have been tightened
+- the initial process-skill uplift has landed with focused coding-assistant harness coverage
+- route-aware layout guardrails for wider chat surfaces have landed
 
 ### Main remaining gaps
 
-- repo-specific plans still hallucinate files, layers, or workflows too easily
-- local models remain acceptable for bounded repo facts but weak on open-ended planning
-- `Auto` still needs stronger external preference for planning/review/verification-heavy turns
-- external-tier retry/failover is still missing
-- helper-task/subagent work is not yet justified by the current product posture
+- complete the final regression pass across broad Vitest coverage and the integration harness loop
+- validate the real-model lanes from the integration harness where configured providers are available
+- keep helper-task/subagent work deferred unless a concrete product gap remains after the narrower operator model is verified
 
 ## Scope
 
@@ -188,6 +186,8 @@ Make model selection better match the actual difficulty and failure modes of cod
 - retryable external-provider overloads can fall through to another configured external provider
 - the badge remains the actual final answering source
 
+Status: implemented and covered by focused routing, execution-profile, provider-fallback, response-source, code UI, Telegram, and coding-assistant harness checks. Keep this phase in the regression set until the full final pass is complete.
+
 ## Phase 3: Feedback And Layout Refinement
 
 ### Goal
@@ -230,6 +230,8 @@ Implementation rule:
 - progress remains clear without becoming noisy
 - routing/fallback choices are visible enough to explain behavior without leaking internals
 - wider chat and coding panels do not introduce obvious new cramping on dense pages
+
+Status: implemented for web chat, Code UI, CLI, and Telegram final-source notices. Telegram remains intentionally compact: sparse live progress plus final source notices, not a richer streaming task UI.
 
 ## Phase 4: Reassess Bounded Helper Tasks
 

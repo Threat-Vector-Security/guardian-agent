@@ -150,7 +150,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Frontier path: add OpenAI, Anthropic, Google Gemini, Groq, Mistral, DeepSeek, Together, or xAI when you want a stronger hosted fallback or an explicit high-quality tier.',
                   'Use Configuration > AI Providers or CLI `/providers` to confirm connectivity and model discovery after each provider change.',
                   'Use Auto mode for normal operation once the provider tiers you care about are configured correctly.',
-                  'When an external provider is temporarily unavailable, Guardian can retry another configured provider in the same selected external tier and show the final source in web chat and CLI source labels.',
+                  'When an external provider is temporarily unavailable, Guardian can retry another configured provider in the same selected external tier and show the final source in web chat, CLI, and Telegram source labels.',
                 ],
               },
               {
@@ -460,7 +460,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use `/mode` to switch between auto, local, managed cloud, and frontier routing without changing agent definitions.',
                   'Guardian chat can also explain the CLI command surface in normal language. Ask things like "How do I attach a coding workspace from the CLI?" and it should answer from the built-in command guide, then point you to `/help <command>` for exact syntax.',
                   'Auto mode chooses the best available AI path for the request. If only one AI path is available, Guardian uses it automatically.',
-                  'Web chat and CLI show safe live activity such as routing, context checks, model work, tool waits, approvals, and finalization while a request is running. These are operational progress messages, not hidden reasoning transcripts.',
+                  'Web chat, CLI, and Telegram show safe live activity such as routing, context checks, model work, tool waits, approvals, and finalization while a request is running. These are operational progress messages, not hidden reasoning transcripts.',
                   'Blocked work such as approvals, clarifications, and workspace switches can be resumed cleanly across the supported operator surfaces.',
                 ],
                 note: 'Approval prompts should normally be handled through the native buttons or inline prompt flow first. Fallback commands remain useful for remote or scripted sessions.',
