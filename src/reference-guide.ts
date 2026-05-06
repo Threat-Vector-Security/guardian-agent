@@ -444,6 +444,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use `Agent Runtime` when you want the recent job view for assistant work, background work, and held follow-up results.',
                   'In the System page, use the Agent Runtime job filter to switch recent background jobs between all, held, approval, delegated, running, failed, long-running, automation-owned, and status-only views.',
                   'Held results can be replayed, kept held, or dismissed directly from `Agent Runtime`; when context is available, the replay keeps the related execution, continuity, and coding-session references attached.',
+                  'Held-result replay, keep-held, and dismiss actions can also appear in `Runtime Execution` as short timeline notes on the related run.',
                   'System includes `Runtime Execution`, the timeline for assistant dispatches, routine and scheduled-task runs, and coding-session execution that does not belong on Automations.',
                   'Use `Runtime Execution` when you need to reconstruct what Guardian did, where a run paused, or which step failed.',
                   'Runtime Execution filters can narrow the timeline by continuity key, active execution reference, parent run, execution lineage, graph event, graph node, producer, tool, agent, channel, code session, and run status such as running, awaiting approval, blocked, completed, or failed.',

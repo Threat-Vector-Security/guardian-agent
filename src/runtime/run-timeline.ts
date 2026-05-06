@@ -16,6 +16,10 @@ import type { OrchestrationRunEvent } from './run-events.js';
 import type { ScheduledTaskHistoryEntry } from './scheduled-tasks.js';
 import { runDetailMatchesContextFilters } from './trace-context-filters.js';
 import { redactSensitiveText } from '../util/crypto-guardrails.js';
+import type {
+  DelegatedWorkerOperatorAction,
+  DelegatedWorkerOperatorFollowUpState,
+} from './assistant-jobs.js';
 
 export type DashboardRunStatus =
   | 'queued'
@@ -230,7 +234,7 @@ export interface RunTimelineStoreOptions {
 
 export interface DelegatedWorkerProgressEvent {
   id: string;
-  kind: 'started' | 'running' | 'completed' | 'blocked' | 'failed';
+  kind: 'started' | 'running' | 'completed' | 'blocked' | 'failed' | 'followup_action';
   requestId?: string;
   parentRunId?: string;
   runId?: string;
@@ -253,6 +257,8 @@ export interface DelegatedWorkerProgressEvent {
   unresolvedBlockerKind?: string;
   approvalCount?: number;
   reportingMode?: string;
+  operatorAction?: DelegatedWorkerOperatorAction;
+  operatorState?: DelegatedWorkerOperatorFollowUpState;
   workerId?: string;
   requestPreview?: string;
   detail?: string;
@@ -1478,6 +1484,18 @@ function buildDelegatedWorkerProgressItem(runId: string, event: DelegatedWorkerP
         detail,
         ...(contextAssembly ? { contextAssembly } : {}),
       };
+    case 'followup_action':
+      return {
+        id: event.id,
+        runId,
+        timestamp: event.timestamp,
+        type: 'note',
+        status: 'succeeded',
+        source: 'system',
+        title: buildDelegatedWorkerFollowUpTitle(event, targetName),
+        detail,
+        ...(contextAssembly ? { contextAssembly } : {}),
+      };
     case 'failed':
     default:
       return {
@@ -2264,6 +2282,27 @@ function describeDelegatedWorkerTarget(event: DelegatedWorkerProgressEvent): str
     ?? 'Delegated worker';
 }
 
+function buildDelegatedWorkerFollowUpTitle(event: DelegatedWorkerProgressEvent, targetName: string): string {
+  const actionLabel = describeDelegatedWorkerFollowUpAction(event.operatorAction, event.operatorState);
+  return `${actionLabel}: ${targetName}`;
+}
+
+function describeDelegatedWorkerFollowUpAction(
+  operatorAction: DelegatedWorkerProgressEvent['operatorAction'],
+  operatorState: DelegatedWorkerProgressEvent['operatorState'],
+): string {
+  if (operatorAction === 'replay' || operatorState === 'replayed') {
+    return 'Held result replayed';
+  }
+  if (operatorAction === 'keep_held' || operatorState === 'kept_held') {
+    return 'Held result kept';
+  }
+  if (operatorAction === 'dismiss' || operatorState === 'dismissed') {
+    return 'Held result dismissed';
+  }
+  return 'Held result updated';
+}
+
 function normalizeDelegatedWorkerLenses(event: DelegatedWorkerProgressEvent): string[] {
   if (!Array.isArray(event.orchestrationLenses)) return [];
   const seen = new Set<string>();
@@ -2467,6 +2506,7 @@ function mapDelegatedWorkerProgressStatus(event: DelegatedWorkerProgressEvent): 
     case 'blocked':
       return event.unresolvedBlockerKind === 'approval' ? 'awaiting_approval' : 'blocked';
     case 'completed':
+    case 'followup_action':
       return 'completed';
     case 'failed':
     default:

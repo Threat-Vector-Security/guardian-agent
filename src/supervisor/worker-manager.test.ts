@@ -6241,6 +6241,11 @@ describe('WorkerManager', () => {
       content: 'Digest complete.\n- README reviewed\n- package.json reviewed',
       metadata: {},
     });
+    const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+      ingestDelegatedExecutionEvents: vi.fn(),
+      ingestExecutionGraphEvent: vi.fn(),
+    };
 
     const manager = new WorkerManager(
       {
@@ -6261,6 +6266,11 @@ describe('WorkerManager', () => {
         capabilityTokenTtlMs: 600_000,
         capabilityTokenMaxToolCalls: 0,
       } as never,
+      undefined,
+      {
+        runTimeline,
+        now: () => 987_000,
+      },
     );
 
     const result = await manager.handleMessage({
@@ -6340,6 +6350,27 @@ describe('WorkerManager', () => {
         rootExecutionId: 'root-held-operator',
       },
     });
+    expect(runTimeline.ingestDelegatedWorkerProgress).toHaveBeenLastCalledWith(expect.objectContaining({
+      id: `delegated-worker:${jobId}:followup:replayed`,
+      kind: 'followup_action',
+      requestId: 'm-held-operator',
+      runId: 'exec-held-operator',
+      parentRunId: 'exec-held-operator',
+      executionId: 'exec-held-operator',
+      rootExecutionId: 'root-held-operator',
+      taskRunId: `delegated-task:${jobId}`,
+      codeSessionId: 'code-held-operator',
+      agentId: 'local',
+      originChannel: 'web',
+      runClass: 'long_running',
+      reportingMode: 'held_for_operator',
+      operatorAction: 'replay',
+      operatorState: 'replayed',
+      continuityKey: 'continuity-held-operator',
+      activeExecutionRefs: ['code_session:Guardian Agent', 'delegated:repo-digest'],
+      detail: 'Operator replayed the held delegated result to the conversation.',
+      timestamp: 987_000,
+    }));
 
     const afterReplay = manager.getJobState(5);
     expect(afterReplay.jobs[0]?.metadata).toMatchObject({
@@ -6361,6 +6392,15 @@ describe('WorkerManager', () => {
       success: true,
       message: `Dismissed held delegated result for ${jobId}.`,
     });
+    expect(runTimeline.ingestDelegatedWorkerProgress).toHaveBeenLastCalledWith(expect.objectContaining({
+      id: `delegated-worker:${jobId}:followup:dismissed`,
+      kind: 'followup_action',
+      operatorAction: 'dismiss',
+      operatorState: 'dismissed',
+      continuityKey: 'continuity-held-operator',
+      activeExecutionRefs: ['code_session:Guardian Agent', 'delegated:repo-digest'],
+      detail: 'Operator dismissed the held delegated result.',
+    }));
 
     const replayAfterDismiss = manager.applyJobFollowUpAction(jobId!, 'replay');
     expect(replayAfterDismiss).toMatchObject({

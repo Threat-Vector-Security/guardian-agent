@@ -22,7 +22,7 @@ Current as-built deltas:
 - Automations history deep links support `assistantRunId` and `assistantRunItemId` so a caller can land on a specific timeline event instead of only the run row
 - Coding Workspace deep links support `sessionId`, `assistantRunId`, and `assistantRunItemId` so a caller can land on the exact session-local activity event instead of only the run card
 - System `Agent Runtime` and CLI `/assistant jobs` now expose merged assistant and delegated-worker jobs with bounded origin, outcome, and follow-up summaries, including replay controls for held delegated results
-- delegated worker follow-up is now projected into assistant-dispatch traces and the global execution timeline as `Delegated follow-up` handoff nodes, including blocked approval-held and status-only outcomes
+- delegated worker follow-up is now projected into assistant-dispatch traces and the global execution timeline as `Delegated follow-up` handoff nodes, including blocked approval-held and status-only outcomes; operator replay, keep-held, and dismiss actions for held results are also projected as bounded `note` breadcrumbs on the correlated parent and delegated task runs
 - delegated worker lifecycle is now also projected live into the global execution timeline as `handoff_started`, live `note`, and terminal `handoff_completed` items so operators can watch brokered workers start, run, block, complete, or fail without waiting for the final reply
 - graph-backed timeline rows now include a bounded allowlisted detail payload for useful operator facts such as result status, verification decision, artifact trust, run class, reporting mode, worker id, and task-run id
 - insufficiency-driven delegated retries now surface as a distinct retry breadcrumb between the running and terminal lifecycle events, and routing trace rows record that retry as `delegated_worker_retrying` with the stronger execution-profile details when Guardian escalates the child run
@@ -249,7 +249,7 @@ Rules:
 - `graphDetail` is an allowlisted fact block for execution-graph rows. It must contain only bounded operator-safe fields and must not mirror arbitrary event payloads.
 - `contextAssembly` is the typed operator-facing payload for bounded continuity, memory-scope, memory-selection, and knowledge-base diagnostics. Raw tool arguments or model prompts still do not belong here.
 - `provider_call` nodes are operator-facing provenance only. They may include provider/model names, duration, and token/cache counts, but they must not include raw prompt bodies or unbounded tool payloads.
-- `handoff_started` and `handoff_completed` items are also used for delegated-worker follow-up projection, not only deterministic workflow handoffs.
+- `handoff_started` and `handoff_completed` items are also used for delegated-worker follow-up projection, not only deterministic workflow handoffs; held-result operator actions should use compact `note` items rather than pretending to be new handoffs.
 - Use stable ids from underlying entities where possible:
   - workflow event id
   - approval id

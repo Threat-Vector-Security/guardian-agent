@@ -2163,6 +2163,7 @@ export class WorkerManager {
       return this.updateDelegatedJobFollowUpState(job, delegated, 'kept_held', {
         successMessage: `Held delegated result for ${jobId}.`,
         auditActionType: 'delegated_worker_followup_kept',
+        operatorAction: action,
       });
     }
     if (action === 'dismiss') {
@@ -2170,6 +2171,7 @@ export class WorkerManager {
       return this.updateDelegatedJobFollowUpState(job, delegated, 'dismissed', {
         successMessage: `Dismissed held delegated result for ${jobId}.`,
         auditActionType: 'delegated_worker_followup_dismissed',
+        operatorAction: action,
       });
     }
 
@@ -2198,6 +2200,7 @@ export class WorkerManager {
     const result = this.updateDelegatedJobFollowUpState(job, delegated, 'replayed', {
       successMessage: `Replayed held delegated result for ${jobId}.`,
       auditActionType: 'delegated_worker_followup_replayed',
+      operatorAction: action,
       details: {
         content: replayedContent,
         redacted: !scan.clean,
@@ -2292,6 +2295,7 @@ export class WorkerManager {
     options: {
       successMessage: string;
       auditActionType: string;
+      operatorAction: DelegatedWorkerOperatorAction;
       details?: Record<string, unknown>;
     },
   ): WorkerJobFollowUpActionResult {
@@ -2336,11 +2340,49 @@ export class WorkerManager {
         operatorState,
       },
     });
+    this.publishDelegatedFollowUpTimeline(job, delegated, handoff, operatorState, options.operatorAction);
     return {
       success: true,
       message: options.successMessage,
       ...(options.details ? { details: options.details } : {}),
     };
+  }
+
+  private publishDelegatedFollowUpTimeline(
+    job: { id: string; metadata?: Record<string, unknown> },
+    delegated: NonNullable<ReturnType<typeof readDelegatedWorkerMetadata>>,
+    handoff: DelegatedWorkerHandoff,
+    operatorState: DelegatedWorkerOperatorFollowUpState,
+    operatorAction: DelegatedWorkerOperatorAction,
+  ): void {
+    const parentRunId = delegated.executionId ?? delegated.requestId ?? job.id;
+    const requestId = delegated.requestId ?? delegated.executionId ?? job.id;
+    this.observability.runTimeline?.ingestDelegatedWorkerProgress({
+      id: `delegated-worker:${job.id}:followup:${operatorState}`,
+      kind: 'followup_action',
+      requestId,
+      runId: parentRunId,
+      parentRunId,
+      ...(delegated.executionId ? { executionId: delegated.executionId } : {}),
+      ...(delegated.parentExecutionId ? { parentExecutionId: delegated.parentExecutionId } : {}),
+      ...(delegated.rootExecutionId ? { rootExecutionId: delegated.rootExecutionId } : {}),
+      taskRunId: buildDelegatedTaskRunId(job.id),
+      ...(delegated.codeSessionId ? { codeSessionId: delegated.codeSessionId } : {}),
+      agentId: delegated.agentId ?? readDelegatedAgentId(job.metadata) ?? 'unknown',
+      ...(delegated.agentName ? { agentName: delegated.agentName } : {}),
+      ...(delegated.orchestration?.role ? { orchestrationRole: delegated.orchestration.role } : {}),
+      ...(delegated.orchestration?.label ? { orchestrationLabel: delegated.orchestration.label } : {}),
+      ...(delegated.orchestration?.lenses?.length ? { orchestrationLenses: [...delegated.orchestration.lenses] } : {}),
+      ...(delegated.originChannel ? { originChannel: delegated.originChannel } : {}),
+      ...(delegated.runClass ? { runClass: delegated.runClass } : {}),
+      ...(handoff.reportingMode ? { reportingMode: handoff.reportingMode } : {}),
+      operatorAction,
+      operatorState,
+      ...(delegated.continuityKey ? { continuityKey: delegated.continuityKey } : {}),
+      ...(delegated.activeExecutionRefs?.length ? { activeExecutionRefs: [...delegated.activeExecutionRefs] } : {}),
+      detail: describeDelegatedFollowUpTimelineDetail(operatorState),
+      timestamp: this.observability.now?.() ?? Date.now(),
+    });
   }
 
   private pruneDelegatedFollowUpPayloads(): void {
@@ -3603,6 +3645,22 @@ function readDelegatedAgentId(metadata: Record<string, unknown> | undefined): st
   if (!isRecord(delegation)) return undefined;
   const agentId = delegation.agentId;
   return typeof agentId === 'string' && agentId.trim().length > 0 ? agentId : undefined;
+}
+
+function describeDelegatedFollowUpTimelineDetail(
+  operatorState: DelegatedWorkerOperatorFollowUpState,
+): string {
+  switch (operatorState) {
+    case 'replayed':
+      return 'Operator replayed the held delegated result to the conversation.';
+    case 'kept_held':
+      return 'Operator kept the delegated result held for later review.';
+    case 'dismissed':
+      return 'Operator dismissed the held delegated result.';
+    case 'pending':
+    default:
+      return 'Operator updated the held delegated result.';
+  }
 }
 
 function resolveDelegatedTargetMetadata(

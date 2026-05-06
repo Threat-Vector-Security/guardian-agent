@@ -810,6 +810,63 @@ describe('RunTimelineStore', () => {
     ]);
   });
 
+  it('projects delegated held-result follow-up actions into the correlated run timeline', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+
+    store.ingestDelegatedWorkerProgress({
+      id: 'delegated-followup-1',
+      kind: 'followup_action',
+      requestId: 'req-followup',
+      parentRunId: 'exec-followup',
+      runId: 'exec-followup',
+      executionId: 'exec-followup',
+      rootExecutionId: 'root-followup',
+      taskRunId: 'delegated-task:job-followup',
+      codeSessionId: 'code-followup',
+      agentId: 'agent-followup',
+      agentName: 'Workspace Implementer',
+      orchestrationRole: 'implementer',
+      orchestrationLabel: 'Coding Workspace',
+      orchestrationLenses: ['coding-workspace'],
+      originChannel: 'web',
+      runClass: 'long_running',
+      reportingMode: 'held_for_operator',
+      operatorAction: 'replay',
+      operatorState: 'replayed',
+      requestPreview: 'Run the long repository digest.',
+      continuityKey: 'continuity-followup',
+      activeExecutionRefs: ['code_session:Repo Fix'],
+      timestamp: 220,
+      detail: 'Operator replayed the held delegated result to the conversation.',
+    });
+
+    const run = store.getRun('exec-followup');
+    expect(run?.items.find((item) => item.id === 'delegated-followup-1')).toMatchObject({
+      type: 'note',
+      status: 'succeeded',
+      title: 'Held result replayed: Coding Workspace',
+      detail: 'Operator replayed the held delegated result to the conversation.\nSpecialist lane: Coding Workspace (Implementer).',
+      contextAssembly: {
+        continuityKey: 'continuity-followup',
+        activeExecutionRefs: ['code_session:Repo Fix'],
+        orchestrationRole: 'implementer',
+        orchestrationLabel: 'Coding Workspace',
+        orchestrationLenses: ['coding-workspace'],
+      },
+    });
+    expect(run?.summary).toMatchObject({
+      runId: 'exec-followup',
+      executionId: 'exec-followup',
+      rootExecutionId: 'root-followup',
+      codeSessionId: 'code-followup',
+      status: 'completed',
+    });
+    expect(store.getRun('delegated-task:job-followup')?.items.find((item) => item.id === 'delegated-followup-1')).toMatchObject({
+      type: 'note',
+      title: 'Held result replayed: Coding Workspace',
+    });
+  });
+
   it('prefers delegated-worker live commentary over generic orchestrator tail items', () => {
     const store = new RunTimelineStore({ now: () => 500 });
     store.ingestAssistantTrace(createTrace({
