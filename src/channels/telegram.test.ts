@@ -424,4 +424,42 @@ describe('Telegram approval flow', () => {
     expect(output.match(/Inspecting workspace/g)).toHaveLength(1);
     expect(unsubscribed).toBe(true);
   });
+
+  it('sends sparse safe fallback progress when no shared timeline arrives yet', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveMessage!: () => void;
+      const messageGate = new Promise<void>((resolve) => {
+        resolveMessage = resolve;
+      });
+      const channel = new TelegramChannel({ botToken: '123:abc' });
+      const { ctx, replies } = createFakeCtx();
+      const onMessage = vi.fn(async () => {
+        await messageGate;
+        return { content: 'Done.' };
+      });
+      (channel as unknown as { onMessage: typeof onMessage }).onMessage = onMessage;
+
+      const pending = (channel as unknown as {
+        dispatchAssistantMessage: (ctx: unknown, text: string, canonicalUserId: string, channelUserId: string) => Promise<void>;
+      }).dispatchAssistantMessage(ctx, 'hello', 'owner', '2002');
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      await Promise.resolve();
+      expect(replies.map((reply) => reply.text).join('\n')).toContain('⏳ Still working');
+      expect(replies.map((reply) => reply.text).join('\n')).toContain('Waiting on tools, model response, or provider latency.');
+
+      await vi.advanceTimersByTimeAsync(17_000);
+      await Promise.resolve();
+      const outputBeforeDone = replies.map((reply) => reply.text).join('\n');
+      expect(outputBeforeDone).toContain('This is taking longer than usual');
+
+      resolveMessage();
+      await pending;
+      const output = replies.map((reply) => reply.text).join('\n');
+      expect(output).toContain('Done.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

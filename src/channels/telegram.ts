@@ -25,6 +25,18 @@ const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const APPROVAL_IN_PROGRESS_LINE = '⏳ Approval received. Continuing...';
 const DENIAL_IN_PROGRESS_LINE = '⏳ Denial received. Processing...';
 const TELEGRAM_PROGRESS_MAX_UPDATES = 3;
+const TELEGRAM_PROGRESS_FALLBACKS: Array<{ afterMs: number; title: string; detail: string }> = [
+  {
+    afterMs: 8_000,
+    title: 'Still working',
+    detail: 'Waiting on tools, model response, or provider latency.',
+  },
+  {
+    afterMs: 25_000,
+    title: 'Still working',
+    detail: 'This is taking longer than usual; I will send the final result when it is ready.',
+  },
+];
 
 interface PendingTelegramApproval {
   id: string;
@@ -636,23 +648,51 @@ export class TelegramChannel implements ChannelAdapter {
   }
 
   private startTelegramProgressReporter(ctx: Context, requestId: string): () => void {
-    if (!this.onSSESubscribe) return () => {};
+    const fallbackTimers: Array<ReturnType<typeof setTimeout>> = [];
     const sentKeys = new Set<string>();
     let sentCount = 0;
     let stopped = false;
-    const listener = (event: SSEEvent) => {
-      if (stopped || sentCount >= TELEGRAM_PROGRESS_MAX_UPDATES) return;
-      const snapshot = extractTelegramProgressSnapshot(event, requestId);
-      if (!snapshot || sentKeys.has(snapshot.key)) return;
+    let sawSharedProgress = false;
+    const sendSnapshot = (snapshot: TelegramProgressSnapshot): void => {
+      if (stopped || sentCount >= TELEGRAM_PROGRESS_MAX_UPDATES || sentKeys.has(snapshot.key)) return;
       sentKeys.add(snapshot.key);
       sentCount += 1;
       void ctx.reply(formatTelegramProgressSnapshot(snapshot)).catch((err) => {
         log.debug({ err, requestId }, 'Failed to send Telegram progress update');
       });
     };
+    for (const fallback of TELEGRAM_PROGRESS_FALLBACKS) {
+      const timer = setTimeout(() => {
+        if (sawSharedProgress) return;
+        sendSnapshot({
+          key: `fallback:${requestId}:${fallback.afterMs}`,
+          tone: 'running',
+          title: fallback.title,
+          detail: fallback.detail,
+        });
+      }, fallback.afterMs);
+      timer.unref?.();
+      fallbackTimers.push(timer);
+    }
+
+    if (!this.onSSESubscribe) {
+      return () => {
+        stopped = true;
+        fallbackTimers.forEach((timer) => clearTimeout(timer));
+      };
+    }
+
+    const listener = (event: SSEEvent) => {
+      if (stopped || sentCount >= TELEGRAM_PROGRESS_MAX_UPDATES) return;
+      const snapshot = extractTelegramProgressSnapshot(event, requestId);
+      if (!snapshot) return;
+      sawSharedProgress = true;
+      sendSnapshot(snapshot);
+    };
     const unsubscribe = this.onSSESubscribe(listener);
     return () => {
       stopped = true;
+      fallbackTimers.forEach((timer) => clearTimeout(timer));
       unsubscribe?.();
     };
   }

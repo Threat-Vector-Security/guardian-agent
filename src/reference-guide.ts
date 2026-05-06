@@ -572,7 +572,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'That panel is intentionally simple: enable or disable the assistants you want available and choose a default when needed.',
                   'Guardian only uses these assistants when you explicitly ask to delegate coding work to one of them. Direct coding requests still use Guardian’s built-in coding tools by default.',
                   'Mentioning Codex or another assistant as the subject of a question is not enough to launch it. Questions such as "Why did Codex do this?" stay in normal explanation or investigation flow unless you explicitly ask Guardian to use that assistant.',
-                  'In web chat and CLI, delegated coding assistants can surface live activity updates while they work. Telegram stays better suited to remote one-shot follow-up than dense live logs.',
+                  'In web chat and CLI, delegated coding assistants can surface live activity updates while they work. Telegram stays better suited to remote one-shot follow-up than dense live logs, so it may send only sparse still-working updates before the final result.',
                   'Approval copy for delegated coding assistants includes the active coding workspace so you can see which repo Guardian will launch the CLI in before you approve it.',
                   'If a delegated coding request explicitly names a different saved coding workspace, Guardian switches to that workspace before it launches the assistant. If the target is ambiguous, it stops and asks.',
                 ],
