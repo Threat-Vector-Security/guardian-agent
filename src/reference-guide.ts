@@ -641,7 +641,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Local Ollama and Ollama Cloud both use the same native Ollama request controls inside Guardian.',
                   'Use the advanced section when you need to tune model behavior such as max tokens, temperature, top-p, timeout, keep-alive, think mode, or native Ollama options JSON.',
-                  'When model discovery is available, Guardian uses live model metadata and supported request-parameter metadata where the provider exposes it, then falls back to safe provider/model defaults for controls such as reasoning effort or verbosity.',
+                  'When model discovery is available, Guardian uses live model metadata and supported request-parameter metadata where the provider exposes it, then falls back to safe provider/model defaults for controls such as reasoning effort, reasoning summary, reasoning budget, or verbosity.',
                   'CLI `/providers` also shows the capability source for advanced controls, so terminal operators can see whether a setting came from live API metadata, provider metadata, a model-family rule, or safe defaults.',
                   'Advanced controls are enhancements, not blockers. If a selected model does not expose or support a control, Guardian keeps the model usable with basic settings.',
                   'Leave advanced settings empty unless you have a concrete reason to override the defaults.',
@@ -689,7 +689,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Advanced Settings',
                 items: [
                   'Ollama Cloud profiles support the same Ollama-native controls as local Ollama, including keep-alive, think mode, and native options JSON.',
-                  'Managed-cloud profiles can also persist shared model controls such as max tokens, temperature, top-p, and supported tool-call controls.',
+                  'Managed-cloud profiles can also persist shared model controls such as max tokens, temperature, top-p, reasoning summary and budget, and supported tool-call controls.',
                   'When model discovery returns capability metadata, the editor narrows reasoning, thinking, and verbosity controls to model paths that support them; otherwise Guardian keeps safe defaults until you override them.',
                   'Unsupported optional controls should be omitted or ignored rather than preventing the provider from being used.',
                   'OpenRouter and NVIDIA Cloud profiles use OpenAI-compatible base URL paths; leave the defaults unless you have a deliberate reason to override them.',
@@ -766,7 +766,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Usage Notes',
                 items: [
                   'Use the web chat provider selector when you want one turn to go through a specific enabled provider profile, or use CLI `/mode` when you want to force `local`, `managed cloud`, or `frontier` directly.',
-                  'Advanced hosted settings can persist supported model controls such as max tokens, temperature, top-p, reasoning effort, verbosity, tool-choice behavior, and parallel tool-call preference.',
+                  'Advanced hosted settings can persist supported model controls such as max tokens, temperature, top-p, reasoning effort, reasoning summary and budget, verbosity, tool-choice behavior, and parallel tool-call preference.',
                   'Capability-aware controls are populated from live model discovery, including provider-advertised supported request parameters when available, then constrained by Guardian provider metadata and safe defaults so unsupported settings are not presented as universal.',
                   'If a provider or model cannot use an optional advanced setting, Guardian falls back to the basic request path where possible instead of blocking the model.',
                   'Auto mode chooses between local, managed cloud, and frontier based on your saved provider policy and the kind of request you asked for.',

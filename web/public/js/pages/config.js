@@ -1298,6 +1298,7 @@ function createProviderPanel(config, providers, panel) {
                   <div class="cfg-field"><label>Top P</label><input id="cfg-local-top-p" class="cfg-provider-number" type="number" min="0" max="1" step="0.01" placeholder="1"></div>
                   <div class="cfg-field cfg-cap-reasoning"><label>Reasoning Effort</label><select id="cfg-local-reasoning-effort"><option value="">Default</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
                   <div class="cfg-field cfg-cap-reasoning-summary"><label>Reasoning Summary</label><select id="cfg-local-reasoning-summary"><option value="">Default</option><option value="auto">Auto</option><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="none">None</option></select></div>
+                  <div class="cfg-field cfg-cap-reasoning-summary"><label>Reasoning Budget</label><input id="cfg-local-reasoning-budget" class="cfg-provider-number" type="number" min="1" placeholder="1024"></div>
                   <div class="cfg-field cfg-cap-verbosity"><label>Verbosity</label><select id="cfg-local-verbosity"><option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
                   <div class="cfg-field cfg-cap-tools"><label>Parallel Tools</label><select id="cfg-local-parallel-tools"><option value="">Default</option><option value="true">On</option><option value="false">Off</option></select></div>
                   <div class="cfg-field cfg-cap-tools"><label>Tool Choice</label><select id="cfg-local-tool-choice"><option value="">Default</option><option value="auto">Auto</option><option value="none">None</option><option value="required">Required</option></select></div>
@@ -1346,6 +1347,7 @@ function createProviderPanel(config, providers, panel) {
                   <div class="cfg-field"><label>Top P</label><input id="cfg-mcloud-top-p" class="cfg-provider-number" type="number" min="0" max="1" step="0.01" placeholder="1"></div>
                   <div class="cfg-field cfg-cap-reasoning"><label>Reasoning Effort</label><select id="cfg-mcloud-reasoning-effort"><option value="">Default</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
                   <div class="cfg-field cfg-cap-reasoning-summary"><label>Reasoning Summary</label><select id="cfg-mcloud-reasoning-summary"><option value="">Default</option><option value="auto">Auto</option><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="none">None</option></select></div>
+                  <div class="cfg-field cfg-cap-reasoning-summary"><label>Reasoning Budget</label><input id="cfg-mcloud-reasoning-budget" class="cfg-provider-number" type="number" min="1" placeholder="1024"></div>
                   <div class="cfg-field cfg-cap-verbosity"><label>Verbosity</label><select id="cfg-mcloud-verbosity"><option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
                   <div class="cfg-field cfg-cap-tools"><label>Parallel Tools</label><select id="cfg-mcloud-parallel-tools"><option value="">Default</option><option value="true">On</option><option value="false">Off</option></select></div>
                   <div class="cfg-field cfg-cap-tools"><label>Tool Choice</label><select id="cfg-mcloud-tool-choice"><option value="">Default</option><option value="auto">Auto</option><option value="none">None</option><option value="required">Required</option></select></div>
@@ -1395,6 +1397,7 @@ function createProviderPanel(config, providers, panel) {
                   <div class="cfg-field"><label>Top P</label><input id="cfg-ext-top-p" class="cfg-provider-number" type="number" min="0" max="1" step="0.01" placeholder="1"></div>
                   <div class="cfg-field cfg-cap-reasoning"><label>Reasoning Effort</label><select id="cfg-ext-reasoning-effort"><option value="">Default</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
                   <div class="cfg-field cfg-cap-reasoning-summary"><label>Reasoning Summary</label><select id="cfg-ext-reasoning-summary"><option value="">Default</option><option value="auto">Auto</option><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="none">None</option></select></div>
+                  <div class="cfg-field cfg-cap-reasoning-summary"><label>Reasoning Budget</label><input id="cfg-ext-reasoning-budget" class="cfg-provider-number" type="number" min="1" placeholder="1024"></div>
                   <div class="cfg-field cfg-cap-verbosity"><label>Verbosity</label><select id="cfg-ext-verbosity"><option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
                   <div class="cfg-field cfg-cap-tools"><label>Parallel Tools</label><select id="cfg-ext-parallel-tools"><option value="">Default</option><option value="true">On</option><option value="false">Off</option></select></div>
                   <div class="cfg-field cfg-cap-tools"><label>Tool Choice</label><select id="cfg-ext-tool-choice"><option value="">Default</option><option value="auto">Auto</option><option value="none">None</option><option value="required">Required</option></select></div>
@@ -1516,6 +1519,7 @@ function createProviderPanel(config, providers, panel) {
     const topPEl = section.querySelector(`#${prefix}-top-p`);
     const reasoningEffortEl = section.querySelector(`#${prefix}-reasoning-effort`);
     const reasoningSummaryEl = section.querySelector(`#${prefix}-reasoning-summary`);
+    const reasoningBudgetEl = section.querySelector(`#${prefix}-reasoning-budget`);
     const verbosityEl = section.querySelector(`#${prefix}-verbosity`);
     const parallelToolsEl = section.querySelector(`#${prefix}-parallel-tools`);
     const toolChoiceEl = section.querySelector(`#${prefix}-tool-choice`);
@@ -1685,6 +1689,7 @@ function createProviderPanel(config, providers, panel) {
         [
           reasoningEffortEl,
           reasoningSummaryEl,
+          reasoningBudgetEl,
           verbosityEl,
           parallelToolsEl,
           toolChoiceEl,
@@ -1695,12 +1700,14 @@ function createProviderPanel(config, providers, panel) {
       setCapabilityFieldVisibility(topPEl, capabilities.settings.topP);
       setCapabilityFieldVisibility(reasoningEffortEl, capabilities.settings.reasoningEffort);
       setCapabilityFieldVisibility(reasoningSummaryEl, capabilities.settings.reasoningSummary);
+      setCapabilityFieldVisibility(reasoningBudgetEl, capabilities.settings.reasoningSummary);
       setCapabilityFieldVisibility(verbosityEl, capabilities.settings.verbosity);
       setCapabilityFieldVisibility(parallelToolsEl, capabilities.settings.parallelToolCalls);
       setCapabilityFieldVisibility(toolChoiceEl, capabilities.settings.toolChoice);
       if (isOllamaProviderType(providerType) && capabilities.settings.reasoningEffort?.supported) {
         setCapabilityFieldVisibility(thinkEl, capabilities.settings.ollamaThink);
         setCapabilityFieldVisibility(reasoningEffortEl, { supported: false });
+        setCapabilityFieldVisibility(reasoningBudgetEl, { supported: false });
       }
     }
 
@@ -1712,6 +1719,7 @@ function createProviderPanel(config, providers, panel) {
       if (topPEl) topPEl.value = entry?.topP ?? '';
       if (reasoningEffortEl) reasoningEffortEl.value = entry?.reasoning?.effort ?? '';
       if (reasoningSummaryEl) reasoningSummaryEl.value = entry?.reasoning?.summary ?? '';
+      if (reasoningBudgetEl) reasoningBudgetEl.value = entry?.reasoning?.budgetTokens ?? '';
       if (verbosityEl) verbosityEl.value = entry?.verbosity ?? '';
       if (parallelToolsEl) parallelToolsEl.value = entry?.parallelToolCalls === true ? 'true'
         : entry?.parallelToolCalls === false ? 'false'
@@ -2326,6 +2334,7 @@ function createProviderPanel(config, providers, panel) {
       const topP = parseOptionalNumberInput(topPEl?.value);
       const reasoningEffort = parseOptionalStringInput(reasoningEffortEl?.value);
       const reasoningSummary = parseOptionalStringInput(reasoningSummaryEl?.value);
+      const reasoningBudgetTokens = parseOptionalNumberInput(reasoningBudgetEl?.value);
       const verbosity = parseOptionalStringInput(verbosityEl?.value);
       const parallelToolCalls = parseOptionalBooleanInput(parallelToolsEl?.value);
       const toolChoice = parseOptionalStringInput(toolChoiceEl?.value);
@@ -2347,8 +2356,13 @@ function createProviderPanel(config, providers, panel) {
         statusEl.style.color = 'var(--error)';
         return;
       }
-      if (Number.isNaN(maxTokens) || Number.isNaN(temperature) || Number.isNaN(topP) || Number.isNaN(timeoutMs)) {
+      if (Number.isNaN(maxTokens) || Number.isNaN(temperature) || Number.isNaN(topP) || Number.isNaN(reasoningBudgetTokens) || Number.isNaN(timeoutMs)) {
         statusEl.textContent = 'Advanced numeric model settings must be valid numbers.';
+        statusEl.style.color = 'var(--error)';
+        return;
+      }
+      if (reasoningBudgetTokens !== undefined && reasoningBudgetTokens < 1) {
+        statusEl.textContent = 'Reasoning Budget must be at least 1 token.';
         statusEl.style.color = 'var(--error)';
         return;
       }
@@ -2379,10 +2393,11 @@ function createProviderPanel(config, providers, panel) {
         maxTokens: maxTokens === undefined ? undefined : maxTokens,
         temperature: temperature === undefined ? undefined : temperature,
         topP: topP === undefined ? undefined : topP,
-        reasoning: reasoningEffort || reasoningSummary
+        reasoning: reasoningEffort || reasoningSummary || reasoningBudgetTokens !== undefined
           ? {
               effort: reasoningEffort,
               summary: reasoningSummary,
+              budgetTokens: reasoningBudgetTokens,
             }
           : undefined,
         verbosity,

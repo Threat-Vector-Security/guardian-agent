@@ -387,7 +387,7 @@ describe('OpenAIProvider compatibility', () => {
       provider: 'openai',
       model: 'gpt-5.1',
       apiKey: 'sk-test',
-      reasoning: { effort: 'high' },
+      reasoning: { effort: 'high', summary: 'concise', budgetTokens: 1024 },
       verbosity: 'high',
       parallelToolCalls: true,
       toolChoice: 'auto',
@@ -436,11 +436,13 @@ describe('OpenAIProvider compatibility', () => {
     expect(create).toHaveBeenCalledTimes(2);
     expect(create.mock.calls[0]?.[0]).toMatchObject({
       reasoning_effort: 'high',
+      reasoning: { summary: 'concise', max_tokens: 1024 },
       verbosity: 'high',
       parallel_tool_calls: true,
       tool_choice: 'auto',
     });
     expect(create.mock.calls[1]?.[0]).not.toHaveProperty('reasoning_effort');
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('reasoning');
     expect(create.mock.calls[1]?.[0]).not.toHaveProperty('verbosity');
     expect(create.mock.calls[1]?.[0]).not.toHaveProperty('parallel_tool_calls');
     expect(create.mock.calls[1]?.[0]).not.toHaveProperty('tool_choice');
@@ -453,7 +455,7 @@ describe('OpenAIProvider compatibility', () => {
       model: 'openai/gpt-5.1',
       apiKey: 'or-test',
       baseUrl: 'https://openrouter.ai/api/v1',
-      reasoning: { effort: 'high' },
+      reasoning: { effort: 'high', summary: 'detailed', budgetTokens: 2048 },
       verbosity: 'high',
     }, 'openrouter');
 
@@ -482,6 +484,7 @@ describe('OpenAIProvider compatibility', () => {
 
     expect(create.mock.calls[0]?.[0]).toMatchObject({
       reasoning_effort: 'high',
+      reasoning: { summary: 'detailed', max_tokens: 2048 },
       verbosity: 'high',
     });
   });

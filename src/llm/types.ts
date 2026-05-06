@@ -101,6 +101,10 @@ export interface ChatOptions {
   topP?: number;
   /** Override provider reasoning effort when supported. */
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  /** Override provider reasoning-summary behavior when supported. */
+  reasoningSummary?: 'auto' | 'concise' | 'detailed' | 'none';
+  /** Override provider reasoning-token budget when supported. */
+  reasoningBudgetTokens?: number;
   /** Override provider response verbosity when supported. */
   verbosity?: 'low' | 'medium' | 'high';
   /** Allow providers to emit multiple tool calls in one turn when supported. */

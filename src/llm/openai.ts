@@ -25,6 +25,8 @@ export class OpenAIProvider implements LLMProvider {
   private temperature: number;
   private topP: number | undefined;
   private reasoningEffort: 'minimal' | 'low' | 'medium' | 'high' | undefined;
+  private reasoningSummary: 'auto' | 'concise' | 'detailed' | 'none' | undefined;
+  private reasoningBudgetTokens: number | undefined;
   private verbosity: 'low' | 'medium' | 'high' | undefined;
   private parallelToolCalls: boolean | undefined;
   private toolChoice: 'auto' | 'none' | 'required' | undefined;
@@ -45,6 +47,8 @@ export class OpenAIProvider implements LLMProvider {
     this.temperature = config.temperature ?? 0.7;
     this.topP = config.topP;
     this.reasoningEffort = config.reasoning?.effort;
+    this.reasoningSummary = config.reasoning?.summary;
+    this.reasoningBudgetTokens = config.reasoning?.budgetTokens;
     this.verbosity = config.verbosity;
     this.parallelToolCalls = config.parallelToolCalls;
     this.toolChoice = config.toolChoice;
@@ -273,6 +277,13 @@ export class OpenAIProvider implements LLMProvider {
       Object.assign(params, { reasoning_effort: reasoningEffort });
     }
 
+    const reasoningSummary = options?.reasoningSummary ?? this.reasoningSummary;
+    const reasoningBudgetTokens = options?.reasoningBudgetTokens ?? this.reasoningBudgetTokens;
+    const reasoning = buildReasoningOptions(reasoningSummary, reasoningBudgetTokens);
+    if (reasoning) {
+      Object.assign(params, { reasoning });
+    }
+
     const verbosity = options?.verbosity ?? this.verbosity;
     if (verbosity && shouldSendOpenAIVerbosity(this.name, selectedModel)) {
       Object.assign(params, { verbosity });
@@ -401,11 +412,26 @@ function shouldRetryWithMaxCompletionTokens(err: unknown): boolean {
 }
 
 const OPTIONAL_OPENAI_CAPABILITY_PARAMS = [
+  'reasoning',
   'reasoning_effort',
   'verbosity',
   'parallel_tool_calls',
   'tool_choice',
 ] as const;
+
+function buildReasoningOptions(
+  summary: 'auto' | 'concise' | 'detailed' | 'none' | undefined,
+  budgetTokens: number | undefined,
+): Record<string, unknown> | undefined {
+  const options: Record<string, unknown> = {};
+  if (summary) {
+    options.summary = summary;
+  }
+  if (typeof budgetTokens === 'number' && Number.isFinite(budgetTokens) && budgetTokens > 0) {
+    options.max_tokens = Math.floor(budgetTokens);
+  }
+  return Object.keys(options).length > 0 ? options : undefined;
+}
 
 function stripOptionalCapabilityParams<T extends object>(
   params: T,
