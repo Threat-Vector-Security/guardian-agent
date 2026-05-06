@@ -1060,7 +1060,7 @@ guardian:
   enabled: true
   rateLimit:
     enabled: true
-    burstAllowed: 20
+    burstAllowed: 60
     burstWindowMs: 10000
 `;
   fs.writeFileSync(configPath, config);

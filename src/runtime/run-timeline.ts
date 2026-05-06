@@ -11,6 +11,7 @@ import type { AssistantDispatchTrace, WorkflowTraceNode } from './orchestrator.j
 import type { ExecutionEvent } from './execution/types.js';
 import type { ExecutionGraphEvent } from './execution-graph/graph-events.js';
 import { projectExecutionGraphEventToTimeline } from './execution-graph/timeline-adapter.js';
+import type { OrchestrationCoreRole } from './orchestration-role-descriptors.js';
 import type { OrchestrationRunEvent } from './run-events.js';
 import type { ScheduledTaskHistoryEntry } from './scheduled-tasks.js';
 import { runDetailMatchesContextFilters } from './trace-context-filters.js';
@@ -109,6 +110,9 @@ export interface DashboardRunTimelineContextAssembly {
   knowledgeBaseQueryPreview?: string;
   continuityKey?: string;
   activeExecutionRefs?: string[];
+  orchestrationRole?: OrchestrationCoreRole;
+  orchestrationLabel?: string;
+  orchestrationLenses?: string[];
   linkedSurfaceCount?: number;
   skillInstructionSkillIds?: string[];
   skillResourceSkillIds?: string[];
@@ -215,7 +219,9 @@ export interface DelegatedWorkerProgressEvent {
   codeSessionId?: string;
   agentId: string;
   agentName?: string;
+  orchestrationRole?: OrchestrationCoreRole;
   orchestrationLabel?: string;
+  orchestrationLenses?: string[];
   executionProfileName?: string;
   executionProfileModel?: string;
   executionProfileTier?: string;
@@ -473,6 +479,7 @@ export class RunTimelineStore {
           event.agentId,
           ...(event.originChannel ? [event.originChannel] : []),
           ...(event.runClass ? [event.runClass] : []),
+          ...buildDelegatedWorkerOrchestrationTags(event),
         ],
       },
       items: [buildDelegatedWorkerProgressItem(parentRunId, event)],
@@ -517,6 +524,7 @@ export class RunTimelineStore {
           ...(event.originChannel ? [event.originChannel] : []),
           ...(event.runClass ? [event.runClass] : []),
           ...(event.reportingMode ? [`reporting:${event.reportingMode}`] : []),
+          ...buildDelegatedWorkerOrchestrationTags(event),
         ],
       },
       items: [buildDelegatedWorkerProgressItem(taskRunId, event)],
@@ -2122,6 +2130,59 @@ function describeDelegatedWorkerTarget(event: DelegatedWorkerProgressEvent): str
     ?? 'Delegated worker';
 }
 
+function normalizeDelegatedWorkerLenses(event: DelegatedWorkerProgressEvent): string[] {
+  if (!Array.isArray(event.orchestrationLenses)) return [];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const lens of event.orchestrationLenses) {
+    const value = nonEmptyText(lens);
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(value);
+  }
+  return normalized.slice(0, 6);
+}
+
+function normalizeLaneComparisonValue(value: string | undefined): string | undefined {
+  const normalized = nonEmptyText(value);
+  return normalized ? normalized.toLowerCase().replace(/[^a-z0-9]+/g, '') : undefined;
+}
+
+function buildDelegatedWorkerOrchestrationTags(event: DelegatedWorkerProgressEvent): string[] {
+  return [
+    ...(event.orchestrationRole ? [`orchestration:${event.orchestrationRole}`] : []),
+    ...normalizeDelegatedWorkerLenses(event).map((lens) => `lens:${lens}`),
+  ];
+}
+
+function buildDelegatedWorkerLaneSentence(event: DelegatedWorkerProgressEvent): string | undefined {
+  const laneName = nonEmptyText(event.orchestrationLabel);
+  const roleLabel = event.orchestrationRole ? humanizeWorkflowValue(event.orchestrationRole) : undefined;
+  const laneKey = normalizeLaneComparisonValue(laneName);
+  const lensLabels = normalizeDelegatedWorkerLenses(event)
+    .filter((lens) => normalizeLaneComparisonValue(lens) !== laneKey)
+    .slice(0, 3)
+    .map((lens) => humanizeWorkflowValue(lens));
+  if (!roleLabel && lensLabels.length === 0) return undefined;
+  const qualifiers = [
+    roleLabel,
+    ...(lensLabels.length > 0 ? lensLabels : []),
+  ].filter((value): value is string => Boolean(value));
+  if (laneName) {
+    return qualifiers.length > 0
+      ? `Specialist lane: ${laneName} (${qualifiers.join('; ')}).`
+      : `Specialist lane: ${laneName}.`;
+  }
+  if (roleLabel) {
+    return lensLabels.length > 0
+      ? `Specialist lane: ${roleLabel} (${lensLabels.join('; ')}).`
+      : `Specialist lane: ${roleLabel}.`;
+  }
+  return `Specialist lane lenses: ${lensLabels.join('; ')}.`;
+}
+
 function normalizeDelegatedWorkerProfileTier(value: string | null | undefined): string | undefined {
   const normalized = nonEmptyText(value);
   return normalized ? normalized.replaceAll('_', '-') : undefined;
@@ -2203,16 +2264,21 @@ function mapDelegatedExecutionEventStatus(event: ExecutionEvent): DashboardRunTi
 
 function buildDelegatedWorkerProgressDetail(event: DelegatedWorkerProgressEvent): string | undefined {
   const detail = sanitizeTimelineText(event.detail);
+  const laneSentence = buildDelegatedWorkerLaneSentence(event);
   const profileSentence = buildDelegatedWorkerExecutionProfileSentence(event);
-  if (!profileSentence) return detail;
-  if (!detail) return profileSentence;
-  const profileName = nonEmptyText(event.executionProfileName)?.toLowerCase();
-  const profileModel = nonEmptyText(event.executionProfileModel)?.toLowerCase();
-  const normalizedDetail = detail.toLowerCase();
-  if ((profileName && normalizedDetail.includes(profileName)) || (profileModel && normalizedDetail.includes(profileModel))) {
-    return detail;
+  const lines = detail ? [detail] : [];
+  const normalizedDetail = detail?.toLowerCase() ?? '';
+  if (laneSentence && !normalizedDetail.includes('specialist lane:')) {
+    lines.push(laneSentence);
   }
-  return `${detail}\n${profileSentence}`;
+  if (profileSentence) {
+    const profileName = nonEmptyText(event.executionProfileName)?.toLowerCase();
+    const profileModel = nonEmptyText(event.executionProfileModel)?.toLowerCase();
+    if (!((profileName && normalizedDetail.includes(profileName)) || (profileModel && normalizedDetail.includes(profileModel)))) {
+      lines.push(profileSentence);
+    }
+  }
+  return lines.join('\n') || undefined;
 }
 
 function buildDelegatedWorkerTaskSubtitle(
@@ -2238,10 +2304,17 @@ function buildDelegatedWorkerContextAssembly(
       .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
       .map((value) => value.trim())
     : [];
-  if (!continuityKey && activeExecutionRefs.length === 0) return undefined;
+  const orchestrationLabel = nonEmptyText(event.orchestrationLabel);
+  const orchestrationLenses = normalizeDelegatedWorkerLenses(event);
+  if (!continuityKey && activeExecutionRefs.length === 0 && !event.orchestrationRole && !orchestrationLabel && orchestrationLenses.length === 0) {
+    return undefined;
+  }
   return {
     ...(continuityKey ? { continuityKey } : {}),
     ...(activeExecutionRefs.length > 0 ? { activeExecutionRefs } : {}),
+    ...(event.orchestrationRole ? { orchestrationRole: event.orchestrationRole } : {}),
+    ...(orchestrationLabel ? { orchestrationLabel } : {}),
+    ...(orchestrationLenses.length > 0 ? { orchestrationLenses } : {}),
   };
 }
 

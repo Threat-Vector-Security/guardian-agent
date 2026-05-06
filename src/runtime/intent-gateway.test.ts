@@ -1001,6 +1001,40 @@ describe('IntentGateway', () => {
     });
   });
 
+  it('prefers explicit code-session repo grounding over stale active session-control repair', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Give me a brief overview of this repo.',
+        channel: 'web',
+        continuity: {
+          continuityKey: 'default:harness',
+          linkedSurfaceCount: 1,
+          activeExecutionRefs: ['execution:detach-run', 'code_session:suspicious-session'],
+          activeExecution: {
+            executionId: 'detach-run',
+            status: 'running',
+            route: 'coding_session_control',
+            operation: 'delete',
+            summary: 'Detach this chat from the current coding workspace.',
+            originalUserContent: 'Detach this chat from the current coding workspace.',
+          },
+        },
+      },
+      async () => {
+        throw new Error('intent classifier timed out');
+      },
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.summary).toBe('Inspect the active coding workspace and answer from repo evidence.');
+  });
+
   it('inherits a resumable active execution for short continue turns even with stale continuation state', async () => {
     const gateway = new IntentGateway();
 

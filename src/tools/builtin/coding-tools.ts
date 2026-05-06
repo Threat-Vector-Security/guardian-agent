@@ -320,6 +320,22 @@ function truncateOutput(value: string): string {
   return value.length > 8000 ? `${value.slice(0, 8000)}\n...[truncated]` : value;
 }
 
+function appendUntrackedFilesToGitDiffOutput(diffStdout: string, untrackedStdout: string): string {
+  const untrackedFiles = untrackedStdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (untrackedFiles.length === 0) {
+    return diffStdout;
+  }
+  const untrackedSection = [
+    'Untracked files:',
+    ...untrackedFiles.map((file) => `?? ${file}`),
+  ].join('\n');
+  const sections = [diffStdout.trimEnd(), untrackedSection].filter(Boolean);
+  return `${sections.join('\n\n')}\n`;
+}
+
 function normalizeRemoteIsolationMode(value: unknown): RemoteIsolationMode {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
   if (normalized === 'remote_if_available' || normalized === 'remote_required') {
@@ -1340,9 +1356,10 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       const gitArgs = ['diff'];
       if (staged) gitArgs.push('--staged');
       const maybePath = asString(args.path, '').trim();
+      let relativePath: string | undefined;
       if (maybePath) {
         const resolvedPath = await context.resolveAllowedPath(resolve(cwd, maybePath), request);
-        const relativePath = relative(cwd, resolvedPath).replace(/\\/g, '/');
+        relativePath = relative(cwd, resolvedPath).replace(/\\/g, '/');
         gitArgs.push('--', relativePath || '.');
       }
       try {
@@ -1355,12 +1372,26 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
           maxBuffer: 1_000_000,
           env,
         });
+        let stdoutWithUntracked = stdout;
+        if (!staged) {
+          const untrackedArgs = ['ls-files', '--others', '--exclude-standard'];
+          if (relativePath !== undefined) {
+            untrackedArgs.push('--', relativePath || '.');
+          }
+          const untracked = await context.sandboxExecFile('git', untrackedArgs, 'read-only', {
+            cwd,
+            timeout: timeoutMs,
+            maxBuffer: 1_000_000,
+            env,
+          });
+          stdoutWithUntracked = appendUntrackedFilesToGitDiffOutput(stdout, untracked.stdout);
+        }
         return {
           success: true,
           output: {
             command: ['git', ...gitArgs].join(' '),
             cwd,
-            stdout: truncateOutput(stdout),
+            stdout: truncateOutput(stdoutWithUntracked),
             stderr: truncateOutput(stderr),
           },
         };

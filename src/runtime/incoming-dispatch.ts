@@ -443,12 +443,29 @@ export function createIncomingDispatchPreparer(args: {
       ? continuity
       : null;
     const baseContinuitySummary = args.summarizeContinuityThreadForGateway(continuityForGateway);
+    const codeSessionContinuityId = resolvedCodeSession?.session.id?.trim();
+    const codeSessionContinuityRef = codeSessionContinuityId
+      ? `code_session:${codeSessionContinuityId}`
+      : undefined;
+    const activeExecutionRefs = [
+      ...(baseContinuitySummary?.activeExecutionRefs ?? []),
+      ...(codeSessionContinuityRef && !baseContinuitySummary?.activeExecutionRefs?.includes(codeSessionContinuityRef)
+        ? [codeSessionContinuityRef]
+        : []),
+    ];
     const activeExecution = summarizeActiveExecutionForGateway(baseContinuitySummary, stateAgentId, canonicalUserId);
     const continuitySummary = baseContinuitySummary
       ? {
           ...baseContinuitySummary,
+          ...(activeExecutionRefs.length > 0 ? { activeExecutionRefs } : {}),
           ...(activeExecution ? { activeExecution } : {}),
         }
+      : codeSessionContinuityRef
+        ? {
+            continuityKey: `code-session:${codeSessionContinuityId}`,
+            linkedSurfaceCount: 1,
+            activeExecutionRefs,
+          }
       : null;
     const conversationUserId = resolvedCodeSession?.session?.conversationUserId ?? canonicalUserId;
     const conversationChannel = resolvedCodeSession?.session?.conversationChannel

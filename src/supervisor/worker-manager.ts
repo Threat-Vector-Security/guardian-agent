@@ -1955,7 +1955,7 @@ export class WorkerManager {
   private publishDelegatedWorkerProgress(
     input: WorkerMessageRequest,
     target: ResolvedDelegatedTargetMetadata,
-    event: Omit<DelegatedWorkerProgressEvent, 'agentId' | 'agentName' | 'orchestrationLabel' | 'originChannel' | 'requestPreview' | 'continuityKey' | 'activeExecutionRefs' | 'codeSessionId' | 'timestamp' | 'runId' | 'parentRunId' | 'executionProfileName' | 'executionProfileModel' | 'executionProfileTier'>,
+    event: Omit<DelegatedWorkerProgressEvent, 'agentId' | 'agentName' | 'orchestrationRole' | 'orchestrationLabel' | 'orchestrationLenses' | 'originChannel' | 'requestPreview' | 'continuityKey' | 'activeExecutionRefs' | 'codeSessionId' | 'timestamp' | 'runId' | 'parentRunId' | 'executionProfileName' | 'executionProfileModel' | 'executionProfileTier'>,
   ): void {
     const delegatedExecution = resolveDelegatedExecutionIdentity(input, event.taskRunId);
     this.observability.runTimeline?.ingestDelegatedWorkerProgress({
@@ -1968,7 +1968,9 @@ export class WorkerManager {
       codeSessionId: input.delegation?.codeSessionId,
       agentId: target.agentId,
       ...(target.agentName ? { agentName: target.agentName } : {}),
+      ...(target.orchestration?.role ? { orchestrationRole: target.orchestration.role } : {}),
       ...(target.orchestration?.label ? { orchestrationLabel: target.orchestration.label } : {}),
+      ...(target.orchestration?.lenses?.length ? { orchestrationLenses: [...target.orchestration.lenses] } : {}),
       originChannel: input.delegation?.originChannel ?? input.message.channel,
       requestPreview: input.message.content,
       continuityKey: input.delegation?.continuityKey,

@@ -1974,6 +1974,7 @@ describe('WorkerManager', () => {
                   orchestration: {
                     role: 'coordinator',
                     label: 'Primary Coordinator',
+                    lenses: ['routing', 'coordination'],
                   },
                 },
               }
@@ -2071,7 +2072,9 @@ describe('WorkerManager', () => {
         pendingActionId: 'pending-1',
         codeSessionId: 'code-1',
         agentName: 'Local Agent',
+        orchestrationRole: 'coordinator',
         orchestrationLabel: 'Primary Coordinator',
+        orchestrationLenses: ['routing', 'coordination'],
         executionProfileId: 'managed_cloud_tool',
         executionProfileName: 'ollama-cloud-coding',
         executionProfileModel: 'qwen3-coder-next',
@@ -2131,7 +2134,9 @@ describe('WorkerManager', () => {
       codeSessionId: 'code-1',
       agentId: 'local',
       agentName: 'Local Agent',
+      orchestrationRole: 'coordinator',
       orchestrationLabel: 'Primary Coordinator',
+      orchestrationLenses: ['routing', 'coordination'],
       executionProfileName: 'ollama-cloud-coding',
       executionProfileModel: 'qwen3-coder-next',
       executionProfileTier: 'managed-cloud',

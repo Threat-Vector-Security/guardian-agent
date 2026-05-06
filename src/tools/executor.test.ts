@@ -6348,6 +6348,32 @@ describe('ToolExecutor', () => {
     expect((result.output as any).stdout).toContain('+export const answer = 42;');
   });
 
+  it('includes untracked created files in code_git_diff output', async () => {
+    const root = createExecutorRoot();
+    execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+    mkdirSync(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'src', 'new-file.ts'), 'export const created = true;\n', 'utf-8');
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['git'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_git_diff',
+      args: { cwd: root },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect((result.output as any).stdout).toContain('Untracked files:');
+    expect((result.output as any).stdout).toContain('?? src/new-file.ts');
+  });
+
   it('runs code_git_commit with a quoted message without shell-string escaping', async () => {
     const root = createExecutorRoot();
     execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });

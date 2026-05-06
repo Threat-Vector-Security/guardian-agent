@@ -585,10 +585,6 @@ function repairUnavailableUnknownWithConversationContext(
   ) {
     return decision;
   }
-  const activeExecutionRepair = repairUnavailableActiveExecutionWork(input, decision);
-  if (activeExecutionRepair) {
-    return activeExecutionRepair;
-  }
   if (hasActiveCodeSessionContinuity(input)) {
     const codeSessionRepair = repairUnavailableCodeSessionWork(input, decision);
     if (codeSessionRepair) {
@@ -597,6 +593,10 @@ function repairUnavailableUnknownWithConversationContext(
     if (!looksLikeDirectContextQuestion(input.content)) {
       return decision;
     }
+  }
+  const activeExecutionRepair = repairUnavailableActiveExecutionWork(input, decision);
+  if (activeExecutionRepair) {
+    return activeExecutionRepair;
   }
   if (input.pendingAction || !hasConversationContextForDirectFallback(input)) {
     return decision;

@@ -636,7 +636,9 @@ describe('RunTimelineStore', () => {
       codeSessionId: 'code-1',
       agentId: 'agent-1',
       agentName: 'Workspace Implementer',
+      orchestrationRole: 'implementer',
       orchestrationLabel: 'Coding Workspace',
+      orchestrationLenses: ['coding-workspace', 'verification'],
       executionProfileName: 'ollama-cloud-coding',
       executionProfileModel: 'qwen3-coder-next',
       executionProfileTier: 'managed_cloud',
@@ -658,7 +660,9 @@ describe('RunTimelineStore', () => {
       codeSessionId: 'code-1',
       agentId: 'agent-1',
       agentName: 'Workspace Implementer',
+      orchestrationRole: 'implementer',
       orchestrationLabel: 'Coding Workspace',
+      orchestrationLenses: ['coding-workspace', 'verification'],
       executionProfileName: 'ollama-cloud-coding',
       executionProfileModel: 'qwen3-coder-next',
       executionProfileTier: 'managed_cloud',
@@ -680,7 +684,9 @@ describe('RunTimelineStore', () => {
       codeSessionId: 'code-1',
       agentId: 'agent-1',
       agentName: 'Workspace Implementer',
+      orchestrationRole: 'implementer',
       orchestrationLabel: 'Coding Workspace',
+      orchestrationLenses: ['coding-workspace', 'verification'],
       executionProfileName: 'ollama-cloud-coding',
       executionProfileModel: 'qwen3-coder-next',
       executionProfileTier: 'managed_cloud',
@@ -707,10 +713,13 @@ describe('RunTimelineStore', () => {
       type: 'note',
       status: 'running',
       title: 'Coding Workspace is working',
-      detail: 'Coding Workspace is working in code session code-1.\nExecution profile: managed-cloud profile ollama-cloud-coding (qwen3-coder-next).',
+      detail: 'Coding Workspace is working in code session code-1.\nSpecialist lane: Coding Workspace (Implementer; Verification).\nExecution profile: managed-cloud profile ollama-cloud-coding (qwen3-coder-next).',
       contextAssembly: {
         continuityKey: 'continuity-1',
         activeExecutionRefs: ['code_session:Repo Fix'],
+        orchestrationRole: 'implementer',
+        orchestrationLabel: 'Coding Workspace',
+        orchestrationLenses: ['coding-workspace', 'verification'],
       },
     });
     expect(run?.items.some((item) =>
@@ -722,15 +731,19 @@ describe('RunTimelineStore', () => {
       type: 'handoff_completed',
       status: 'blocked',
       title: 'Coding Workspace is waiting',
-      detail: 'Resolve the pending approval(s) to continue the delegated run.\nExecution profile: managed-cloud profile ollama-cloud-coding (qwen3-coder-next).',
+      detail: 'Resolve the pending approval(s) to continue the delegated run.\nSpecialist lane: Coding Workspace (Implementer; Verification).\nExecution profile: managed-cloud profile ollama-cloud-coding (qwen3-coder-next).',
       contextAssembly: {
         continuityKey: 'continuity-1',
         activeExecutionRefs: ['code_session:Repo Fix'],
+        orchestrationRole: 'implementer',
+        orchestrationLabel: 'Coding Workspace',
+        orchestrationLenses: ['coding-workspace', 'verification'],
       },
     });
     expect(run?.summary).toMatchObject({
       executionId: 'exec-delegated-worker',
       rootExecutionId: 'exec-delegated-worker',
+      tags: expect.arrayContaining(['orchestration:implementer', 'lens:coding-workspace', 'lens:verification']),
     });
     const delegatedTaskRun = store.getRun('delegated-task:job-1');
     expect(delegatedTaskRun?.summary).toMatchObject({
@@ -746,6 +759,7 @@ describe('RunTimelineStore', () => {
       codeSessionId: 'code-1',
       pendingApprovalCount: 1,
       verificationPendingCount: 0,
+      tags: expect.arrayContaining(['orchestration:implementer', 'lens:coding-workspace', 'lens:verification']),
     });
     expect(delegatedTaskRun?.items.find((item) => item.id === 'delegated-2')).toMatchObject({
       runId: 'delegated-task:job-1',
