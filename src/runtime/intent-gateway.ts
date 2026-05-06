@@ -576,14 +576,24 @@ function repairUnavailableUnknownWithConversationContext(
     return decision;
   }
   const hasResumableActiveExecution = canRepairFromActiveExecution(input);
+  const hasExplicitActiveExecutionContinuation = canRepairFromExplicitActiveExecutionContinuation(input);
   if (
     !hasResumableActiveExecution
+    && !hasExplicitActiveExecutionContinuation
     && (
       looksLikeContextDependentPromptSelectionTurn(input.content)
       || !hasSubstantiveCurrentTurnForDirectFallback(input.content)
     )
   ) {
     return decision;
+  }
+  if (hasExplicitActiveExecutionContinuation) {
+    const activeExecutionRepair = repairUnavailableActiveExecutionWork(input, decision, {
+      allowFailedOrCancelled: true,
+    });
+    if (activeExecutionRepair) {
+      return activeExecutionRepair;
+    }
   }
   if (hasActiveCodeSessionContinuity(input)) {
     const codeSessionRepair = repairUnavailableCodeSessionWork(input, decision);
@@ -652,15 +662,42 @@ function canRepairFromActiveExecution(input: IntentGatewayInput): boolean {
   return activeExecution.route !== 'unknown' && activeExecution.route !== 'general_assistant';
 }
 
+function canRepairFromExplicitActiveExecutionContinuation(input: IntentGatewayInput): boolean {
+  const activeExecution = input.continuity?.activeExecution;
+  if (!activeExecution || !activeExecution.route) {
+    return false;
+  }
+  if (activeExecution.route === 'unknown' || activeExecution.route === 'general_assistant') {
+    return false;
+  }
+  if (!hasExplicitExecutionContinuationRequest(input.content)) {
+    return false;
+  }
+  if (asksNotToResumePriorCodingExecution(input.content.trim().toLowerCase())) {
+    return false;
+  }
+  if (activeExecution.route === 'coding_task') {
+    return hasActiveCodeSessionContinuity(input) || !!activeExecution.codeSessionId;
+  }
+  return true;
+}
+
 function repairUnavailableActiveExecutionWork(
   input: IntentGatewayInput,
   decision: IntentGatewayDecision,
+  options?: { allowFailedOrCancelled?: boolean },
 ): IntentGatewayDecision | null {
-  if (!canRepairFromActiveExecution(input)) {
+  if (!options?.allowFailedOrCancelled && !canRepairFromActiveExecution(input)) {
     return null;
   }
   const activeExecution = input.continuity?.activeExecution;
   if (!activeExecution) return null;
+  if (
+    !options?.allowFailedOrCancelled
+    && (activeExecution.status === 'failed' || activeExecution.status === 'cancelled')
+  ) {
+    return null;
+  }
   const route = activeExecution.route;
   if (!route || route === 'unknown' || route === 'general_assistant') {
     return null;
@@ -877,6 +914,16 @@ function asksNotToResumePriorCodingExecution(normalized: string): boolean {
     || /\btreat\s+this\s+as\s+a\s+fresh\b/.test(normalized)
     || /\bfresh\s+bounded\s+coding\s+step\b/.test(normalized)
     || /\bfresh\s+planning\s+request\b/.test(normalized);
+}
+
+function hasExplicitExecutionContinuationRequest(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized) return false;
+  return /\b(?:continue|resume|retry|rerun|try\s+again|pick\s+(?:it\s+)?back\s+up|carry\s+on|keep\s+going)\b/.test(normalized)
+    || /\b(?:where|when)\s+(?:you|it)\s+left\s+off\b/.test(normalized)
+    || /\bfrom\s+(?:where\s+)?(?:you|it)\s+left\s+off\b/.test(normalized)
+    || /\b(?:timed\s*out|timeout|failed)\b.{0,120}\b(?:continue|resume|retry|get\s+.+?\s+running|finish)\b/.test(normalized)
+    || /\b(?:continue|resume|retry|get\s+.+?\s+running|finish)\b.{0,120}\b(?:timed\s*out|timeout|failed|left\s+off)\b/.test(normalized);
 }
 
 function isFreshExplicitCodeSessionWorkRequest(

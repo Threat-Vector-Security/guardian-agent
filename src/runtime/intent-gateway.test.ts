@@ -1110,6 +1110,50 @@ describe('IntentGateway', () => {
     expect(result.decision.provenance?.route).not.toBe('repair.continuity');
   });
 
+  it('resumes a failed coding execution when the user explicitly asks to continue after timeout', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Looks like that timed out. Please continue from where you left off and get the app running locally',
+        channel: 'web',
+        continuity: {
+          continuityKey: 'default:harness',
+          linkedSurfaceCount: 2,
+          focusSummary: 'The user is building a greenfield MusicApp in the attached coding workspace.',
+          activeExecutionRefs: ['execution:exec-1', 'code_session:session-1'],
+          activeExecution: {
+            executionId: 'exec-1',
+            status: 'failed',
+            route: 'coding_task',
+            operation: 'create',
+            summary: 'Build a simple music app from scratch in the attached repo.',
+            originalUserContent: 'Build me a simple music app from scratch in this repo.',
+            codeSessionId: 'session-1',
+          },
+          continuationStateKind: 'm365_unread_list',
+        },
+      },
+      async () => {
+        throw new Error('intent classifier timed out');
+      },
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.turnRelation).toBe('follow_up');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.missingFields).toEqual([]);
+    expect(result.decision.executionClass).toBe('repo_grounded');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.provenance).toMatchObject({
+      route: 'repair.continuity',
+      operation: 'repair.continuity',
+    });
+  });
+
   it('keeps vague context references as clarification blockers when routing is unavailable', async () => {
     const gateway = new IntentGateway();
     let callCount = 0;
