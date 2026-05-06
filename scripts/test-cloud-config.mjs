@@ -120,6 +120,84 @@ async function readRequestBody(req) {
   return raw;
 }
 
+function isIntentGatewayRequest(systemPrompt, parsed) {
+  const prompt = typeof systemPrompt === 'string' ? systemPrompt : '';
+  const tools = Array.isArray(parsed.tools) ? parsed.tools : [];
+  return prompt.includes('Guardian\'s intent gateway')
+    || prompt.includes('Route definitions:')
+    || tools.some((tool) => (
+      tool?.name === 'route_intent'
+      || tool?.function?.name === 'route_intent'
+    ));
+}
+
+function buildSocialWhmIntentDecision() {
+  return {
+    route: 'general_assistant',
+    confidence: 'high',
+    operation: 'inspect',
+    summary: 'Test the configured social WHM profile connection.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+    executionClass: 'tool_orchestration',
+    preferredTier: 'external',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: true,
+    expectedContextPressure: 'medium',
+    simpleVsComplex: 'simple',
+    preferredAnswerPath: 'tool_loop',
+    planned_steps: [
+      {
+        kind: 'tool_call',
+        summary: 'Run whm_status for the configured social WHM profile.',
+        expectedToolCategories: ['whm_status'],
+        required: true,
+      },
+      {
+        kind: 'answer',
+        summary: 'Report whether the social WHM profile is reachable.',
+        required: true,
+        dependsOn: ['step_1'],
+      },
+    ],
+    toolName: 'whm_status',
+    profileId: 'social',
+  };
+}
+
+function buildIntentGatewayMockMessage(decision, useOllamaPayload, parsed) {
+  const tools = Array.isArray(parsed.tools) ? parsed.tools : [];
+  const shouldUseToolCall = tools.some((tool) => (
+    tool?.name === 'route_intent'
+    || tool?.function?.name === 'route_intent'
+  ));
+  if (!shouldUseToolCall) {
+    return {
+      finishReason: 'stop',
+      message: {
+        role: 'assistant',
+        content: JSON.stringify(decision),
+      },
+    };
+  }
+
+  return {
+    finishReason: 'tool_calls',
+    message: {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        ...(useOllamaPayload ? {} : { id: 'tc-route-intent', type: 'function' }),
+        function: {
+          name: 'route_intent',
+          arguments: useOllamaPayload ? decision : JSON.stringify(decision),
+        },
+      }],
+    },
+  };
+}
+
 async function createMockCloudServer() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${cloudPort}`);
@@ -265,7 +343,15 @@ async function createMockLlmServer(state) {
 
       let message;
       let finishReason = 'stop';
-      if (String(originalUser).includes('social WHM')) {
+      if (isIntentGatewayRequest(systemPrompt, parsed) && String(originalUser).includes('social WHM')) {
+        const routed = buildIntentGatewayMockMessage(
+          buildSocialWhmIntentDecision(),
+          useOllamaPayload,
+          parsed,
+        );
+        finishReason = routed.finishReason;
+        message = routed.message;
+      } else if (String(originalUser).includes('social WHM')) {
         if (toolMessages.length === 0) {
           finishReason = 'tool_calls';
           message = {
