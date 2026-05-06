@@ -11,7 +11,7 @@ const REMOTE_SANDBOX_STATUS_PATTERN = /\b(?:remote|cloud|isolated|managed)\s+san
 const FILESYSTEM_SCOPE_PATTERN = /\b(?:workspace|directory|folder|path|paths|file|files|repo\s+root|project\s+root|current\s+directory)\b/i;
 const CODING_DOCUMENT_ARTIFACT_PATTERN = /\b(?:(?:technical\s+)?implementation\s+plan|business\s+plan|design\s+(?:doc|docs|document|plan)|architecture\s+(?:doc|docs|document|plan)|requirements?\s+(?:doc|docs|document)|spec(?:ification)?|roadmap|changelog|readme|operator\s+guide|runbook)\b/i;
 const CODING_DOCUMENT_UPDATE_PATTERN = /\b(?:update|edit|change|modify|fix|patch|rewrite|append|revise|refresh|improve|rectify|uplift)\b/i;
-const CODING_DOCUMENT_CREATE_PATTERN = /\b(?:create|add|make|write|generate)\b/i;
+const CODING_DOCUMENT_CREATE_PATTERN = /\b(?:create|add|make|build|draft|write|generate)\b/i;
 const CODING_DOCUMENT_DELETE_PATTERN = /\b(?:delete|remove)\b/i;
 
 const GENERIC_SESSION_TARGET_TOKENS = new Set([
@@ -358,15 +358,21 @@ export function inferExplicitCodingTaskOperation(
   if (isCodingDocumentPlanningAnswerRequest(normalized)) {
     return 'inspect';
   }
+  if (
+    !hasExplicitRepoFileReference(normalized)
+    && hasCodingDocumentArtifactReference(normalized)
+    && (
+      parsedOperation === 'unknown'
+      || parsedOperation === 'read'
+      || parsedOperation === 'inspect'
+      || parsedOperation === 'search'
+      || parsedOperation === 'run'
+    )
+  ) {
+    const documentOperation = inferCodingDocumentArtifactOperation(normalized);
+    if (documentOperation) return documentOperation;
+  }
   if (parsedOperation && parsedOperation !== 'unknown') {
-    if (
-      !hasExplicitRepoFileReference(normalized)
-      && hasCodingDocumentArtifactReference(normalized)
-      && (parsedOperation === 'read' || parsedOperation === 'inspect' || parsedOperation === 'search')
-    ) {
-      const documentOperation = inferCodingDocumentArtifactOperation(normalized);
-      if (documentOperation) return documentOperation;
-    }
     return parsedOperation;
   }
   if (/\b(?:create|add|make|write|generate|touch)\b/.test(normalized)) {

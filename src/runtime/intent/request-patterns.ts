@@ -2,7 +2,7 @@ import type { AnswerConstraints } from '../execution/types.js';
 import { normalizeIntentGatewayRepairText } from './text.js';
 
 const WORKSPACE_SCOPE_PATTERN = /\b(?:coding\s+workspace|coding\s+session|workspace|session)\b/;
-const REPO_MUTATION_PATTERN = /\b(?:create|add|make|write|generate|touch|update|edit|change|modify|fix|patch|rewrite|append|delete|remove)\b/;
+const REPO_MUTATION_PATTERN = /\b(?:create|add|make|build|draft|write|generate|touch|update|edit|change|modify|fix|patch|rewrite|append|delete|remove)\b/;
 const REPO_EXECUTION_PATTERN = /\b(?:run|test|build|lint|check|debug|investigate|inspect|review|search|find|grep)\b/;
 const CODING_BACKEND_PATTERN = /\b(?:codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b/;
 const CODE_REPO_TARGET_PATTERN = /\b(?:source|function|class|module|component|symbol|tests?|test suite|unit tests?|build|compile|lint|check|readme)\b/;

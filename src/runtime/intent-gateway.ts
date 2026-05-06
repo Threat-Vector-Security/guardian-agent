@@ -844,9 +844,14 @@ function repairUnavailableCodeSessionWork(
     : null;
   const inferredCodingOperation = inferredFilesystemOperation
     ?? inferExplicitCodingTaskOperation(normalized, decision.operation);
+  const isFreshExplicitWork = isFreshExplicitCodeSessionWorkRequest(
+    input,
+    inferredFilesystemOperation,
+    inferredCodingOperation,
+  );
   if (
     asksNotToResumePriorCodingExecution(normalized)
-    && !isFreshExplicitCodeSessionWorkRequest(input, inferredFilesystemOperation, inferredCodingOperation)
+    && !isFreshExplicitWork
   ) {
     return null;
   }
@@ -885,7 +890,7 @@ function repairUnavailableCodeSessionWork(
     summary: asksToModifySelectedCode || asksToMutateWorkspaceArtifact
       ? 'Continue the requested edit in the active coding workspace.'
       : 'Inspect the active coding workspace and answer from repo evidence.',
-    turnRelation: 'follow_up',
+    turnRelation: isFreshExplicitWork ? 'new_request' : 'follow_up',
     resolution: 'ready',
     missingFields: [],
     resolvedContent: input.content,
@@ -899,8 +904,8 @@ function repairUnavailableCodeSessionWork(
     simpleVsComplex: 'complex',
     provenance: {
       ...(decision.provenance ?? {}),
-      route: 'repair.continuity',
-      operation: 'repair.continuity',
+      route: isFreshExplicitWork ? 'repair.structured' : 'repair.continuity',
+      operation: isFreshExplicitWork ? 'repair.structured' : 'repair.continuity',
       executionClass: 'repair.continuity',
       requiresRepoGrounding: 'repair.continuity',
       requiresToolSynthesis: 'repair.continuity',
@@ -934,6 +939,7 @@ function isFreshExplicitCodeSessionWorkRequest(
   const operation = filesystemOperation ?? codingOperation;
   if (!operation || operation === 'unknown') return false;
   if (filesystemOperation) return true;
+  if (isExplicitWorkspaceScopedRepoWorkRequest(input.content)) return true;
   return isExplicitRepoInspectionRequest(input.content);
 }
 

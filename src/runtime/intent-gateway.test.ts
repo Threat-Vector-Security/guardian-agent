@@ -1110,6 +1110,49 @@ describe('IntentGateway', () => {
     expect(result.decision.provenance?.route).not.toBe('repair.continuity');
   });
 
+  it('repairs natural workspace document creation phrasing when classifiers are unavailable', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'In the music app workspace build me a design document for a music app to run locally to play mp3s and stuff like that.',
+        channel: 'cli',
+        continuity: {
+          continuityKey: 'default:owner',
+          linkedSurfaceCount: 531,
+          focusSummary: 'The chat has stale continuation state from prior runs.',
+          activeExecutionRefs: ['execution:exec-1', 'code_session:session-1'],
+          activeExecution: {
+            executionId: 'exec-1',
+            status: 'failed',
+            route: 'coding_task',
+            operation: 'create',
+            summary: 'Build a simple music app from scratch in the attached repo.',
+            originalUserContent: 'Build me a simple music app from scratch in this repo.',
+            codeSessionId: 'session-1',
+          },
+          continuationStateKind: 'm365_unread_list',
+        },
+      },
+      async () => {
+        throw new Error('intent classifier timed out');
+      },
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.turnRelation).toBe('new_request');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.missingFields).toEqual([]);
+    expect(result.decision.entities.sessionTarget).toBe('music app');
+    expect(result.decision.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'write', 'read', 'tool_call', 'answer']);
+    expect(result.decision.provenance).toMatchObject({
+      route: 'repair.structured',
+      operation: 'repair.structured',
+    });
+  });
+
   it('resumes a failed coding execution when the user explicitly asks to continue after timeout', async () => {
     const gateway = new IntentGateway();
 
