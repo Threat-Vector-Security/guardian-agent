@@ -1369,6 +1369,7 @@ function formatRoutingTraceDetail(entry) {
       : '',
     typeof details.route === 'string' ? `route ${details.route}` : '',
     typeof details.tier === 'string' ? `tier ${details.tier}` : '',
+    formatRoutingTraceLatencyDetail(details),
     typeof details.executionId === 'string' ? `execution ${details.executionId}` : '',
     typeof details.taskExecutionId === 'string' ? `task ${details.taskExecutionId}` : '',
     typeof details.codeSessionId === 'string' ? `code ${details.codeSessionId}` : '',
@@ -1390,6 +1391,32 @@ function formatRoutingTraceDetail(entry) {
     typeof details.contextAssemblySummary === 'string' ? details.contextAssemblySummary : '',
   ].filter(Boolean);
   return parts.join(' | ') || '-';
+}
+
+function formatRoutingTraceLatencyDetail(details) {
+  const total = readRoutingTraceDuration(details, 'totalDispatchDurationMs');
+  const gateway = readRoutingTraceDuration(details, 'intentGatewayLatencyMs');
+  const runtime = readRoutingTraceDuration(details, 'runtimeDispatchDurationMs');
+  const fallback = readRoutingTraceDuration(details, 'fallbackRuntimeDispatchDurationMs');
+  if (total === null && gateway === null && runtime === null && fallback === null) return '';
+  const segments = [
+    gateway !== null ? `gateway ${formatRoutingTraceDuration(gateway)}` : '',
+    runtime !== null ? `runtime ${formatRoutingTraceDuration(runtime)}` : '',
+    fallback !== null ? `fallback ${formatRoutingTraceDuration(fallback)}` : '',
+  ].filter(Boolean);
+  const prefix = total !== null
+    ? `latency total ${formatRoutingTraceDuration(total)}`
+    : 'latency';
+  return segments.length > 0 ? `${prefix} (${segments.join(', ')})` : prefix;
+}
+
+function readRoutingTraceDuration(details, key) {
+  const value = details?.[key];
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function formatRoutingTraceDuration(value) {
+  return `${Math.round(value)}ms`;
 }
 
 function bindSystemEvents(container) {
