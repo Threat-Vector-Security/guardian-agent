@@ -864,7 +864,16 @@ export class CLIChannel implements ChannelAdapter {
     agentId?: string,
     depth = 0,
   ): Promise<void> {
-    const decision = APPROVAL_CONFIRM_PATTERN.test(answer.trim()) ? 'approved' : 'denied';
+    const trimmedAnswer = answer.trim();
+    const decision = APPROVAL_CONFIRM_PATTERN.test(trimmedAnswer)
+      ? 'approved'
+      : APPROVAL_DENY_PATTERN.test(trimmedAnswer)
+        ? 'denied'
+        : null;
+    if (!decision) {
+      await this.handleApprovalClarificationTurn(approvals, answer, agentId, depth);
+      return;
+    }
     const approvalDecisionHandler = this.dashboard?.onToolsApprovalDecision;
     if (!approvalDecisionHandler) return;
 
@@ -974,6 +983,53 @@ export class CLIChannel implements ChannelAdapter {
       } catch (err) {
         this.write(`\n${this.red('[error]')} Continuation failed: ${err instanceof Error ? err.message : String(err)}\n\n`);
       }
+    }
+  }
+
+  private async handleApprovalClarificationTurn(
+    approvals: PendingApprovalSummary[],
+    answer: string,
+    agentId?: string,
+    depth = 0,
+  ): Promise<void> {
+    if (depth >= CLIChannel.MAX_APPROVAL_CHAIN) {
+      this.write(`\n${this.yellow('[info]')} Maximum approval chain reached. Use /tools approvals to manage remaining approvals.\n\n`);
+      return;
+    }
+
+    const content = answer.trim();
+    if (!content) {
+      this.write(`\n${this.yellow('[info]')} Approval is still pending. Reply y to approve or n to deny.\n\n`);
+      await this.handleApprovalPrompt({
+        content: formatPendingApprovalMessage(approvals),
+        metadata: buildApprovalPendingActionMetadata(approvals),
+      }, agentId, depth + 1);
+      return;
+    }
+
+    try {
+      const response = await this.dispatchAssistantTurn({
+        agentId,
+        content,
+      });
+      this.write(`\nguardian-agent> ${formatCliResponseContent(response)}\n\n`);
+      const responseApprovals = extractPendingApprovals(response);
+      await this.handleApprovalPrompt(
+        responseApprovals.length > 0
+          ? response
+          : {
+              content: formatPendingApprovalMessage(approvals),
+              metadata: buildApprovalPendingActionMetadata(approvals),
+            },
+        agentId,
+        depth + 1,
+      );
+    } catch (err) {
+      this.write(`\n${this.red('[error]')} Clarification failed: ${err instanceof Error ? err.message : String(err)}\n\n`);
+      await this.handleApprovalPrompt({
+        content: formatPendingApprovalMessage(approvals),
+        metadata: buildApprovalPendingActionMetadata(approvals),
+      }, agentId, depth + 1);
     }
   }
 

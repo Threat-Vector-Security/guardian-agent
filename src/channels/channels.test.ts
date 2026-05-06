@@ -1868,6 +1868,69 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.stop();
   });
 
+  it('treats CLI inline approval questions as clarification and keeps approval pending', async () => {
+    const decisions: Array<{ approvalId: string; decision: string }> = [];
+    const dispatches: Array<{ agentId: string; content: string }> = [];
+    const { input, output, cli } = makeCli({
+      onDispatch: async (agentId, msg) => {
+        dispatches.push({ agentId, content: msg.content });
+        if (msg.content.trim().toLowerCase() === 'y') {
+          throw new Error('CLI approval prompt answer leaked into onDispatch');
+        }
+        if (dispatches.length === 1) {
+          return {
+            content: 'Waiting for approval to write S:/Development/Test70.txt.',
+            metadata: approvalPendingActionMetadata([
+              {
+                id: 'approval-write-clarify-1',
+                toolName: 'fs_write',
+                argsPreview: '{"path":"S:/Development/Test70.txt","content":"This is Test70.txt","append":false}',
+              },
+            ]),
+          };
+        }
+        if (dispatches.length === 2) {
+          return {
+            content: 'I am asking to run fs_write for S:/Development/Test70.txt.',
+          };
+        }
+        return {
+          content: 'Done - `Test70.txt` has been created in `S:\\Development`.',
+        };
+      },
+      onToolsApprovalDecision: async ({ approvalId, decision }) => {
+        decisions.push({ approvalId, decision });
+        return {
+          success: true,
+          message: "Tool 'fs_write' completed.",
+        };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/chat agent-1');
+    readOutput(output);
+    await sendCommand(input, 'Create a test file called Test70 in the S Drive development directory.');
+    await sendCommand(input, 'What exactly are you about to run?');
+    await sendCommand(input, 'y');
+    await new Promise(r => setTimeout(r, 200));
+
+    const text = readOutput(output);
+    expect(text).toContain('Waiting for approval to write S:/Development/Test70.txt.');
+    expect(text).toContain('I am asking to run fs_write for S:/Development/Test70.txt.');
+    expect(text).toContain('Done - `Test70.txt` has been created in `S:\\Development`.');
+    expect(decisions).toEqual([
+      { approvalId: 'approval-write-clarify-1', decision: 'approved' },
+    ]);
+    expect(dispatches.map((dispatch) => dispatch.content)).toEqual([
+      'Create a test file called Test70 in the S Drive development directory.',
+      'What exactly are you about to run?',
+      '[User approved the pending tool action(s). Result: ✓ fs_write: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
+    ]);
+
+    await cli.stop();
+  });
+
   it('refreshes stale CLI approval IDs and re-prompts with current pending approvals', async () => {
     const decisions: Array<{ approvalId: string; decision: string }> = [];
     const dispatches: Array<{ agentId: string; content: string }> = [];
