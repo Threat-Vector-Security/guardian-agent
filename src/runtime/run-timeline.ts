@@ -59,7 +59,12 @@ export interface DashboardRunTimelineItem {
   source: 'orchestrator' | 'workflow' | 'code_session' | 'system' | 'execution_graph';
   title: string;
   detail?: string;
+  graphId?: string;
+  graphEventKind?: string;
+  graphProducer?: string;
+  graphSequence?: number;
   nodeId?: string;
+  nodeKind?: string;
   toolName?: string;
   approvalId?: string;
   verificationKind?: 'test' | 'lint' | 'build' | 'manual';
@@ -195,6 +200,10 @@ export interface RunTimelineListFilters {
   parentExecutionId?: string;
   rootExecutionId?: string;
   taskExecutionId?: string;
+  graphEventKind?: string;
+  graphNodeKind?: string;
+  graphProducer?: string;
+  toolName?: string;
   channel?: string;
   agentId?: string;
   codeSessionId?: string;
@@ -292,6 +301,10 @@ export class RunTimelineStore {
         if (filters.parentExecutionId && detail.summary.parentExecutionId !== filters.parentExecutionId) return false;
         if (filters.rootExecutionId && detail.summary.rootExecutionId !== filters.rootExecutionId) return false;
         if (filters.taskExecutionId && detail.summary.executionId !== filters.taskExecutionId) return false;
+        if (filters.graphEventKind && !detail.items.some((item) => item.graphEventKind === filters.graphEventKind)) return false;
+        if (filters.graphNodeKind && !detail.items.some((item) => item.nodeKind === filters.graphNodeKind)) return false;
+        if (filters.graphProducer && !detail.items.some((item) => item.graphProducer === filters.graphProducer)) return false;
+        if (filters.toolName && !detail.items.some((item) => item.toolName === filters.toolName)) return false;
         if (filters.channel && detail.summary.channel !== filters.channel) return false;
         if (filters.agentId && detail.summary.agentId !== filters.agentId) return false;
         if (filters.codeSessionId && detail.summary.codeSessionId !== filters.codeSessionId) return false;

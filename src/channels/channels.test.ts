@@ -5519,7 +5519,7 @@ describe('WebChannel', () => {
       await web.start(async () => ({ content: 'ok' }));
 
       const res = await fetch(
-        'http://localhost:18979/api/assistant/runs?limit=5&kind=delegated_task&status=running&parentRunId=parent-1&executionId=exec-1&parentExecutionId=exec-parent&rootExecutionId=exec-root&taskExecutionId=task-1&channel=web&agentId=agent-1&codeSessionId=code-1&continuityKey=continuity-1&activeExecutionRef=code_session%3ARepo%20Fix',
+        'http://localhost:18979/api/assistant/runs?limit=5&kind=delegated_task&status=running&parentRunId=parent-1&executionId=exec-1&parentExecutionId=exec-parent&rootExecutionId=exec-root&taskExecutionId=task-1&graphEventKind=tool_call_completed&graphNodeKind=explore_readonly&graphProducer=brokered_worker&toolName=fs_search&channel=web&agentId=agent-1&codeSessionId=code-1&continuityKey=continuity-1&activeExecutionRef=code_session%3ARepo%20Fix',
         { headers: authHeaders },
       );
 
@@ -5543,6 +5543,10 @@ describe('WebChannel', () => {
         parentExecutionId: 'exec-parent',
         rootExecutionId: 'exec-root',
         taskExecutionId: 'task-1',
+        graphEventKind: 'tool_call_completed',
+        graphNodeKind: 'explore_readonly',
+        graphProducer: 'brokered_worker',
+        toolName: 'fs_search',
         channel: 'web',
         agentId: 'agent-1',
         codeSessionId: 'code-1',

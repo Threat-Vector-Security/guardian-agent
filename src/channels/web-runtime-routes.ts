@@ -1460,6 +1460,10 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     const parentExecutionId = trimOptionalString(url.searchParams.get('parentExecutionId'));
     const rootExecutionId = trimOptionalString(url.searchParams.get('rootExecutionId'));
     const taskExecutionId = trimOptionalString(url.searchParams.get('taskExecutionId'));
+    const graphEventKind = trimOptionalString(url.searchParams.get('graphEventKind'));
+    const graphNodeKind = trimOptionalString(url.searchParams.get('graphNodeKind'));
+    const graphProducer = trimOptionalString(url.searchParams.get('graphProducer'));
+    const toolName = trimOptionalString(url.searchParams.get('toolName'));
     const channel = trimOptionalString(url.searchParams.get('channel'));
     const agentId = trimOptionalString(url.searchParams.get('agentId'));
     const codeSessionId = trimOptionalString(url.searchParams.get('codeSessionId'));
@@ -1474,6 +1478,10 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       ...(parentExecutionId ? { parentExecutionId } : {}),
       ...(rootExecutionId ? { rootExecutionId } : {}),
       ...(taskExecutionId ? { taskExecutionId } : {}),
+      ...(graphEventKind ? { graphEventKind } : {}),
+      ...(graphNodeKind ? { graphNodeKind } : {}),
+      ...(graphProducer ? { graphProducer } : {}),
+      ...(toolName ? { toolName } : {}),
       ...(channel ? { channel } : {}),
       ...(agentId ? { agentId } : {}),
       ...(codeSessionId ? { codeSessionId } : {}),

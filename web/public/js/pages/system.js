@@ -34,6 +34,10 @@ const systemUiState = {
     executionId: '',
     parentExecutionId: '',
     rootExecutionId: '',
+    graphEventKind: '',
+    graphNodeKind: '',
+    graphProducer: '',
+    toolName: '',
     agentId: '',
     channel: '',
     codeSessionId: '',
@@ -88,6 +92,10 @@ function buildRuntimeTimelineQueryParams(limit = 8) {
   const executionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.executionId);
   const parentExecutionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.parentExecutionId);
   const rootExecutionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.rootExecutionId);
+  const graphEventKind = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.graphEventKind);
+  const graphNodeKind = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.graphNodeKind);
+  const graphProducer = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.graphProducer);
+  const toolName = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.toolName);
   const agentId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.agentId);
   const channel = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.channel);
   const codeSessionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.codeSessionId);
@@ -100,6 +108,10 @@ function buildRuntimeTimelineQueryParams(limit = 8) {
     ...(executionId ? { executionId } : {}),
     ...(parentExecutionId ? { parentExecutionId } : {}),
     ...(rootExecutionId ? { rootExecutionId } : {}),
+    ...(graphEventKind ? { graphEventKind } : {}),
+    ...(graphNodeKind ? { graphNodeKind } : {}),
+    ...(graphProducer ? { graphProducer } : {}),
+    ...(toolName ? { toolName } : {}),
     ...(agentId ? { agentId } : {}),
     ...(channel ? { channel } : {}),
     ...(codeSessionId ? { codeSessionId } : {}),
@@ -960,6 +972,10 @@ function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRun
   const executionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.executionId);
   const parentExecutionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.parentExecutionId);
   const rootExecutionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.rootExecutionId);
+  const graphEventKind = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.graphEventKind);
+  const graphNodeKind = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.graphNodeKind);
+  const graphProducer = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.graphProducer);
+  const toolName = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.toolName);
   const agentId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.agentId);
   const channel = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.channel);
   const codeSessionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.codeSessionId);
@@ -1014,6 +1030,22 @@ function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRun
       <div class="cfg-field" style="flex:1 1 14rem;min-width:12rem;margin:0">
         <label for="system-runtime-root-execution-id">Root Exec</label>
         <input id="system-runtime-root-execution-id" type="text" placeholder="root execution id" value="${escAttr(rootExecutionId)}">
+      </div>
+      <div class="cfg-field" style="flex:1 1 14rem;min-width:12rem;margin:0">
+        <label for="system-runtime-graph-event-kind">Graph Event</label>
+        <input id="system-runtime-graph-event-kind" type="text" placeholder="tool_call_completed" value="${escAttr(graphEventKind)}">
+      </div>
+      <div class="cfg-field" style="flex:1 1 14rem;min-width:12rem;margin:0">
+        <label for="system-runtime-graph-node-kind">Graph Node</label>
+        <input id="system-runtime-graph-node-kind" type="text" placeholder="explore_readonly" value="${escAttr(graphNodeKind)}">
+      </div>
+      <div class="cfg-field" style="flex:0 1 12rem;min-width:10rem;margin:0">
+        <label for="system-runtime-graph-producer">Producer</label>
+        <input id="system-runtime-graph-producer" type="text" placeholder="runtime" value="${escAttr(graphProducer)}">
+      </div>
+      <div class="cfg-field" style="flex:1 1 14rem;min-width:12rem;margin:0">
+        <label for="system-runtime-tool-name">Tool</label>
+        <input id="system-runtime-tool-name" type="text" placeholder="tool name" value="${escAttr(toolName)}">
       </div>
       <div class="cfg-field" style="flex:1 1 12rem;min-width:10rem;margin:0">
         <label for="system-runtime-agent-id">Agent</label>
@@ -1234,7 +1266,12 @@ function renderRuntimeExecutionEventMeta(item) {
   if (!item || typeof item !== 'object') return '';
   const pills = [];
   if (item.source === 'execution_graph') pills.push('execution graph');
+  if (item.graphEventKind) pills.push(`event ${humanizeSystemToken(item.graphEventKind)}`);
+  if (item.graphProducer) pills.push(`producer ${humanizeSystemToken(item.graphProducer)}`);
+  if (Number.isFinite(item.graphSequence)) pills.push(`seq ${item.graphSequence}`);
   if (item.nodeId) pills.push(`node ${shortGraphToken(item.nodeId)}`);
+  if (item.nodeKind) pills.push(`kind ${humanizeSystemToken(item.nodeKind)}`);
+  if (item.graphId) pills.push(`graph ${shortGraphToken(item.graphId)}`);
   if (item.toolName) pills.push(`tool ${item.toolName}`);
   if (item.approvalId) pills.push(`approval ${shortId(item.approvalId)}`);
   if (item.verificationKind) pills.push(`verification ${item.verificationKind}`);
@@ -1731,6 +1768,10 @@ function bindSystemEvents(container) {
       executionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-execution-id')?.value),
       parentExecutionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-parent-execution-id')?.value),
       rootExecutionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-root-execution-id')?.value),
+      graphEventKind: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-graph-event-kind')?.value),
+      graphNodeKind: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-graph-node-kind')?.value),
+      graphProducer: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-graph-producer')?.value),
+      toolName: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-tool-name')?.value),
       agentId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-agent-id')?.value),
       channel: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-channel')?.value),
       codeSessionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-code-session-id')?.value),
@@ -1747,6 +1788,10 @@ function bindSystemEvents(container) {
       executionId: '',
       parentExecutionId: '',
       rootExecutionId: '',
+      graphEventKind: '',
+      graphNodeKind: '',
+      graphProducer: '',
+      toolName: '',
       agentId: '',
       channel: '',
       codeSessionId: '',
@@ -1758,6 +1803,10 @@ function bindSystemEvents(container) {
     const executionInput = container.querySelector('#system-runtime-execution-id');
     const parentExecutionInput = container.querySelector('#system-runtime-parent-execution-id');
     const rootExecutionInput = container.querySelector('#system-runtime-root-execution-id');
+    const graphEventInput = container.querySelector('#system-runtime-graph-event-kind');
+    const graphNodeInput = container.querySelector('#system-runtime-graph-node-kind');
+    const graphProducerInput = container.querySelector('#system-runtime-graph-producer');
+    const toolNameInput = container.querySelector('#system-runtime-tool-name');
     const agentInput = container.querySelector('#system-runtime-agent-id');
     const channelInput = container.querySelector('#system-runtime-channel');
     const codeSessionInput = container.querySelector('#system-runtime-code-session-id');
@@ -1768,6 +1817,10 @@ function bindSystemEvents(container) {
     if (executionInput) executionInput.value = '';
     if (parentExecutionInput) parentExecutionInput.value = '';
     if (rootExecutionInput) rootExecutionInput.value = '';
+    if (graphEventInput) graphEventInput.value = '';
+    if (graphNodeInput) graphNodeInput.value = '';
+    if (graphProducerInput) graphProducerInput.value = '';
+    if (toolNameInput) toolNameInput.value = '';
     if (agentInput) agentInput.value = '';
     if (channelInput) channelInput.value = '';
     if (codeSessionInput) codeSessionInput.value = '';

@@ -85,6 +85,7 @@ Recommended reading order:
 - Dashboard `Agent Runtime` now has matching job filters for held, approval, delegated, status, reporting-mode, and run-class job views
 - Dashboard `Runtime Execution` can filter run timelines by status, parent run, agent, channel, and code session in addition to continuity key and active execution reference
 - Dashboard `Runtime Execution` can filter run timelines by execution, parent-execution, root-execution, and task-execution lineage
+- Dashboard `Runtime Execution` can filter graph-backed timelines by graph event kind, graph node kind, graph producer, and tool name
 - Dashboard `Runtime Execution` rows include parent/child/graph drill-down actions for delegated and execution-graph troubleshooting
 
 ### Documentation alignment
@@ -122,7 +123,7 @@ Why this is next:
 
 - final continuity polish around any remaining surface drift or noisy resume cases
 - broader producer adoption for delegated run classes beyond the current brokered worker metadata path
-- richer execution-graph event inspection beyond the current lineage and context filters
+- richer execution-graph event detail surfaces beyond the current graph metadata and context filters
 
 ### Medium-term
 

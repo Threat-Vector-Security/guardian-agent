@@ -982,12 +982,21 @@ describe('RunTimelineStore', () => {
     ]);
     expect(run?.items[0]).toMatchObject({
       source: 'execution_graph',
+      graphId: 'execution-graph:exec-direct:direct-reasoning',
+      graphEventKind: 'llm_call_completed',
+      graphProducer: 'brokered_worker',
+      graphSequence: 0,
+      nodeKind: 'explore_readonly',
       title: 'Model call completed',
       status: 'succeeded',
     });
     expect(run?.items[0]?.detail).toBeUndefined();
     expect(run?.items[1]).toMatchObject({
       source: 'execution_graph',
+      graphEventKind: 'tool_call_started',
+      graphProducer: 'brokered_worker',
+      graphSequence: 1,
+      nodeKind: 'explore_readonly',
       title: 'Tool started: Fs Search',
       toolName: 'fs_search',
       detail: '{"query":"RunTimelineStore"}',
@@ -998,6 +1007,18 @@ describe('RunTimelineStore', () => {
       status: 'succeeded',
       detail: 'Search results for RunTimelineStore (2 matches).',
     });
+    expect(store.listRuns({ graphEventKind: 'tool_call_completed' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-direct',
+    ]);
+    expect(store.listRuns({ graphNodeKind: 'explore_readonly' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-direct',
+    ]);
+    expect(store.listRuns({ graphProducer: 'brokered_worker' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-direct',
+    ]);
+    expect(store.listRuns({ toolName: 'fs_search' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-direct',
+    ]);
     expect(run?.liveSummary.items.map((item) => item.detail).join('\n')).not.toContain('No classification summary provided.');
   });
 });

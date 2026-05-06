@@ -64,7 +64,12 @@ function buildGraphTimelineItem(
     runId,
     timestamp: event.timestamp,
     source: 'execution_graph' as const,
+    graphId: event.graphId,
+    graphEventKind: event.kind,
+    graphProducer: event.producer,
+    graphSequence: event.sequence,
     ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+    ...(event.nodeKind ? { nodeKind: event.nodeKind } : {}),
   };
   const toolName = normalizeText(stringPayload(event, 'toolName'));
   const detail = buildGraphEventDetail(event);
