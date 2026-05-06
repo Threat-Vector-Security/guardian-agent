@@ -1042,7 +1042,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'What Performance Owns',
                 items: [
                   'Performance is the workstation-operations page for host pressure, process visibility, editable profile definitions, and reviewed cleanup actions.',
-                  'Overview shows the latest CPU, memory, disk, process pressure, and latency checks for the active profile.',
+                  'Overview shows the latest CPU, memory, disk, process pressure, recent assistant routing latency, and latency checks for the active profile.',
                   'Profiles is the working profile library where you create, edit, apply, and delete workstation modes.',
                   'Profiles also exposes a live running-process browser grouped by executable name so you can add current apps directly into the protect or cleanup lists.',
                   'Cleanup builds a reviewed recommendation set from the active profile and current process list before Guardian touches anything.',
@@ -1068,6 +1068,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'The active profile controls which process names are treated as terminate candidates and which names are protected.',
                   'Protected means Guardian will not target that executable name for cleanup. It does not guarantee the app is launched.',
                   'Latency checks live with the profile definition so Overview can show whether slowness is local host pressure or upstream/API latency.',
+                  'Assistant Routing Latency on Overview summarizes recent chat dispatch timing so you can distinguish host or provider slowness from assistant orchestration overhead.',
                   'This build keeps cleanup behavior conservative: the reviewed process-selection path is the primary supported mutation surface.',
                   'If a profile reports that power-mode changes are not available on the current OS, Guardian still switches the active profile and tells you that the host tuning step was skipped.',
                   'Power users can also reach the same performance controls from chat or saved automations.',

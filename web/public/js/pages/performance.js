@@ -1,11 +1,13 @@
 import { api } from '../api.js';
 import { enhanceSectionHelp, renderGuidancePanel } from '../components/context-help.js';
 import { createTabs } from '../components/tabs.js';
+import { summarizeRoutingLatency } from '../performance-latency.js';
 
 let currentContainer = null;
 const DEFAULT_PROFILE_POWER_MODE = 'balanced';
 const state = {
   status: null,
+  routingTrace: { entries: [] },
   activeTab: 'overview',
   preview: null,
   selectedProcessTargetIds: new Set(),
@@ -34,6 +36,12 @@ const PERFORMANCE_HELP = {
       whatSeeing: 'You are seeing the most recent probe state for each target the active profile tracks.',
       whatCanDo: 'Use it to separate host slowdowns from upstream or internet responsiveness problems.',
       howLinks: 'Latency targets are managed in Profiles and surfaced back here on Overview.',
+    },
+    'Assistant Routing Latency': {
+      whatItIs: 'This section summarizes recent assistant response orchestration timing.',
+      whatSeeing: 'You are seeing average, P95, execution-lane, and intent-gateway timing from recent chat dispatches.',
+      whatCanDo: 'Use it to decide whether a slowdown is coming from local host pressure, upstream providers, or assistant orchestration.',
+      howLinks: 'System keeps the detailed routing rows; Performance keeps the operator-level latency summary beside host and API checks.',
     },
   },
   profiles: {
@@ -68,7 +76,12 @@ export async function renderPerformance(container, options = {}) {
   container.innerHTML = '<div class="loading">Loading performance data...</div>';
 
   try {
-    state.status = await api.performanceStatus();
+    const [status, routingTrace] = await Promise.all([
+      api.performanceStatus(),
+      api.routingTrace({ limit: 40 }).catch(() => ({ entries: [] })),
+    ]);
+    state.status = status;
+    state.routingTrace = routingTrace;
     syncStateWithStatus();
     container.innerHTML = `
       <div class="layout-heading">
@@ -138,6 +151,7 @@ function renderOverviewTab(panel) {
   const snapshot = status?.snapshot ?? {};
   const topProcesses = snapshot.topProcesses ?? [];
   const latencyTargets = status?.latencyTargets ?? [];
+  const routingLatency = summarizeRoutingLatency(Array.isArray(state.routingTrace?.entries) ? state.routingTrace.entries : []);
   const capabilities = status?.capabilities ?? {};
   const memorySubtitle = snapshot.memoryTotalMb
     ? `${formatPercent(snapshot.memoryPercent)} of ${formatGb(snapshot.memoryTotalMb)} total`
@@ -190,6 +204,8 @@ function renderOverviewTab(panel) {
         </div>
       </div>
     </div>
+
+    ${renderAssistantRoutingLatencySection(routingLatency)}
 
     <div class="table-container">
       <div class="table-header"><h3>Latency Checks</h3></div>
@@ -258,6 +274,49 @@ function renderOverviewTab(panel) {
   });
 
   enhanceSectionHelp(panel, PERFORMANCE_HELP.overview);
+}
+
+function renderAssistantRoutingLatencySection(summary) {
+  if (!summary) {
+    return `
+      <div class="table-container">
+        <div class="table-header"><h3>Assistant Routing Latency</h3></div>
+        <div class="cfg-center-body">
+          <div class="ops-inline-help">
+            No recent assistant routing latency samples are available yet. Send a chat request, then return here to compare assistant responsiveness with host and upstream latency.
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="table-container">
+      <div class="table-header"><h3>Assistant Routing Latency</h3></div>
+      <div class="intel-summary-grid">
+        <div class="status-card accent">
+          <div class="card-title">Average</div>
+          <div class="card-value">${formatLatencyMs(summary.avgTotalMs)}</div>
+          <div class="card-subtitle">Recent assistant dispatches</div>
+        </div>
+        <div class="status-card info">
+          <div class="card-title">P95</div>
+          <div class="card-value">${formatLatencyMs(summary.p95TotalMs)}</div>
+          <div class="card-subtitle">Across ${formatInt(summary.sampleCount)} recent samples</div>
+        </div>
+        <div class="status-card ${summary.avgRuntimeMs != null && summary.avgRuntimeMs >= 5000 ? 'warning' : 'success'}">
+          <div class="card-title">Runtime</div>
+          <div class="card-value">${formatLatencyMs(summary.avgRuntimeMs)}</div>
+          <div class="card-subtitle">Average execution lane time</div>
+        </div>
+        <div class="status-card ${summary.avgGatewayMs != null && summary.avgGatewayMs >= 1500 ? 'warning' : 'success'}">
+          <div class="card-title">Intent Gateway</div>
+          <div class="card-value">${formatLatencyMs(summary.avgGatewayMs)}</div>
+          <div class="card-subtitle">${summary.fallbackCount > 0 ? `${formatInt(summary.fallbackCount)} fallback dispatches observed` : 'No fallback dispatches observed'}</div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderProfilesTab(panel) {
@@ -1470,6 +1529,10 @@ function formatGb(value) {
 
 function formatInt(value) {
   return typeof value === 'number' ? String(Math.round(value)) : 'n/a';
+}
+
+function formatLatencyMs(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value)} ms` : 'n/a';
 }
 
 function formatTimestamp(value) {
