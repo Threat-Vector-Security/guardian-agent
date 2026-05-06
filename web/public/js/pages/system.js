@@ -29,13 +29,32 @@ const systemUiState = {
   runtimeTimelineFilters: {
     continuityKey: '',
     activeExecutionRef: '',
+    status: '',
   },
   assistantJobFilter: 'all',
   assistantJobFollowUpResult: null,
 };
 
+const RUNTIME_TIMELINE_STATUS_FILTERS = [
+  { value: '', label: 'Any Status' },
+  { value: 'queued', label: 'Queued' },
+  { value: 'running', label: 'Running' },
+  { value: 'awaiting_approval', label: 'Awaiting Approval' },
+  { value: 'verification_pending', label: 'Verification Pending' },
+  { value: 'blocked', label: 'Blocked' },
+  { value: 'interrupted', label: 'Interrupted' },
+  { value: 'cancelled', label: 'Cancelled' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'failed', label: 'Failed' },
+];
+
 function normalizeRoutingTraceFilterValue(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeRuntimeTimelineStatusFilter(value) {
+  const normalized = normalizeRoutingTraceFilterValue(value);
+  return RUNTIME_TIMELINE_STATUS_FILTERS.some((filter) => filter.value === normalized) ? normalized : '';
 }
 
 function buildRoutingTraceQueryParams(limit = 8) {
@@ -57,10 +76,12 @@ function buildRoutingTraceQueryParams(limit = 8) {
 function buildRuntimeTimelineQueryParams(limit = 8) {
   const continuityKey = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.continuityKey);
   const activeExecutionRef = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.activeExecutionRef);
+  const status = normalizeRuntimeTimelineStatusFilter(systemUiState.runtimeTimelineFilters?.status);
   return {
     limit,
     ...(continuityKey ? { continuityKey } : {}),
     ...(activeExecutionRef ? { activeExecutionRef } : {}),
+    ...(status ? { status } : {}),
   };
 }
 
@@ -913,6 +934,7 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assist
 function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRuns, scheduledTaskRuns, codeSessionRuns }) {
   const continuityKey = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.continuityKey);
   const activeExecutionRef = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.activeExecutionRef);
+  const status = normalizeRuntimeTimelineStatusFilter(systemUiState.runtimeTimelineFilters?.status);
   const graphSummary = summarizeExecutionGraphRuns([
     ...assistantDispatchRuns,
     ...delegatedTaskRuns,
@@ -942,6 +964,12 @@ function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRun
       <div class="cfg-field" style="flex:1 1 16rem;min-width:14rem;margin:0">
         <label for="system-runtime-active-exec-ref">Active Execution Ref</label>
         <input id="system-runtime-active-exec-ref" type="text" placeholder="code_session:Repo Fix" value="${escAttr(activeExecutionRef)}">
+      </div>
+      <div class="cfg-field" style="flex:0 1 14rem;min-width:12rem;margin:0">
+        <label for="system-runtime-status">Status</label>
+        <select id="system-runtime-status">
+          ${renderRuntimeTimelineStatusFilterOptions(status)}
+        </select>
       </div>
       <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm" type="submit">Apply</button>
@@ -1210,6 +1238,13 @@ function formatAssistantJobFilterLabel(value) {
 function renderAssistantJobFilterOptions(selected) {
   const normalized = normalizeAssistantJobFilter(selected);
   return ASSISTANT_JOB_FILTERS.map((filter) => `
+    <option value="${escAttr(filter.value)}" ${filter.value === normalized ? 'selected' : ''}>${esc(filter.label)}</option>
+  `).join('');
+}
+
+function renderRuntimeTimelineStatusFilterOptions(selected) {
+  const normalized = normalizeRuntimeTimelineStatusFilter(selected);
+  return RUNTIME_TIMELINE_STATUS_FILTERS.map((filter) => `
     <option value="${escAttr(filter.value)}" ${filter.value === normalized ? 'selected' : ''}>${esc(filter.label)}</option>
   `).join('');
 }
@@ -1604,6 +1639,7 @@ function bindSystemEvents(container) {
     systemUiState.runtimeTimelineFilters = {
       continuityKey: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-continuity-key')?.value),
       activeExecutionRef: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-active-exec-ref')?.value),
+      status: normalizeRuntimeTimelineStatusFilter(container.querySelector('#system-runtime-status')?.value),
     };
     void renderSystemPreserveScroll(container);
   });
@@ -1612,11 +1648,14 @@ function bindSystemEvents(container) {
     systemUiState.runtimeTimelineFilters = {
       continuityKey: '',
       activeExecutionRef: '',
+      status: '',
     };
     const continuityInput = container.querySelector('#system-runtime-continuity-key');
     const activeExecutionInput = container.querySelector('#system-runtime-active-exec-ref');
+    const statusInput = container.querySelector('#system-runtime-status');
     if (continuityInput) continuityInput.value = '';
     if (activeExecutionInput) activeExecutionInput.value = '';
+    if (statusInput) statusInput.value = '';
     void renderSystemPreserveScroll(container);
   });
 

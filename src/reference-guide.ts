@@ -445,6 +445,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Held results can be replayed, kept held, or dismissed directly from `Agent Runtime`.',
                   'System includes `Runtime Execution`, the timeline for assistant dispatches, routine and scheduled-task runs, and coding-session execution that does not belong on Automations.',
                   'Use `Runtime Execution` when you need to reconstruct what Guardian did, where a run paused, or which step failed.',
+                  'Runtime Execution filters can narrow the timeline by continuity key, active execution reference, and run status such as running, awaiting approval, blocked, completed, or failed.',
                   'Runtime Execution can also show delegated or child runs so you can tell whether background work finished.',
                   'System also includes `Routing Trace`, a compact view of recent request decisions, candidate lanes, planned-step categories, and latency when you need to understand why Guardian answered or resumed a request a certain way.',
                   'When a request behaves incorrectly, you can ask Guardian to draft a problem report. The draft uses redacted diagnostics and does not open a GitHub issue unless you approve a separate external action.',
