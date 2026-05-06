@@ -501,6 +501,107 @@ describe('MessageRouter', () => {
       expect(result.fallbackAgentId).toBe('external');
     });
 
+    it('should prefer external for high-judgment repo-grounded coding intent in auto mode', () => {
+      const result = router.routeWithTierFromIntent(
+        {
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Review the repo architecture and recommend an implementation plan.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'local',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          requireExactFileReferences: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'chat_synthesis',
+          simpleVsComplex: 'complex',
+          plannedSteps: [
+            { kind: 'search', summary: 'Find orchestration entry points.', required: true },
+            { kind: 'read', summary: 'Read relevant implementation files.', required: true },
+            { kind: 'answer', summary: 'Synthesize the plan.', required: true },
+          ],
+          entities: {},
+        },
+        'Review the repo architecture and recommend an implementation plan.',
+        'auto',
+        0.5,
+      );
+      expect(result.agentId).toBe('external');
+      expect(result.tier).toBe('external');
+      expect(result.confidence).toBe('high');
+      expect(result.reason).toContain('high-judgment repo work');
+      expect(result.reason).toContain('preferredTier=local');
+      expect(result.fallbackAgentId).toBe('local');
+    });
+
+    it('should keep forced local mode for high-judgment repo-grounded coding intent', () => {
+      const result = router.routeWithTierFromIntent(
+        {
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Review the repo architecture and recommend an implementation plan.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'external',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          requireExactFileReferences: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'chat_synthesis',
+          simpleVsComplex: 'complex',
+          entities: {},
+        },
+        'Review the repo architecture and recommend an implementation plan.',
+        'local-only',
+        0.5,
+      );
+      expect(result.agentId).toBe('local');
+      expect(result.tier).toBe('local');
+      expect(result.reason).toContain('local-only');
+      expect(result.fallbackAgentId).toBeUndefined();
+    });
+
+    it('should keep explicit coding backend requests on the local supervisor lane even for high-judgment coding intent', () => {
+      const result = router.routeWithTierFromIntent(
+        {
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'run',
+          summary: 'Run Codex for a repo review.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'external',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          requireExactFileReferences: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'chat_synthesis',
+          simpleVsComplex: 'complex',
+          entities: {
+            codingBackend: 'codex',
+            codingBackendRequested: true,
+          },
+        },
+        'Use Codex to review the repo architecture.',
+        'auto',
+        0.5,
+      );
+      expect(result.agentId).toBe('local');
+      expect(result.tier).toBe('local');
+      expect(result.confidence).toBe('high');
+      expect(result.reason).toContain('coding backend=codex');
+      expect(result.fallbackAgentId).toBe('external');
+    });
+
     it('should route email intent to the external tier from the gateway decision', () => {
       const result = router.routeWithTierFromIntent(
         {

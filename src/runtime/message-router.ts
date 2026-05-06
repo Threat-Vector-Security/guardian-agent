@@ -412,6 +412,14 @@ export class MessageRouter {
       };
     }
 
+    if (shouldPreferExternalForHighJudgmentCoding(decision)) {
+      return {
+        tier: 'external',
+        confidence: decision.confidence === 'low' ? 'medium' : 'high',
+        reason: `intent route=${decision.route} high-judgment repo work contextPressure=${decision.expectedContextPressure} answerPath=${decision.preferredAnswerPath} preferredTier=${decision.preferredTier} → tier external`,
+      };
+    }
+
     if (
       decision.preferredTier === 'external'
       || decision.preferredTier === 'local'
@@ -549,4 +557,18 @@ export class MessageRouter {
   hasAgent(id: string): boolean {
     return this.agents.has(id);
   }
+}
+
+function shouldPreferExternalForHighJudgmentCoding(decision: IntentGatewayDecision): boolean {
+  if (decision.route !== 'coding_task') return false;
+  if (!decision.requiresRepoGrounding) return false;
+  if (decision.entities.codingBackend && decision.entities.codingBackendRequested === true) return false;
+  if (decision.expectedContextPressure === 'high') return true;
+  if (decision.simpleVsComplex === 'complex') return true;
+  if (decision.preferredAnswerPath === 'chat_synthesis') return true;
+  if (decision.requiresToolSynthesis && decision.preferredAnswerPath !== 'direct') return true;
+
+  const requiredEvidenceSteps = (decision.plannedSteps ?? [])
+    .filter(step => step.required !== false && step.kind !== 'answer');
+  return requiredEvidenceSteps.length >= 2;
 }
