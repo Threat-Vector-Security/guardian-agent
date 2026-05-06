@@ -364,4 +364,64 @@ describe('Telegram approval flow', () => {
       content: 'hello',
     }));
   });
+
+  it('sends concise live progress updates from shared run timeline events', async () => {
+    let listener: ((event: { type: 'run.timeline'; data: unknown }) => void) | null = null;
+    let unsubscribed = false;
+    const channel = new TelegramChannel({
+      botToken: '123:abc',
+      onSSESubscribe: (nextListener) => {
+        listener = nextListener as typeof listener;
+        return () => {
+          unsubscribed = true;
+        };
+      },
+    });
+    const { ctx, replies } = createFakeCtx();
+    const onMessage = vi.fn(async (message: { id: string }) => {
+      listener?.({
+        type: 'run.timeline',
+        data: {
+          summary: { runId: message.id, status: 'running' },
+          items: [{
+            id: 'inspect',
+            runId: message.id,
+            type: 'tool_call_started',
+            status: 'running',
+            title: 'Inspecting workspace',
+            detail: 'Reading project files.',
+            timestamp: Date.now(),
+          }],
+        },
+      });
+      listener?.({
+        type: 'run.timeline',
+        data: {
+          summary: { runId: message.id, status: 'running' },
+          items: [{
+            id: 'inspect',
+            runId: message.id,
+            type: 'tool_call_started',
+            status: 'running',
+            title: 'Inspecting workspace',
+            detail: 'Reading project files.',
+            timestamp: Date.now(),
+          }],
+        },
+      });
+      return { content: 'Done.' };
+    });
+    (channel as unknown as { onMessage: typeof onMessage }).onMessage = onMessage;
+
+    await (channel as unknown as {
+      dispatchAssistantMessage: (ctx: unknown, text: string, canonicalUserId: string, channelUserId: string) => Promise<void>;
+    }).dispatchAssistantMessage(ctx, 'hello', 'owner', '2002');
+
+    const output = replies.map((reply) => reply.text).join('\n');
+    expect(output).toContain('⏳ Inspecting workspace');
+    expect(output).toContain('Reading project files.');
+    expect(output).toContain('Done.');
+    expect(output.match(/Inspecting workspace/g)).toHaveLength(1);
+    expect(unsubscribed).toBe(true);
+  });
 });

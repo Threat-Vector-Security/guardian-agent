@@ -216,6 +216,9 @@ export async function startBootstrapChannels(args: {
       onDispatch: args.dashboardCallbacks.onDispatch
         ? (agentId, msg) => args.dashboardCallbacks.onDispatch!(agentId, msg)
         : undefined,
+      onSSESubscribe: args.dashboardCallbacks.onSSESubscribe
+        ? (listener) => args.dashboardCallbacks.onSSESubscribe!(listener)
+        : undefined,
       onResetConversation: async ({ userId, agentId }) => {
         if (!args.dashboardCallbacks.onConversationReset) {
           return { success: false, message: 'Conversation reset is not available.' };

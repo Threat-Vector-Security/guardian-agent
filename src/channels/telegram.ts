@@ -8,11 +8,13 @@
 import { Bot, InlineKeyboard, type Context } from 'grammy';
 import { randomUUID } from 'node:crypto';
 import type { ChannelAdapter, MessageCallback } from './types.js';
+import type { SSEEvent } from './web-types.js';
 import { createLogger } from '../util/logging.js';
 import type { AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ThreatIntelSummary, ThreatIntelScanInput, ThreatIntelFinding, IntelStatus } from '../runtime/threat-intel.js';
 import { describePendingApproval } from '../runtime/pending-approval-copy.js';
 import { formatCompactResponseSourceLabel } from '../runtime/model-routing-ux.js';
+import type { DashboardRunDetail, DashboardRunStatus, DashboardRunTimelineItem } from '../runtime/run-timeline.js';
 
 const log = createLogger('channel:telegram');
 const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
@@ -22,6 +24,7 @@ const APPROVAL_COMMAND_PATTERN = /^\/?(approve|deny)\b/i;
 const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const APPROVAL_IN_PROGRESS_LINE = '⏳ Approval received. Continuing...';
 const DENIAL_IN_PROGRESS_LINE = '⏳ Denial received. Processing...';
+const TELEGRAM_PROGRESS_MAX_UPDATES = 3;
 
 interface PendingTelegramApproval {
   id: string;
@@ -33,6 +36,13 @@ interface PendingTelegramApproval {
 interface PendingTelegramApprovalState {
   approvals: PendingTelegramApproval[];
   agentId: string;
+}
+
+interface TelegramProgressSnapshot {
+  key: string;
+  tone: 'info' | 'running' | 'warning' | 'failed';
+  title: string;
+  detail: string;
 }
 
 function extractPendingActionApprovals(
@@ -107,6 +117,104 @@ function appendApprovalStatusLine(messageText: string, statusLine: string): stri
   return `${normalized}\n${statusLine}`;
 }
 
+function isDashboardRunDetail(value: unknown): value is DashboardRunDetail {
+  if (!value || typeof value !== 'object') return false;
+  const summary = (value as { summary?: unknown }).summary;
+  return !!summary
+    && typeof summary === 'object'
+    && typeof (summary as { runId?: unknown }).runId === 'string'
+    && Array.isArray((value as { items?: unknown }).items);
+}
+
+function isMeaningfulTelegramTimelineItem(item: DashboardRunTimelineItem | undefined): boolean {
+  const type = String(item?.type || '').trim();
+  return type !== 'run_queued'
+    && type !== 'run_started'
+    && type !== 'run_completed';
+}
+
+function humanizeTelegramRunStatus(status: DashboardRunStatus | string | undefined): string {
+  switch (String(status || '')) {
+    case 'running':
+      return 'Working';
+    case 'awaiting_approval':
+      return 'Waiting for approval';
+    case 'verification_pending':
+      return 'Verification pending';
+    case 'blocked':
+      return 'Blocked';
+    case 'failed':
+      return 'Failed';
+    default:
+      return '';
+  }
+}
+
+function mapTelegramProgressTone(
+  itemStatus: DashboardRunTimelineItem['status'] | undefined,
+  runStatus: DashboardRunStatus | string | undefined,
+): TelegramProgressSnapshot['tone'] {
+  if (itemStatus === 'failed' || runStatus === 'failed' || runStatus === 'blocked') return 'failed';
+  if (itemStatus === 'warning' || itemStatus === 'blocked' || runStatus === 'awaiting_approval' || runStatus === 'verification_pending') return 'warning';
+  if (itemStatus === 'running' || runStatus === 'running') return 'running';
+  return 'info';
+}
+
+function extractTelegramProgressSnapshot(event: SSEEvent, requestId: string): TelegramProgressSnapshot | null {
+  if (event.type !== 'run.timeline' || !isDashboardRunDetail(event.data)) return null;
+  const detail = event.data;
+  const normalizedRequestId = requestId.trim();
+  const parentRunId = typeof detail.summary.parentRunId === 'string'
+    ? detail.summary.parentRunId.trim()
+    : '';
+  if (!normalizedRequestId || (detail.summary.runId !== normalizedRequestId && parentRunId !== normalizedRequestId)) return null;
+
+  const liveSummaryItem = detail.liveSummary?.items[detail.liveSummary.items.length - 1];
+  const liveSummaryTitle = typeof liveSummaryItem?.title === 'string' && liveSummaryItem.title.trim()
+    ? liveSummaryItem.title.trim()
+    : (typeof detail.liveSummary?.label === 'string' ? detail.liveSummary.label.trim() : '');
+  if (liveSummaryTitle) {
+    const detailText = typeof liveSummaryItem?.detail === 'string' ? liveSummaryItem.detail.trim() : '';
+    return {
+      key: `live:${detail.summary.runId}:${liveSummaryTitle}:${detailText}`,
+      tone: mapTelegramProgressTone(undefined, detail.summary.status),
+      title: liveSummaryTitle,
+      detail: detailText,
+    };
+  }
+
+  const meaningfulItems = detail.items.filter(isMeaningfulTelegramTimelineItem);
+  const latestItem = meaningfulItems[meaningfulItems.length - 1];
+  if (latestItem && latestItem.title.trim()) {
+    const detailText = String(latestItem.detail || '').trim();
+    return {
+      key: `${latestItem.id}:${latestItem.status}:${latestItem.title}:${detailText}`,
+      tone: mapTelegramProgressTone(latestItem.status, detail.summary.status),
+      title: latestItem.title.trim(),
+      detail: detailText,
+    };
+  }
+
+  const summaryTitle = humanizeTelegramRunStatus(detail.summary.status);
+  if (!summaryTitle) return null;
+  return {
+    key: `summary:${detail.summary.status}`,
+    tone: mapTelegramProgressTone(undefined, detail.summary.status),
+    title: summaryTitle,
+    detail: '',
+  };
+}
+
+function formatTelegramProgressSnapshot(snapshot: TelegramProgressSnapshot): string {
+  const prefix = snapshot.tone === 'failed'
+    ? '❌'
+    : snapshot.tone === 'warning'
+      ? '⚠️'
+      : '⏳';
+  const detail = snapshot.detail ? `\n${snapshot.detail}` : '';
+  return `${prefix} ${snapshot.title}${detail}`;
+}
+
 export interface TelegramChannelOptions {
   /** Telegram bot token. */
   botToken: string;
@@ -168,6 +276,8 @@ export interface TelegramChannelOptions {
   };
   /** Dispatch a follow-up message to an agent (for auto-continuation after approval). */
   onDispatch?: (agentId: string, message: { content: string; userId?: string; surfaceId?: string; channel?: string }) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
+  /** Subscribe to shared runtime events for concise live progress feedback. */
+  onSSESubscribe?: (listener: (event: SSEEvent) => void) => () => void;
 }
 
 export class TelegramChannel implements ChannelAdapter {
@@ -187,6 +297,7 @@ export class TelegramChannel implements ChannelAdapter {
   private onAnalyticsTrack?: TelegramChannelOptions['onAnalyticsTrack'];
   private onToolsApprovalDecision?: TelegramChannelOptions['onToolsApprovalDecision'];
   private onDispatchMsg?: TelegramChannelOptions['onDispatch'];
+  private onSSESubscribe?: TelegramChannelOptions['onSSESubscribe'];
   private readonly pendingApprovalsByChat = new Map<string, PendingTelegramApprovalState>();
 
   constructor(options: TelegramChannelOptions) {
@@ -203,6 +314,7 @@ export class TelegramChannel implements ChannelAdapter {
     this.onAnalyticsTrack = options.onAnalyticsTrack;
     this.onToolsApprovalDecision = options.onToolsApprovalDecision;
     this.onDispatchMsg = options.onDispatch;
+    this.onSSESubscribe = options.onSSESubscribe;
   }
 
   getKnownChatIds(): number[] {
@@ -478,6 +590,8 @@ export class TelegramChannel implements ChannelAdapter {
   ): Promise<void> {
     if (!this.onMessage) return;
     await ctx.replyWithChatAction('typing');
+    const requestId = randomUUID();
+    const stopProgress = this.startTelegramProgressReporter(ctx, requestId);
 
     try {
       this.trackAnalytics({
@@ -488,13 +602,14 @@ export class TelegramChannel implements ChannelAdapter {
         agentId: this.defaultAgent,
       });
       const response = await this.onMessage({
-        id: randomUUID(),
+        id: requestId,
         userId: channelUserId,
         surfaceId: this.buildSurfaceId(ctx),
         channel: 'telegram',
         content: text,
         timestamp: Date.now(),
       });
+      stopProgress();
 
       this.trackAnalytics({
         type: 'message_success',
@@ -505,6 +620,7 @@ export class TelegramChannel implements ChannelAdapter {
       });
       await this.replyWithApprovalSupport(ctx, response);
     } catch (err) {
+      stopProgress();
       const msg = err instanceof Error ? err.message : String(err);
       this.trackAnalytics({
         type: 'message_error',
@@ -517,6 +633,28 @@ export class TelegramChannel implements ChannelAdapter {
       log.error({ chatId: ctx.chat?.id, err: msg }, 'Error handling Telegram message');
       await this.replyInChunks(ctx, 'Sorry, an error occurred processing your message.');
     }
+  }
+
+  private startTelegramProgressReporter(ctx: Context, requestId: string): () => void {
+    if (!this.onSSESubscribe) return () => {};
+    const sentKeys = new Set<string>();
+    let sentCount = 0;
+    let stopped = false;
+    const listener = (event: SSEEvent) => {
+      if (stopped || sentCount >= TELEGRAM_PROGRESS_MAX_UPDATES) return;
+      const snapshot = extractTelegramProgressSnapshot(event, requestId);
+      if (!snapshot || sentKeys.has(snapshot.key)) return;
+      sentKeys.add(snapshot.key);
+      sentCount += 1;
+      void ctx.reply(formatTelegramProgressSnapshot(snapshot)).catch((err) => {
+        log.debug({ err, requestId }, 'Failed to send Telegram progress update');
+      });
+    };
+    const unsubscribe = this.onSSESubscribe(listener);
+    return () => {
+      stopped = true;
+      unsubscribe?.();
+    };
   }
 
   /**
