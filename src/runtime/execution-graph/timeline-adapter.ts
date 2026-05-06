@@ -37,6 +37,9 @@ function buildGraphSummaryPatch(runId: string, event: ExecutionGraphEvent): Part
   const title = normalizeText(stringPayload(event, 'title'))
     ?? normalizeText(stringPayload(event, 'summary'))
     ?? (event.nodeKind === 'explore_readonly' ? 'Direct reasoning exploration' : 'Execution graph');
+  const runClass = normalizeText(stringPayload(event, 'runClass'));
+  const reportingMode = normalizeText(stringPayload(event, 'reportingMode'));
+  const blockerKind = normalizeText(stringPayload(event, 'blockerKind') ?? stringPayload(event, 'kind'));
   return {
     executionId: event.executionId,
     rootExecutionId: event.rootExecutionId,
@@ -52,6 +55,9 @@ function buildGraphSummaryPatch(runId: string, event: ExecutionGraphEvent): Part
       'execution-graph',
       ...(event.nodeKind ? [event.nodeKind] : []),
       ...(event.producer ? [event.producer] : []),
+      ...(runClass ? [runClass] : []),
+      ...(reportingMode ? [`reporting:${reportingMode}`] : []),
+      ...(blockerKind ? [`blocker:${blockerKind}`] : []),
     ],
   };
 }

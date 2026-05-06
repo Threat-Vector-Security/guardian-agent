@@ -218,6 +218,9 @@ export interface RunTimelineListFilters {
   graphNodeKind?: string;
   graphProducer?: string;
   toolName?: string;
+  runClass?: string;
+  reportingMode?: string;
+  unresolvedBlockerKind?: string;
   channel?: string;
   agentId?: string;
   codeSessionId?: string;
@@ -321,6 +324,9 @@ export class RunTimelineStore {
         if (filters.graphNodeKind && !detail.items.some((item) => item.nodeKind === filters.graphNodeKind)) return false;
         if (filters.graphProducer && !detail.items.some((item) => item.graphProducer === filters.graphProducer)) return false;
         if (filters.toolName && !detail.items.some((item) => item.toolName === filters.toolName)) return false;
+        if (filters.runClass && !runSummaryHasTag(detail, filters.runClass)) return false;
+        if (filters.reportingMode && !runSummaryHasTag(detail, `reporting:${filters.reportingMode}`)) return false;
+        if (filters.unresolvedBlockerKind && !runSummaryHasTag(detail, `blocker:${filters.unresolvedBlockerKind}`)) return false;
         if (filters.channel && detail.summary.channel !== filters.channel) return false;
         if (filters.agentId && detail.summary.agentId !== filters.agentId) return false;
         if (filters.codeSessionId && detail.summary.codeSessionId !== filters.codeSessionId) return false;
@@ -516,6 +522,8 @@ export class RunTimelineStore {
           event.agentId,
           ...(event.originChannel ? [event.originChannel] : []),
           ...(event.runClass ? [event.runClass] : []),
+          ...(event.reportingMode ? [`reporting:${event.reportingMode}`] : []),
+          ...(event.unresolvedBlockerKind ? [`blocker:${event.unresolvedBlockerKind}`] : []),
           ...buildDelegatedWorkerOrchestrationTags(event),
         ],
       },
@@ -561,6 +569,7 @@ export class RunTimelineStore {
           ...(event.originChannel ? [event.originChannel] : []),
           ...(event.runClass ? [event.runClass] : []),
           ...(event.reportingMode ? [`reporting:${event.reportingMode}`] : []),
+          ...(event.unresolvedBlockerKind ? [`blocker:${event.unresolvedBlockerKind}`] : []),
           ...buildDelegatedWorkerOrchestrationTags(event),
         ],
       },
@@ -2516,6 +2525,11 @@ function mapDelegatedWorkerProgressStatus(event: DelegatedWorkerProgressEvent): 
 
 function mergeTags(left: string[], right: string[]): string[] {
   return [...new Set([...left, ...right].filter((value): value is string => !!nonEmptyText(value)))];
+}
+
+function runSummaryHasTag(detail: DashboardRunDetail, tag: string): boolean {
+  const normalized = nonEmptyText(tag);
+  return !!normalized && detail.summary.tags.includes(normalized);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

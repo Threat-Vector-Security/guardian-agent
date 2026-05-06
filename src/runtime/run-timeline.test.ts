@@ -656,6 +656,7 @@ describe('RunTimelineStore', () => {
       executionProfileModel: 'qwen3-coder-next',
       executionProfileTier: 'managed_cloud',
       originChannel: 'web',
+      runClass: 'long_running',
       requestPreview: 'Create the fix and verify the result.',
       continuityKey: 'continuity-1',
       activeExecutionRefs: ['code_session:Repo Fix'],
@@ -680,6 +681,7 @@ describe('RunTimelineStore', () => {
       executionProfileModel: 'qwen3-coder-next',
       executionProfileTier: 'managed_cloud',
       originChannel: 'web',
+      runClass: 'long_running',
       requestPreview: 'Create the fix and verify the result.',
       continuityKey: 'continuity-1',
       activeExecutionRefs: ['code_session:Repo Fix'],
@@ -704,6 +706,7 @@ describe('RunTimelineStore', () => {
       executionProfileModel: 'qwen3-coder-next',
       executionProfileTier: 'managed_cloud',
       originChannel: 'web',
+      runClass: 'long_running',
       requestPreview: 'Create the fix and verify the result.',
       continuityKey: 'continuity-1',
       activeExecutionRefs: ['code_session:Repo Fix'],
@@ -756,7 +759,14 @@ describe('RunTimelineStore', () => {
     expect(run?.summary).toMatchObject({
       executionId: 'exec-delegated-worker',
       rootExecutionId: 'exec-delegated-worker',
-      tags: expect.arrayContaining(['orchestration:implementer', 'lens:coding-workspace', 'lens:verification']),
+      tags: expect.arrayContaining([
+        'long_running',
+        'reporting:held_for_approval',
+        'blocker:approval',
+        'orchestration:implementer',
+        'lens:coding-workspace',
+        'lens:verification',
+      ]),
     });
     const delegatedTaskRun = store.getRun('delegated-task:job-1');
     expect(delegatedTaskRun?.summary).toMatchObject({
@@ -772,7 +782,14 @@ describe('RunTimelineStore', () => {
       codeSessionId: 'code-1',
       pendingApprovalCount: 1,
       verificationPendingCount: 0,
-      tags: expect.arrayContaining(['orchestration:implementer', 'lens:coding-workspace', 'lens:verification']),
+      tags: expect.arrayContaining([
+        'long_running',
+        'reporting:held_for_approval',
+        'blocker:approval',
+        'orchestration:implementer',
+        'lens:coding-workspace',
+        'lens:verification',
+      ]),
     });
     expect(delegatedTaskRun?.items.find((item) => item.id === 'delegated-2')).toMatchObject({
       runId: 'delegated-task:job-1',
@@ -804,6 +821,19 @@ describe('RunTimelineStore', () => {
       'req-delegated-worker',
       'delegated-task:job-1',
     ]);
+    expect(store.listRuns({ runClass: 'long_running' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-delegated-worker',
+      'delegated-task:job-1',
+    ]);
+    expect(store.listRuns({ reportingMode: 'held_for_approval' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-delegated-worker',
+      'delegated-task:job-1',
+    ]);
+    expect(store.listRuns({ unresolvedBlockerKind: 'approval' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-delegated-worker',
+      'delegated-task:job-1',
+    ]);
+    expect(store.listRuns({ runClass: 'status_only' })).toEqual([]);
     expect(store.listRunsForCodeSession('code-1').map((entry) => entry.summary.runId)).toEqual([
       'req-delegated-worker',
       'delegated-task:job-1',
@@ -1087,6 +1117,12 @@ describe('RunTimelineStore', () => {
       'req-direct',
     ]);
     expect(store.listRuns({ toolName: 'fs_search' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-direct',
+    ]);
+    expect(store.listRuns({ runClass: 'long_running' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-direct',
+    ]);
+    expect(store.listRuns({ reportingMode: 'held_for_operator' }).map((entry) => entry.summary.runId)).toEqual([
       'req-direct',
     ]);
     expect(run?.liveSummary.items.map((item) => item.detail).join('\n')).not.toContain('No classification summary provided.');

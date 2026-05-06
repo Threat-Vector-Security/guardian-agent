@@ -141,7 +141,28 @@ export function createAssistantDashboardCallbacks(
       );
     },
 
-    onAssistantRuns: ({ limit, status, kind, parentRunId, channel, agentId, codeSessionId, continuityKey, activeExecutionRef }) => {
+    onAssistantRuns: ({
+      limit,
+      status,
+      kind,
+      parentRunId,
+      executionId,
+      parentExecutionId,
+      rootExecutionId,
+      taskExecutionId,
+      graphEventKind,
+      graphNodeKind,
+      graphProducer,
+      toolName,
+      runClass,
+      reportingMode,
+      unresolvedBlockerKind,
+      channel,
+      agentId,
+      codeSessionId,
+      continuityKey,
+      activeExecutionRef,
+    }) => {
       options.refreshRunTimelineSnapshots();
       return {
         runs: options.runTimeline.listRuns({
@@ -149,6 +170,17 @@ export function createAssistantDashboardCallbacks(
           ...(status ? { status } : {}),
           ...(kind ? { kind } : {}),
           ...(parentRunId ? { parentRunId } : {}),
+          ...(executionId ? { executionId } : {}),
+          ...(parentExecutionId ? { parentExecutionId } : {}),
+          ...(rootExecutionId ? { rootExecutionId } : {}),
+          ...(taskExecutionId ? { taskExecutionId } : {}),
+          ...(graphEventKind ? { graphEventKind } : {}),
+          ...(graphNodeKind ? { graphNodeKind } : {}),
+          ...(graphProducer ? { graphProducer } : {}),
+          ...(toolName ? { toolName } : {}),
+          ...(runClass ? { runClass } : {}),
+          ...(reportingMode ? { reportingMode } : {}),
+          ...(unresolvedBlockerKind ? { unresolvedBlockerKind } : {}),
           ...(channel ? { channel } : {}),
           ...(agentId ? { agentId } : {}),
           ...(codeSessionId ? { codeSessionId } : {}),

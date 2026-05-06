@@ -1367,6 +1367,17 @@ export interface DashboardCallbacks {
     status?: DashboardRunStatus;
     kind?: DashboardRunKind;
     parentRunId?: string;
+    executionId?: string;
+    parentExecutionId?: string;
+    rootExecutionId?: string;
+    taskExecutionId?: string;
+    graphEventKind?: string;
+    graphNodeKind?: string;
+    graphProducer?: string;
+    toolName?: string;
+    runClass?: string;
+    reportingMode?: string;
+    unresolvedBlockerKind?: string;
     channel?: string;
     agentId?: string;
     codeSessionId?: string;

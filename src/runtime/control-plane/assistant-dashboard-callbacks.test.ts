@@ -175,6 +175,7 @@ describe('createAssistantDashboardCallbacks', () => {
       ],
     };
     const applyJobFollowUpAction = vi.fn(() => ({ success: true, message: 'ok' }));
+    const listRuns = vi.fn(() => [runTimelineEntry]);
     const callbacks = createAssistantDashboardCallbacks({
       configRef: { current: createConfig() },
       runtime: {
@@ -202,7 +203,7 @@ describe('createAssistantDashboardCallbacks', () => {
         getState: vi.fn(() => ({ summary: { total: 0, running: 0, succeeded: 0, failed: 0 }, jobs: [] })),
       } as never,
       runTimeline: {
-        listRuns: vi.fn(() => [runTimelineEntry]),
+        listRuns,
         getRun: vi.fn((runId: string) => (runId === 'run-1' ? runTimelineEntry : null)),
       } as never,
       refreshRunTimelineSnapshots,
@@ -229,8 +230,37 @@ describe('createAssistantDashboardCallbacks', () => {
       }],
     });
 
-    expect(callbacks.onAssistantRuns?.({ limit: 10 })).toEqual({
+    expect(callbacks.onAssistantRuns?.({
+      limit: 10,
+      kind: 'delegated_task',
+      executionId: 'exec-1',
+      parentExecutionId: 'exec-parent',
+      rootExecutionId: 'exec-root',
+      taskExecutionId: 'task-1',
+      graphEventKind: 'tool_call_completed',
+      graphNodeKind: 'explore_readonly',
+      graphProducer: 'brokered_worker',
+      toolName: 'fs_search',
+      runClass: 'long_running',
+      reportingMode: 'held_for_approval',
+      unresolvedBlockerKind: 'approval',
+    })).toEqual({
       runs: [runTimelineEntry],
+    });
+    expect(listRuns).toHaveBeenCalledWith({
+      limit: 10,
+      kind: 'delegated_task',
+      executionId: 'exec-1',
+      parentExecutionId: 'exec-parent',
+      rootExecutionId: 'exec-root',
+      taskExecutionId: 'task-1',
+      graphEventKind: 'tool_call_completed',
+      graphNodeKind: 'explore_readonly',
+      graphProducer: 'brokered_worker',
+      toolName: 'fs_search',
+      runClass: 'long_running',
+      reportingMode: 'held_for_approval',
+      unresolvedBlockerKind: 'approval',
     });
     expect(callbacks.onAssistantRunDetail?.('run-1')).toEqual(runTimelineEntry);
     expect(callbacks.onAssistantJobFollowUpAction?.({

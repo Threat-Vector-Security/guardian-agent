@@ -38,6 +38,9 @@ const systemUiState = {
     graphNodeKind: '',
     graphProducer: '',
     toolName: '',
+    runClass: '',
+    reportingMode: '',
+    unresolvedBlockerKind: '',
     agentId: '',
     channel: '',
     codeSessionId: '',
@@ -96,6 +99,9 @@ function buildRuntimeTimelineQueryParams(limit = 8) {
   const graphNodeKind = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.graphNodeKind);
   const graphProducer = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.graphProducer);
   const toolName = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.toolName);
+  const runClass = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.runClass);
+  const reportingMode = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.reportingMode);
+  const unresolvedBlockerKind = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.unresolvedBlockerKind);
   const agentId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.agentId);
   const channel = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.channel);
   const codeSessionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.codeSessionId);
@@ -112,6 +118,9 @@ function buildRuntimeTimelineQueryParams(limit = 8) {
     ...(graphNodeKind ? { graphNodeKind } : {}),
     ...(graphProducer ? { graphProducer } : {}),
     ...(toolName ? { toolName } : {}),
+    ...(runClass ? { runClass } : {}),
+    ...(reportingMode ? { reportingMode } : {}),
+    ...(unresolvedBlockerKind ? { unresolvedBlockerKind } : {}),
     ...(agentId ? { agentId } : {}),
     ...(channel ? { channel } : {}),
     ...(codeSessionId ? { codeSessionId } : {}),
@@ -976,6 +985,9 @@ function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRun
   const graphNodeKind = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.graphNodeKind);
   const graphProducer = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.graphProducer);
   const toolName = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.toolName);
+  const runClass = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.runClass);
+  const reportingMode = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.reportingMode);
+  const unresolvedBlockerKind = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.unresolvedBlockerKind);
   const agentId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.agentId);
   const channel = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.channel);
   const codeSessionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.codeSessionId);
@@ -1046,6 +1058,18 @@ function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRun
       <div class="cfg-field" style="flex:1 1 14rem;min-width:12rem;margin:0">
         <label for="system-runtime-tool-name">Tool</label>
         <input id="system-runtime-tool-name" type="text" placeholder="tool name" value="${escAttr(toolName)}">
+      </div>
+      <div class="cfg-field" style="flex:0 1 12rem;min-width:10rem;margin:0">
+        <label for="system-runtime-run-class">Run Class</label>
+        <input id="system-runtime-run-class" type="text" placeholder="long_running" value="${escAttr(runClass)}">
+      </div>
+      <div class="cfg-field" style="flex:0 1 13rem;min-width:11rem;margin:0">
+        <label for="system-runtime-reporting-mode">Reporting</label>
+        <input id="system-runtime-reporting-mode" type="text" placeholder="held_for_approval" value="${escAttr(reportingMode)}">
+      </div>
+      <div class="cfg-field" style="flex:0 1 12rem;min-width:10rem;margin:0">
+        <label for="system-runtime-blocker-kind">Blocker</label>
+        <input id="system-runtime-blocker-kind" type="text" placeholder="approval" value="${escAttr(unresolvedBlockerKind)}">
       </div>
       <div class="cfg-field" style="flex:1 1 12rem;min-width:10rem;margin:0">
         <label for="system-runtime-agent-id">Agent</label>
@@ -1790,6 +1814,9 @@ function bindSystemEvents(container) {
       graphNodeKind: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-graph-node-kind')?.value),
       graphProducer: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-graph-producer')?.value),
       toolName: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-tool-name')?.value),
+      runClass: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-run-class')?.value),
+      reportingMode: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-reporting-mode')?.value),
+      unresolvedBlockerKind: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-blocker-kind')?.value),
       agentId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-agent-id')?.value),
       channel: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-channel')?.value),
       codeSessionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-code-session-id')?.value),
@@ -1810,6 +1837,9 @@ function bindSystemEvents(container) {
       graphNodeKind: '',
       graphProducer: '',
       toolName: '',
+      runClass: '',
+      reportingMode: '',
+      unresolvedBlockerKind: '',
       agentId: '',
       channel: '',
       codeSessionId: '',
@@ -1825,6 +1855,9 @@ function bindSystemEvents(container) {
     const graphNodeInput = container.querySelector('#system-runtime-graph-node-kind');
     const graphProducerInput = container.querySelector('#system-runtime-graph-producer');
     const toolNameInput = container.querySelector('#system-runtime-tool-name');
+    const runClassInput = container.querySelector('#system-runtime-run-class');
+    const reportingModeInput = container.querySelector('#system-runtime-reporting-mode');
+    const blockerKindInput = container.querySelector('#system-runtime-blocker-kind');
     const agentInput = container.querySelector('#system-runtime-agent-id');
     const channelInput = container.querySelector('#system-runtime-channel');
     const codeSessionInput = container.querySelector('#system-runtime-code-session-id');
@@ -1839,6 +1872,9 @@ function bindSystemEvents(container) {
     if (graphNodeInput) graphNodeInput.value = '';
     if (graphProducerInput) graphProducerInput.value = '';
     if (toolNameInput) toolNameInput.value = '';
+    if (runClassInput) runClassInput.value = '';
+    if (reportingModeInput) reportingModeInput.value = '';
+    if (blockerKindInput) blockerKindInput.value = '';
     if (agentInput) agentInput.value = '';
     if (channelInput) channelInput.value = '';
     if (codeSessionInput) codeSessionInput.value = '';

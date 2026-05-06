@@ -1483,6 +1483,9 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     const graphNodeKind = trimOptionalString(url.searchParams.get('graphNodeKind'));
     const graphProducer = trimOptionalString(url.searchParams.get('graphProducer'));
     const toolName = trimOptionalString(url.searchParams.get('toolName'));
+    const runClass = trimOptionalString(url.searchParams.get('runClass'));
+    const reportingMode = trimOptionalString(url.searchParams.get('reportingMode'));
+    const unresolvedBlockerKind = trimOptionalString(url.searchParams.get('unresolvedBlockerKind'));
     const channel = trimOptionalString(url.searchParams.get('channel'));
     const agentId = trimOptionalString(url.searchParams.get('agentId'));
     const codeSessionId = trimOptionalString(url.searchParams.get('codeSessionId'));
@@ -1501,6 +1504,9 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       ...(graphNodeKind ? { graphNodeKind } : {}),
       ...(graphProducer ? { graphProducer } : {}),
       ...(toolName ? { toolName } : {}),
+      ...(runClass ? { runClass } : {}),
+      ...(reportingMode ? { reportingMode } : {}),
+      ...(unresolvedBlockerKind ? { unresolvedBlockerKind } : {}),
       ...(channel ? { channel } : {}),
       ...(agentId ? { agentId } : {}),
       ...(codeSessionId ? { codeSessionId } : {}),
