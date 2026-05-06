@@ -2341,6 +2341,7 @@ export class WorkerManager {
       },
     });
     this.publishDelegatedFollowUpTimeline(job, delegated, handoff, operatorState, options.operatorAction);
+    this.recordDelegatedFollowUpTrace(job, delegated, handoff, operatorState, options.operatorAction);
     return {
       success: true,
       message: options.successMessage,
@@ -2382,6 +2383,41 @@ export class WorkerManager {
       ...(delegated.activeExecutionRefs?.length ? { activeExecutionRefs: [...delegated.activeExecutionRefs] } : {}),
       detail: describeDelegatedFollowUpTimelineDetail(operatorState),
       timestamp: this.observability.now?.() ?? Date.now(),
+    });
+  }
+
+  private recordDelegatedFollowUpTrace(
+    job: { id: string; metadata?: Record<string, unknown> },
+    delegated: NonNullable<ReturnType<typeof readDelegatedWorkerMetadata>>,
+    handoff: DelegatedWorkerHandoff,
+    operatorState: DelegatedWorkerOperatorFollowUpState,
+    operatorAction: DelegatedWorkerOperatorAction,
+  ): void {
+    const requestId = delegated.requestId ?? delegated.executionId ?? job.id;
+    this.observability.intentRoutingTrace?.record({
+      stage: 'delegated_worker_followup_action',
+      requestId,
+      ...(delegated.requestId ? { messageId: delegated.requestId } : {}),
+      ...(delegated.originChannel ? { channel: delegated.originChannel } : {}),
+      agentId: delegated.agentId ?? readDelegatedAgentId(job.metadata) ?? 'unknown',
+      contentPreview: describeDelegatedFollowUpTimelineDetail(operatorState),
+      details: {
+        jobId: job.id,
+        taskRunId: buildDelegatedTaskRunId(job.id),
+        ...(delegated.lifecycle ? { lifecycle: delegated.lifecycle } : {}),
+        ...(delegated.executionId ? { executionId: delegated.executionId } : {}),
+        ...(delegated.parentExecutionId ? { parentExecutionId: delegated.parentExecutionId } : {}),
+        ...(delegated.rootExecutionId ? { rootExecutionId: delegated.rootExecutionId } : {}),
+        ...(delegated.originSurfaceId ? { originSurfaceId: delegated.originSurfaceId } : {}),
+        ...(delegated.continuityKey ? { continuityKey: delegated.continuityKey } : {}),
+        ...(delegated.activeExecutionRefs?.length ? { activeExecutionRefs: [...delegated.activeExecutionRefs] } : {}),
+        ...(delegated.pendingActionId ? { pendingActionId: delegated.pendingActionId } : {}),
+        ...(delegated.codeSessionId ? { codeSessionId: delegated.codeSessionId } : {}),
+        ...(delegated.runClass ? { runClass: delegated.runClass } : {}),
+        ...(handoff.reportingMode ? { reportingMode: handoff.reportingMode } : {}),
+        operatorAction,
+        operatorState,
+      },
     });
   }
 

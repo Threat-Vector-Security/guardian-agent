@@ -6246,6 +6246,7 @@ describe('WorkerManager', () => {
       ingestDelegatedExecutionEvents: vi.fn(),
       ingestExecutionGraphEvent: vi.fn(),
     };
+    const intentRoutingTrace = { record: vi.fn() };
 
     const manager = new WorkerManager(
       {
@@ -6268,6 +6269,7 @@ describe('WorkerManager', () => {
       } as never,
       undefined,
       {
+        intentRoutingTrace,
         runTimeline,
         now: () => 987_000,
       },
@@ -6371,6 +6373,29 @@ describe('WorkerManager', () => {
       detail: 'Operator replayed the held delegated result to the conversation.',
       timestamp: 987_000,
     }));
+    expect(intentRoutingTrace.record).toHaveBeenLastCalledWith(expect.objectContaining({
+      stage: 'delegated_worker_followup_action',
+      requestId: 'm-held-operator',
+      messageId: 'm-held-operator',
+      channel: 'web',
+      agentId: 'local',
+      contentPreview: 'Operator replayed the held delegated result to the conversation.',
+      details: expect.objectContaining({
+        jobId,
+        taskRunId: `delegated-task:${jobId}`,
+        lifecycle: 'completed',
+        executionId: 'exec-held-operator',
+        rootExecutionId: 'root-held-operator',
+        originSurfaceId: 'web-guardian-chat',
+        continuityKey: 'continuity-held-operator',
+        activeExecutionRefs: ['code_session:Guardian Agent', 'delegated:repo-digest'],
+        codeSessionId: 'code-held-operator',
+        runClass: 'long_running',
+        reportingMode: 'held_for_operator',
+        operatorAction: 'replay',
+        operatorState: 'replayed',
+      }),
+    }));
 
     const afterReplay = manager.getJobState(5);
     expect(afterReplay.jobs[0]?.metadata).toMatchObject({
@@ -6400,6 +6425,15 @@ describe('WorkerManager', () => {
       continuityKey: 'continuity-held-operator',
       activeExecutionRefs: ['code_session:Guardian Agent', 'delegated:repo-digest'],
       detail: 'Operator dismissed the held delegated result.',
+    }));
+    expect(intentRoutingTrace.record).toHaveBeenLastCalledWith(expect.objectContaining({
+      stage: 'delegated_worker_followup_action',
+      requestId: 'm-held-operator',
+      details: expect.objectContaining({
+        jobId,
+        operatorAction: 'dismiss',
+        operatorState: 'dismissed',
+      }),
     }));
 
     const replayAfterDismiss = manager.applyJobFollowUpAction(jobId!, 'replay');

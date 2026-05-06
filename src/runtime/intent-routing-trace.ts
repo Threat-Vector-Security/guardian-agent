@@ -84,6 +84,7 @@ export type IntentRoutingTraceStage =
   | 'delegated_worker_completed'
   | 'delegated_worker_failed'
   | 'delegated_worker_contract_reconciled'
+  | 'delegated_worker_followup_action'
   | 'delegated_job_wait_expired'
   | 'delegated_tool_call_started'
   | 'delegated_tool_call_completed'
