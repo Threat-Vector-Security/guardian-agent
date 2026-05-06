@@ -336,6 +336,15 @@ describe('RunTimelineStore', () => {
       title: 'Running assistant',
       detail: 'Dispatching through coder.',
     }));
+    expect(run?.liveSummary.items).toContainEqual({
+      title: 'Preparing context',
+      detail: 'Reading the request and channel context.',
+    });
+    expect(run?.liveSummary.label).toBe('Working with selected agent');
+    expect(run?.liveSummary.items).toContainEqual({
+      title: 'Working with selected agent',
+      detail: 'Dispatching through coder.',
+    });
   });
 
   it('renders provider-call trace nodes with bounded usage detail', () => {
@@ -427,6 +436,10 @@ describe('RunTimelineStore', () => {
     expect(contextItem?.contextAssembly?.selectedMemoryEntries?.[0]?.scope).toBe('coding_session');
     expect(contextItem?.contextAssembly?.selectedMemoryEntries?.[0]?.category).toBe('Project Notes');
     expect(contextItem?.contextAssembly?.selectedMemoryEntries?.[0]?.matchReasons).toEqual(['query summary', 'summary terms 4']);
+    expect(run?.liveSummary.items).toContainEqual({
+      title: 'Gathering relevant context',
+      detail: 'Loaded knowledge, coding memory, 2 memory entries, active work.',
+    });
   });
 
   it('redacts sensitive strings from run timeline previews and context assembly details', () => {

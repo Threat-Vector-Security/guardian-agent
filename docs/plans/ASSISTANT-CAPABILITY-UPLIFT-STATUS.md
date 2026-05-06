@@ -80,6 +80,7 @@ Recommended reading order:
 - Coding Workspace deep links with inspection-safe `VIEWING` mode instead of silently retargeting Guardian chat
 - Code workbench activity deep links now support exact event targeting with bounded nearby context, not just run-level focusing
 - Dashboard `Agent Runtime` and CLI `/assistant jobs` now show merged assistant and delegated-worker job state with bounded origin, outcome, and follow-up summaries
+- shared live run summaries now convert low-level timeline events into safe user-facing progress labels for web chat, CLI progress lines, and concise Telegram updates
 
 ### Documentation alignment
 

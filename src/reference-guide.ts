@@ -1307,6 +1307,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'System gives the cross-surface runtime and owner-page status overview, while CLI `/analytics [minutes]` remains available for analytics summaries.',
                   'Assistant state shows recent jobs, failures, and what Guardian has been doing recently.',
+                  'During longer chat, coding, tool, or delegated runs, the web chat shows live progress cards, CLI prints `[progress]` updates, and Telegram sends a few concise progress messages rather than a full running log.',
                   'Security monitoring shows alerts, Assistant Security findings, and recent security activity.',
                 ],
               },

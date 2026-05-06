@@ -960,36 +960,36 @@ function buildRunLiveSummary(
   status: DashboardRunStatus,
   items: DashboardRunTimelineItem[],
 ): DashboardRunLiveSummary {
-  const recentItems: DashboardRunLiveSummaryItem[] = [];
+  const recentItems: Array<{
+    source: DashboardRunTimelineItem;
+    display: DashboardRunLiveSummaryItem;
+  }> = [];
   const seenKeys = new Set<string>();
   for (let index = items.length - 1; index >= 0 && recentItems.length < 8; index -= 1) {
     const item = items[index];
     if (!isMeaningfulLiveSummaryItem(item)) continue;
-    const title = nonEmptyText(item.title);
+    const display = buildLiveSummaryDisplayItem(item);
+    if (!display) continue;
+    const title = nonEmptyText(display.title);
     if (!title) continue;
-    const detail = nonEmptyText(item.detail);
+    const detail = nonEmptyText(display.detail);
     const key = `${title}\n${detail ?? ''}`;
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
     recentItems.unshift({
-      title,
-      ...(detail ? { detail } : {}),
+      source: item,
+      display,
     });
   }
 
   const meaningfulSourceItems = items.filter(isMeaningfulLiveSummaryItem);
   const hasHighSignalItems = meaningfulSourceItems.some((item) => !isLowSignalLiveSummaryItem(item));
   const filteredItems = hasHighSignalItems
-    ? recentItems.filter((item) => {
-        const sourceItem = meaningfulSourceItems.find((candidate) => (
-          nonEmptyText(candidate.title) === item.title
-          && nonEmptyText(candidate.detail) === nonEmptyText(item.detail)
-        ));
-        return sourceItem ? !isLowSignalLiveSummaryItem(sourceItem) : true;
-      })
+    ? recentItems.filter((item) => !isLowSignalLiveSummaryItem(item.source))
     : recentItems;
 
-  const normalizedItems = filteredItems.length > 0 ? filteredItems : recentItems;
+  const normalizedItems = (filteredItems.length > 0 ? filteredItems : recentItems)
+    .map((item) => item.display);
   const terminalStatus = status === 'completed'
     || status === 'failed'
     || status === 'blocked'
@@ -1021,6 +1021,109 @@ function buildRunLiveSummary(
     label: normalizedItems[normalizedItems.length - 1]?.title ?? humanizeLiveSummaryStatus(status),
     items: normalizedItems.slice(-6),
   };
+}
+
+function buildLiveSummaryDisplayItem(
+  item: DashboardRunTimelineItem,
+): DashboardRunLiveSummaryItem | null {
+  const title = nonEmptyText(item.title);
+  if (!title) return null;
+  const detail = nonEmptyText(item.detail);
+  const normalizedTitle = title.toLowerCase();
+
+  if (normalizedTitle === 'preparing request') {
+    return {
+      title: 'Preparing context',
+      detail: 'Reading the request and channel context.',
+    };
+  }
+
+  if (normalizedTitle === 'assembled context') {
+    const contextDetail = buildLiveContextAssemblyDetail(item.contextAssembly, detail);
+    return {
+      title: 'Gathering relevant context',
+      ...(contextDetail ? { detail: contextDetail } : {}),
+    };
+  }
+
+  if (normalizedTitle === 'running assistant') {
+    return {
+      title: 'Working with selected agent',
+      detail: detail ?? 'Dispatching through the shared runtime.',
+    };
+  }
+
+  if (normalizedTitle.startsWith('model response')) {
+    return {
+      title: item.status === 'running' ? 'Waiting for model response' : 'Model response received',
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  const toolName = nonEmptyText(item.toolName);
+  if (item.type === 'tool_call_started' && toolName) {
+    return {
+      title: `Using ${humanizeToolName(toolName)}`,
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  if (item.type === 'tool_call_completed' && toolName) {
+    const outcome = item.status === 'failed'
+      ? 'failed'
+      : item.status === 'blocked'
+        ? 'blocked'
+        : 'completed';
+    return {
+      title: `${humanizeToolName(toolName)} ${outcome}`,
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  if (item.type === 'approval_requested') {
+    return {
+      title: 'Waiting for approval',
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  if (item.type === 'verification_pending') {
+    return {
+      title: 'Verification pending',
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  if (item.type === 'verification_completed') {
+    return {
+      title,
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  return {
+    title,
+    ...(detail ? { detail } : {}),
+  };
+}
+
+function buildLiveContextAssemblyDetail(
+  contextAssembly: DashboardRunTimelineContextAssembly | undefined,
+  fallbackDetail: string | undefined,
+): string | undefined {
+  const parts: string[] = [];
+  if (contextAssembly?.knowledgeBaseLoaded) parts.push('knowledge');
+  if (contextAssembly?.codingMemoryLoaded) parts.push('coding memory');
+  if ((contextAssembly?.selectedMemoryEntryCount ?? 0) > 0) {
+    parts.push(`${contextAssembly?.selectedMemoryEntryCount} memory ${contextAssembly?.selectedMemoryEntryCount === 1 ? 'entry' : 'entries'}`);
+  }
+  if ((contextAssembly?.activeExecutionRefs?.length ?? 0) > 0) {
+    parts.push('active work');
+  }
+  if (parts.length > 0) {
+    return `Loaded ${parts.join(', ')}.`;
+  }
+  return fallbackDetail;
 }
 
 function shouldUseCodeSessionBaseStatus(record: RunTimelineRecord | undefined): boolean {
