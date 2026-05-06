@@ -83,7 +83,8 @@ Recommended reading order:
 - shared live run summaries now convert low-level timeline events into safe user-facing progress labels for web chat, CLI progress lines, and concise Telegram updates
 - CLI `/assistant jobs` now supports operator filters for held, approval, delegated, status, reporting-mode, and run-class views so held delegated work is easier to isolate
 - Dashboard `Agent Runtime` now has matching job filters for held, approval, delegated, status, reporting-mode, and run-class job views
-- Dashboard `Runtime Execution` can filter run timelines by status in addition to continuity key and active execution reference
+- Dashboard `Runtime Execution` can filter run timelines by status, parent run, agent, channel, and code session in addition to continuity key and active execution reference
+- Dashboard `Runtime Execution` rows include parent/child drill-down actions for delegated and execution-graph troubleshooting
 
 ### Documentation alignment
 
@@ -120,7 +121,7 @@ Why this is next:
 
 - final continuity polish around any remaining surface drift or noisy resume cases
 - broader producer adoption for delegated run classes beyond the current brokered worker metadata path
-- deeper timeline query affordances such as richer execution-graph and child-run drill-down filters
+- richer execution-graph inspection beyond the current parent/child and context filters
 
 ### Medium-term
 

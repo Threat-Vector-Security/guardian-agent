@@ -5473,7 +5473,7 @@ describe('WebChannel', () => {
       expect(JSON.stringify(body)).not.toContain('routing-secret-token-123456');
     });
 
-    it('GET /api/assistant/runs should forward continuity and execution-ref filters', async () => {
+    it('GET /api/assistant/runs should forward runtime timeline filters', async () => {
       let receivedArgs: Record<string, unknown> | null = null;
       const now = Date.now();
       web = new WebChannel({
@@ -5519,7 +5519,7 @@ describe('WebChannel', () => {
       await web.start(async () => ({ content: 'ok' }));
 
       const res = await fetch(
-        'http://localhost:18979/api/assistant/runs?limit=5&continuityKey=continuity-1&activeExecutionRef=code_session%3ARepo%20Fix',
+        'http://localhost:18979/api/assistant/runs?limit=5&kind=delegated_task&status=running&parentRunId=parent-1&channel=web&agentId=agent-1&codeSessionId=code-1&continuityKey=continuity-1&activeExecutionRef=code_session%3ARepo%20Fix',
         { headers: authHeaders },
       );
 
@@ -5536,6 +5536,12 @@ describe('WebChannel', () => {
       expect(JSON.stringify(body)).not.toContain('slack-token-fixture-runsecret');
       expect(receivedArgs).toEqual({
         limit: 5,
+        status: 'running',
+        kind: 'delegated_task',
+        parentRunId: 'parent-1',
+        channel: 'web',
+        agentId: 'agent-1',
+        codeSessionId: 'code-1',
         continuityKey: 'continuity-1',
         activeExecutionRef: 'code_session:Repo Fix',
       });

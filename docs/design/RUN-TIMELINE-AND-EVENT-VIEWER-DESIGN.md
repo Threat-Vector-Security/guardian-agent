@@ -15,7 +15,7 @@ The goal is operator visibility, not a new execution engine. Guardian already ha
 Current as-built deltas:
 - the timeline projection is implemented as `src/runtime/run-timeline.ts`
 - the System page exposes a compact Routing Trace inspector alongside the execution timeline
-- run and routing views support `continuityKey` and `activeExecutionRef` filters
+- run and routing views support `continuityKey` and `activeExecutionRef` filters; the System runtime timeline also exposes status, parent-run, agent, channel, and code-session filters
 - routing-trace rows can deep-link to the matched run, a best-fit timeline event, and the related coding session
 - routing-trace rows now prefer delegated child task runs via `taskRunId` when the trace belongs to brokered worker activity
 - run summaries and delegated child task runs now carry `executionId`, `parentExecutionId`, and `rootExecutionId` when that lineage is available

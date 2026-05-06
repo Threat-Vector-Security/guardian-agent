@@ -30,6 +30,10 @@ const systemUiState = {
     continuityKey: '',
     activeExecutionRef: '',
     status: '',
+    parentRunId: '',
+    agentId: '',
+    channel: '',
+    codeSessionId: '',
   },
   assistantJobFilter: 'all',
   assistantJobFollowUpResult: null,
@@ -77,11 +81,19 @@ function buildRuntimeTimelineQueryParams(limit = 8) {
   const continuityKey = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.continuityKey);
   const activeExecutionRef = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.activeExecutionRef);
   const status = normalizeRuntimeTimelineStatusFilter(systemUiState.runtimeTimelineFilters?.status);
+  const parentRunId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.parentRunId);
+  const agentId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.agentId);
+  const channel = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.channel);
+  const codeSessionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.codeSessionId);
   return {
     limit,
     ...(continuityKey ? { continuityKey } : {}),
     ...(activeExecutionRef ? { activeExecutionRef } : {}),
     ...(status ? { status } : {}),
+    ...(parentRunId ? { parentRunId } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(channel ? { channel } : {}),
+    ...(codeSessionId ? { codeSessionId } : {}),
   };
 }
 
@@ -935,6 +947,10 @@ function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRun
   const continuityKey = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.continuityKey);
   const activeExecutionRef = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.activeExecutionRef);
   const status = normalizeRuntimeTimelineStatusFilter(systemUiState.runtimeTimelineFilters?.status);
+  const parentRunId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.parentRunId);
+  const agentId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.agentId);
+  const channel = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.channel);
+  const codeSessionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.codeSessionId);
   const graphSummary = summarizeExecutionGraphRuns([
     ...assistantDispatchRuns,
     ...delegatedTaskRuns,
@@ -971,6 +987,22 @@ function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRun
           ${renderRuntimeTimelineStatusFilterOptions(status)}
         </select>
       </div>
+      <div class="cfg-field" style="flex:1 1 14rem;min-width:12rem;margin:0">
+        <label for="system-runtime-parent-run-id">Parent Run</label>
+        <input id="system-runtime-parent-run-id" type="text" placeholder="assistant-run-id" value="${escAttr(parentRunId)}">
+      </div>
+      <div class="cfg-field" style="flex:1 1 12rem;min-width:10rem;margin:0">
+        <label for="system-runtime-agent-id">Agent</label>
+        <input id="system-runtime-agent-id" type="text" placeholder="agent id" value="${escAttr(agentId)}">
+      </div>
+      <div class="cfg-field" style="flex:0 1 10rem;min-width:9rem;margin:0">
+        <label for="system-runtime-channel">Channel</label>
+        <input id="system-runtime-channel" type="text" placeholder="web" value="${escAttr(channel)}">
+      </div>
+      <div class="cfg-field" style="flex:1 1 14rem;min-width:12rem;margin:0">
+        <label for="system-runtime-code-session-id">Code Session</label>
+        <input id="system-runtime-code-session-id" type="text" placeholder="session id" value="${escAttr(codeSessionId)}">
+      </div>
       <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm" type="submit">Apply</button>
         <button class="btn btn-secondary btn-sm" type="button" id="system-runtime-execution-filter-clear">Clear</button>
@@ -1000,7 +1032,7 @@ function renderRuntimeExecutionTable(title, kind, runs, emptyMessage) {
         <h4 style="margin:0">${esc(title)}</h4>
       </div>
       <table>
-        <thead><tr><th>Time</th><th>Run</th><th>Status</th><th>Owner</th><th>Timeline</th></tr></thead>
+        <thead><tr><th>Time</th><th>Run</th><th>Status</th><th>Owner</th><th>Timeline</th><th>Actions</th></tr></thead>
         <tbody>
           ${renderRuntimeExecutionRows(kind, runs, emptyMessage)}
         </tbody>
@@ -1011,7 +1043,7 @@ function renderRuntimeExecutionTable(title, kind, runs, emptyMessage) {
 
 function renderRuntimeExecutionRows(kind, runs, emptyMessage) {
   if (!Array.isArray(runs) || runs.length === 0) {
-    return `<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">${esc(emptyMessage)}</td></tr>`;
+    return `<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">${esc(emptyMessage)}</td></tr>`;
   }
 
   const requestedRunId = getRequestedAssistantRunId();
@@ -1034,9 +1066,32 @@ function renderRuntimeExecutionRows(kind, runs, emptyMessage) {
         </td>
         <td>${esc(formatRuntimeExecutionOwner(kind, summary))}</td>
         <td>${renderRuntimeExecutionTimelineItems(items, summary.runId || '')}</td>
+        <td>${renderRuntimeExecutionRunActions(summary)}</td>
       </tr>
     `;
   }).join('');
+}
+
+function renderRuntimeExecutionRunActions(summary) {
+  const runId = typeof summary?.runId === 'string' ? summary.runId.trim() : '';
+  const parentRunId = typeof summary?.parentRunId === 'string' ? summary.parentRunId.trim() : '';
+  const actions = [];
+  if (runId) {
+    actions.push(`
+      <button class="btn btn-secondary btn-sm" type="button" data-system-runtime-parent-filter="${escAttr(runId)}">
+        Children
+      </button>
+    `);
+  }
+  if (parentRunId) {
+    actions.push(`
+      <button class="btn btn-secondary btn-sm" type="button" data-system-runtime-run-filter="${escAttr(parentRunId)}">
+        Parent
+      </button>
+    `);
+  }
+  if (actions.length === 0) return '<span class="ops-task-sub">-</span>';
+  return `<div style="display:flex;flex-wrap:wrap;gap:0.35rem">${actions.join('')}</div>`;
 }
 
 function formatRuntimeExecutionSubtitle(kind, summary) {
@@ -1640,6 +1695,10 @@ function bindSystemEvents(container) {
       continuityKey: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-continuity-key')?.value),
       activeExecutionRef: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-active-exec-ref')?.value),
       status: normalizeRuntimeTimelineStatusFilter(container.querySelector('#system-runtime-status')?.value),
+      parentRunId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-parent-run-id')?.value),
+      agentId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-agent-id')?.value),
+      channel: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-channel')?.value),
+      codeSessionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-code-session-id')?.value),
     };
     void renderSystemPreserveScroll(container);
   });
@@ -1649,14 +1708,50 @@ function bindSystemEvents(container) {
       continuityKey: '',
       activeExecutionRef: '',
       status: '',
+      parentRunId: '',
+      agentId: '',
+      channel: '',
+      codeSessionId: '',
     };
     const continuityInput = container.querySelector('#system-runtime-continuity-key');
     const activeExecutionInput = container.querySelector('#system-runtime-active-exec-ref');
     const statusInput = container.querySelector('#system-runtime-status');
+    const parentRunInput = container.querySelector('#system-runtime-parent-run-id');
+    const agentInput = container.querySelector('#system-runtime-agent-id');
+    const channelInput = container.querySelector('#system-runtime-channel');
+    const codeSessionInput = container.querySelector('#system-runtime-code-session-id');
     if (continuityInput) continuityInput.value = '';
     if (activeExecutionInput) activeExecutionInput.value = '';
     if (statusInput) statusInput.value = '';
+    if (parentRunInput) parentRunInput.value = '';
+    if (agentInput) agentInput.value = '';
+    if (channelInput) channelInput.value = '';
+    if (codeSessionInput) codeSessionInput.value = '';
     void renderSystemPreserveScroll(container);
+  });
+
+  container.querySelectorAll('[data-system-runtime-parent-filter]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const parentRunId = normalizeRoutingTraceFilterValue(button.getAttribute('data-system-runtime-parent-filter'));
+      if (!parentRunId) return;
+      systemUiState.runtimeTimelineFilters = {
+        ...(systemUiState.runtimeTimelineFilters || {}),
+        parentRunId,
+      };
+      void renderSystemPreserveScroll(container);
+    });
+  });
+
+  container.querySelectorAll('[data-system-runtime-run-filter]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const runId = normalizeRoutingTraceFilterValue(button.getAttribute('data-system-runtime-run-filter'));
+      if (!runId) return;
+      systemUiState.runtimeTimelineFilters = {
+        ...(systemUiState.runtimeTimelineFilters || {}),
+        parentRunId: '',
+      };
+      window.location.hash = `#/system?assistantRunId=${encodeURIComponent(runId)}`;
+    });
   });
 
   const routingTraceForm = container.querySelector('#system-routing-trace-filter-form');
