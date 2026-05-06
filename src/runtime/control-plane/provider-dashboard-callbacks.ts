@@ -71,7 +71,13 @@ export function createProviderDashboardCallbacks(
         throw new Error('Provide an API key or credential ref to load models for this provider.');
       }
 
-      const models = await providerRegistry.createProvider(providerConfig).listModels();
+      let models: ModelInfo[] = [];
+      let modelDiscoveryError: string | undefined;
+      try {
+        models = await providerRegistry.createProvider(providerConfig).listModels();
+      } catch (err) {
+        modelDiscoveryError = err instanceof Error ? err.message : String(err);
+      }
       const modelIds = models.map((model) => model.id);
       const activeModel = providerConfig.model;
       const capabilities = inferModelCapabilities({
@@ -92,6 +98,7 @@ export function createProviderDashboardCallbacks(
             }),
           ]),
         ),
+        ...(modelDiscoveryError ? { modelDiscoveryError } : {}),
       };
     },
   };

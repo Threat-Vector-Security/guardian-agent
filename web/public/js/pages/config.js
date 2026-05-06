@@ -1861,7 +1861,9 @@ function createProviderPanel(config, providers, panel) {
           updateModelSelector([], currentModel);
           modelInputEl.value = currentModel;
           applyModelCapabilities(result?.capabilities || null, providerType);
-          activeNoteEl.textContent = `${providerDisplayName} did not return any models. You can still enter a model ID manually.`;
+          activeNoteEl.textContent = result?.modelDiscoveryError
+            ? `Could not load ${providerDisplayName} models yet: ${result.modelDiscoveryError}. Using safe capability defaults for the selected model.`
+            : `${providerDisplayName} did not return any models. You can still enter a model ID manually.`;
         }
       } catch (err) {
         if (requestId !== liveModelsRequestId) return;

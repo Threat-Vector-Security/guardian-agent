@@ -303,4 +303,57 @@ describe('createProviderDashboardCallbacks', () => {
       'Provide an API key or credential ref to load models for this provider.',
     );
   });
+
+  it('returns safe capability defaults when live model discovery fails after credentials resolve', async () => {
+    const callbacks = createProviderDashboardCallbacks({
+      getProviderInfoSnapshot: () => [],
+      buildProviderInfo: async () => [],
+      resolveCredentialForProviderInput: () => 'resolved-secret',
+      getDefaultModelForProviderType: () => 'gpt-5.1',
+      getDefaultBaseUrlForProviderType: () => undefined,
+      providerRegistry: {
+        listProviderTypes: () => [
+          {
+            name: 'openai',
+            displayName: 'OpenAI',
+            compatible: false,
+            locality: 'external',
+            tier: 'frontier',
+            requiresCredential: true,
+          },
+        ],
+        hasProvider: (name: string) => name === 'openai',
+        createProvider: () => ({
+          listModels: async () => {
+            throw new Error('provider timeout');
+          },
+        }),
+      },
+    });
+
+    await expect(callbacks.onProviderModels?.({
+      providerType: 'openai',
+      model: 'gpt-5.1',
+      credentialRef: 'llm.primary.local',
+    })).resolves.toMatchObject({
+      models: [],
+      modelDiscoveryError: 'provider timeout',
+      capabilities: {
+        providerType: 'openai',
+        model: 'gpt-5.1',
+        liveModelListed: false,
+        settings: {
+          reasoningEffort: {
+            supported: true,
+            source: 'model_heuristic',
+          },
+          verbosity: {
+            supported: true,
+            source: 'model_heuristic',
+          },
+        },
+      },
+      capabilitiesByModel: {},
+    });
+  });
 });

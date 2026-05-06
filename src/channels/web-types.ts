@@ -1348,6 +1348,7 @@ export interface DashboardCallbacks {
     models: string[];
     capabilities?: DashboardModelCapabilities;
     capabilitiesByModel?: Record<string, DashboardModelCapabilities>;
+    modelDiscoveryError?: string;
   }>;
   onCodingBackendStatus?: (sessionId?: string) => DashboardCodingBackendSession[];
   onAssistantState?: () => DashboardAssistantState;
