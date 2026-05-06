@@ -13,7 +13,7 @@ import { createLogger } from '../util/logging.js';
 import type { AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ThreatIntelSummary, ThreatIntelScanInput, ThreatIntelFinding, IntelStatus } from '../runtime/threat-intel.js';
 import { describePendingApproval } from '../runtime/pending-approval-copy.js';
-import { formatCompactResponseSourceLabel } from '../runtime/model-routing-ux.js';
+import { formatCompactResponseSourceLabel, formatResponseSourceNotice } from '../runtime/model-routing-ux.js';
 import type { DashboardRunDetail, DashboardRunStatus, DashboardRunTimelineItem } from '../runtime/run-timeline.js';
 
 const log = createLogger('channel:telegram');
@@ -710,7 +710,11 @@ export class TelegramChannel implements ChannelAdapter {
     const approvalKey = this.buildApprovalKey(ctx);
 
     const sourceLabel = formatCompactResponseSourceLabel(response.metadata);
-    const contentWithSource = sourceLabel ? `${sourceLabel} ${response.content}` : response.content;
+    const sourceNotice = formatResponseSourceNotice(response.metadata);
+    const sourcePrefix = sourceLabel ? `${sourceLabel} ` : '';
+    const contentWithSource = sourceNotice
+      ? `${sourcePrefix}${sourceNotice}\n${response.content}`
+      : (sourceLabel ? `${sourceLabel} ${response.content}` : response.content);
 
     if (!approvals.length || !this.onToolsApprovalDecision) {
       this.pendingApprovalsByChat.delete(approvalKey);

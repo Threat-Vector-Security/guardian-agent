@@ -347,6 +347,26 @@ describe('Telegram approval flow', () => {
     expect(replies[0]?.text).toBe('[external] Workflow created successfully.');
   });
 
+  it('includes compact source notices on normal Telegram replies', async () => {
+    const channel = new TelegramChannel({ botToken: '123:abc' });
+    const { ctx, replies } = createFakeCtx();
+
+    await (channel as unknown as {
+      replyWithApprovalSupport: (ctx: unknown, response: { content: string; metadata?: Record<string, unknown> }, agentId?: string) => Promise<void>;
+    }).replyWithApprovalSupport(ctx, {
+      content: 'Workflow created successfully.',
+      metadata: {
+        responseSource: {
+          locality: 'external',
+          providerTier: 'frontier',
+          notice: 'Auto selected the external lane for higher-context repo work.',
+        },
+      },
+    }, 'default');
+
+    expect(replies[0]?.text).toBe('[frontier] Auto selected the external lane for higher-context repo work.\nWorkflow created successfully.');
+  });
+
   it('dispatches Telegram chat turns with a stable surface id', async () => {
     const channel = new TelegramChannel({ botToken: '123:abc' });
     const { ctx } = createFakeCtx();
