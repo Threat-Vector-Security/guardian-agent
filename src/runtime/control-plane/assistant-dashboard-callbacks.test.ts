@@ -279,6 +279,18 @@ describe('createAssistantDashboardCallbacks', () => {
       channel: 'web',
       surfaceId: 'web-guardian-chat',
     });
+    applyJobFollowUpAction.mockClear();
+    expect(callbacks.onAssistantJobFollowUpAction?.({
+      jobId: 'job-1',
+      action: 'defer',
+      actorUserId: 'operator-1',
+      deferForMinutes: 30,
+    })).toEqual({ success: true, message: 'ok' });
+    expect(applyJobFollowUpAction).toHaveBeenCalledWith('job-1', 'defer', {
+      userId: 'operator-1',
+    }, {
+      deferForMinutes: 30,
+    });
     expect(refreshRunTimelineSnapshots).toHaveBeenCalledTimes(2);
   });
 

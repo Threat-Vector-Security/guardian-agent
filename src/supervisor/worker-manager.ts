@@ -339,6 +339,11 @@ type WorkerJobFollowUpActorContext = {
   surfaceId?: string;
 };
 
+interface WorkerJobFollowUpActionOptions {
+  deferUntil?: number;
+  deferForMinutes?: number;
+}
+
 export class WorkerManager {
   private readonly workers = new Map<string, WorkerProcess>();
   private readonly sessionToWorker = new Map<string, string>();
@@ -2156,6 +2161,7 @@ export class WorkerManager {
     jobId: string,
     action: DelegatedWorkerOperatorAction,
     actor?: WorkerJobFollowUpActorContext,
+    options?: WorkerJobFollowUpActionOptions,
   ): WorkerJobFollowUpActionResult {
     const job = this.delegatedJobTracker.getJob(jobId);
     if (!job) {
@@ -2170,11 +2176,17 @@ export class WorkerManager {
     }
 
     if (action === 'defer' || action === 'keep_held') {
+      const deferredUntil = normalizeDelegatedFollowUpDeferUntil(
+        options,
+        this.observability.now?.() ?? Date.now(),
+      );
       return this.updateDelegatedJobFollowUpState(job, delegated, 'deferred', {
         successMessage: `Deferred held delegated result for ${jobId}.`,
         auditActionType: 'delegated_worker_followup_deferred',
         operatorAction: action,
         ...(actor ? { actor } : {}),
+        handoffPatch: { deferredUntil },
+        ...(deferredUntil ? { details: { deferredUntil } } : {}),
       });
     }
     if (action === 'dismiss') {
@@ -2184,6 +2196,7 @@ export class WorkerManager {
         auditActionType: 'delegated_worker_followup_dismissed',
         operatorAction: action,
         ...(actor ? { actor } : {}),
+        handoffPatch: { deferredUntil: undefined },
       });
     }
 
@@ -2214,6 +2227,7 @@ export class WorkerManager {
       auditActionType: 'delegated_worker_followup_replayed',
       operatorAction: action,
       ...(actor ? { actor } : {}),
+      handoffPatch: { deferredUntil: undefined },
       details: {
         content: replayedContent,
         redacted: !scan.clean,
@@ -2310,13 +2324,15 @@ export class WorkerManager {
       auditActionType: string;
       operatorAction: DelegatedWorkerOperatorAction;
       actor?: WorkerJobFollowUpActorContext;
+      handoffPatch?: Record<string, unknown>;
       details?: Record<string, unknown>;
     },
   ): WorkerJobFollowUpActionResult {
-    const handoff = {
+    const handoff = stripUndefinedProperties({
       ...(delegated.handoff ?? { summary: 'Delegated worker completed.', reportingMode: 'held_for_operator' as const }),
       operatorState,
-    };
+      ...(options.handoffPatch ?? {}),
+    }) as unknown as DelegatedWorkerHandoff;
     this.delegatedJobTracker.update(job.id, {
       metadata: {
         delegation: {
@@ -2352,6 +2368,7 @@ export class WorkerManager {
         jobId: job.id,
         reportingMode: handoff.reportingMode,
         operatorState,
+        ...(handoff.deferredUntil ? { deferredUntil: handoff.deferredUntil } : {}),
         ...(options.actor?.principalId ? { actorPrincipalId: options.actor.principalId } : {}),
         ...(options.actor?.principalRole ? { actorPrincipalRole: options.actor.principalRole } : {}),
         ...(options.actor?.surfaceId ? { actorSurfaceId: options.actor.surfaceId } : {}),
@@ -2396,9 +2413,10 @@ export class WorkerManager {
       ...(handoff.reportingMode ? { reportingMode: handoff.reportingMode } : {}),
       operatorAction,
       operatorState,
+      ...(handoff.deferredUntil ? { deferredUntil: handoff.deferredUntil } : {}),
       ...(delegated.continuityKey ? { continuityKey: delegated.continuityKey } : {}),
       ...(delegated.activeExecutionRefs?.length ? { activeExecutionRefs: [...delegated.activeExecutionRefs] } : {}),
-      detail: describeDelegatedFollowUpTimelineDetail(operatorState),
+      detail: describeDelegatedFollowUpTimelineDetail(operatorState, handoff.deferredUntil),
       timestamp: this.observability.now?.() ?? Date.now(),
     });
   }
@@ -2419,7 +2437,7 @@ export class WorkerManager {
       ...(actor?.userId || actor?.principalId ? { userId: actor.userId ?? actor.principalId } : {}),
       ...(actor?.channel || delegated.originChannel ? { channel: actor?.channel ?? delegated.originChannel } : {}),
       agentId: delegated.agentId ?? readDelegatedAgentId(job.metadata) ?? 'unknown',
-      contentPreview: describeDelegatedFollowUpTimelineDetail(operatorState),
+      contentPreview: describeDelegatedFollowUpTimelineDetail(operatorState, handoff.deferredUntil),
       details: {
         jobId: job.id,
         taskRunId: buildDelegatedTaskRunId(job.id),
@@ -2436,6 +2454,7 @@ export class WorkerManager {
         ...(handoff.reportingMode ? { reportingMode: handoff.reportingMode } : {}),
         operatorAction,
         operatorState,
+        ...(handoff.deferredUntil ? { deferredUntil: handoff.deferredUntil } : {}),
         ...(actor?.principalId ? { actorPrincipalId: actor.principalId } : {}),
         ...(actor?.principalRole ? { actorPrincipalRole: actor.principalRole } : {}),
         ...(actor?.surfaceId ? { actorSurfaceId: actor.surfaceId } : {}),
@@ -3707,11 +3726,15 @@ function readDelegatedAgentId(metadata: Record<string, unknown> | undefined): st
 
 function describeDelegatedFollowUpTimelineDetail(
   operatorState: DelegatedWorkerOperatorFollowUpState,
+  deferredUntil?: number,
 ): string {
   switch (operatorState) {
     case 'replayed':
       return 'Operator replayed the held delegated result to the conversation.';
     case 'deferred':
+      if (Number.isFinite(deferredUntil) && Number(deferredUntil) > 0) {
+        return `Operator deferred the delegated result until ${new Date(Number(deferredUntil)).toISOString()}.`;
+      }
       return 'Operator deferred the delegated result for later review.';
     case 'kept_held':
       return 'Operator kept the delegated result held for later review.';
@@ -3721,6 +3744,30 @@ function describeDelegatedFollowUpTimelineDetail(
     default:
       return 'Operator updated the held delegated result.';
   }
+}
+
+function normalizeDelegatedFollowUpDeferUntil(
+  options: WorkerJobFollowUpActionOptions | undefined,
+  now: number,
+): number | undefined {
+  const minDelayMs = 60_000;
+  const maxDelayMs = 30 * 24 * 60 * 60_000;
+  const requestedUntil = typeof options?.deferUntil === 'number' && Number.isFinite(options.deferUntil)
+    ? Math.floor(options.deferUntil)
+    : undefined;
+  const requestedForMinutes = typeof options?.deferForMinutes === 'number' && Number.isFinite(options.deferForMinutes)
+    ? Math.floor(options.deferForMinutes)
+    : undefined;
+  const candidate = requestedUntil
+    ?? (requestedForMinutes && requestedForMinutes > 0 ? now + requestedForMinutes * 60_000 : undefined);
+  if (!candidate) return undefined;
+  const minUntil = now + minDelayMs;
+  const maxUntil = now + maxDelayMs;
+  return Math.min(maxUntil, Math.max(minUntil, candidate));
+}
+
+function stripUndefinedProperties<T extends Record<string, unknown>>(value: T): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
 }
 
 function resolveDelegatedTargetMetadata(

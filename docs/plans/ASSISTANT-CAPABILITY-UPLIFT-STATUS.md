@@ -41,7 +41,7 @@ Recommended reading order:
 | Memory system uplift | In progress | Retrieval/flush foundation and signal-aware ranking landed; broader recall quality still remains |
 | Context assembly uplift | In progress | Shared packer landed; further refinement remains |
 | Routing / trace observability | In progress | Strong operator visibility now exists, including Code workbench exact-event drill-down |
-| Background delegation uplift | In progress | Delegated lineage, bounded handoff summaries, follow-up policy, producer-owned run classes, replay controls, timeline projection, and operator job visibility landed; long-running flows still remain |
+| Background delegation uplift | In progress | Delegated lineage, bounded handoff summaries, follow-up policy, producer-owned run classes, replay/defer/dismiss controls, deferred-review metadata, timeline projection, and operator job visibility landed; long-running flows still remain |
 | Minimal embeddable kernel posture | Design only | Should keep shaping implementation choices |
 | Intelligence-in-depth alignment | Design only | Architectural guidance in place; runtime rollout still pending |
 
@@ -108,16 +108,17 @@ Recommended reading order:
 - held delegated result actions now preserve execution lineage, surface id, continuity key, active execution refs, code-session id, and run class through replay, defer, and dismiss updates
 - held delegated result replay, defer, and dismiss actions now emit shared run-timeline breadcrumbs on the correlated parent and delegated task runs, carrying continuity and execution lineage when available
 - held delegated result replay, defer, and dismiss actions now emit routing-trace rows with bounded job, execution, continuity, run-class, operator-action, and channel-supplied actor/surface fields for harness troubleshooting
+- deferred held-result review can now carry a server-owned review timestamp through assistant jobs, web API, CLI, audit, routing trace, and timeline state without persisting raw replay payloads
 
 ---
 
 ## Current Focus
 
 Recommended current implementation focus:
-- continuity-aware long-running delegated work on top of the lineage/handoff foundation
+- continuity-aware long-running delegated runtime ownership beyond the bounded completion and deferred-review foundation
 
 Why this is next:
-- the class model, producer adoption, operator controls, timeline filters, and bounded graph-event details now exist, so the next step is making long-running work resumable and easier to reason about at scale
+- the class model, producer adoption, operator controls, deferred-review metadata, timeline filters, and bounded graph-event details now exist, so the next step is making long-running work resumable and easier to reason about at scale
 - background delegation is still the largest unfinished capability lane
 
 ---

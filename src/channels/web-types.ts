@@ -1002,6 +1002,7 @@ export interface DashboardAssistantState {
           approvalCount?: number;
           nextAction?: string;
           operatorState?: 'pending' | 'deferred' | 'kept_held' | 'replayed' | 'dismissed';
+          deferredUntil?: number;
           actions?: Array<'replay' | 'defer' | 'keep_held' | 'dismiss'>;
         };
       };
@@ -1361,6 +1362,8 @@ export interface DashboardCallbacks {
     actorPrincipalRole?: string;
     actorChannel?: string;
     actorSurfaceId?: string;
+    deferUntil?: number;
+    deferForMinutes?: number;
   }) => Promise<DashboardMutationResult> | DashboardMutationResult;
   onAssistantRuns?: (args: {
     limit?: number;

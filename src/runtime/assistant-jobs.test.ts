@@ -237,6 +237,7 @@ describe('AssistantJobTracker', () => {
             nextAction: 'Replay or dismiss the held delegated result.',
             reportingMode: 'held_for_operator',
             operatorState: 'deferred',
+            deferredUntil: 1_700_000_000_000,
           },
         },
       },
@@ -247,6 +248,7 @@ describe('AssistantJobTracker', () => {
       label: 'Deferred for later review',
       needsOperatorAction: true,
       operatorState: 'deferred',
+      deferredUntil: 1_700_000_000_000,
       actions: ['replay', 'defer', 'dismiss'],
     });
   });

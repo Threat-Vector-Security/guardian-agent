@@ -1502,9 +1502,11 @@ function resolveAssistantJobStatusBadge(status) {
 
 function summarizeAssistantJobOutcome(job) {
   if (job?.display?.outcomeSummary) {
+    const deferredUntil = Number(job.display.followUp?.deferredUntil || 0);
     const parts = [
       job.display.outcomeSummary,
       job.display.followUp?.label,
+      deferredUntil > 0 ? `review after ${formatDateTime(deferredUntil)}` : '',
       job.display.followUp?.nextAction,
     ].filter(Boolean);
     return parts.join(' • ');

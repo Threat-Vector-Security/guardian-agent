@@ -57,6 +57,7 @@ export interface DelegatedWorkerHandoff {
   runClass?: DelegatedWorkerRunClass;
   reportingMode?: DelegatedWorkerReportingMode;
   operatorState?: DelegatedWorkerOperatorFollowUpState;
+  deferredUntil?: number;
   qualityNotes?: string[];
 }
 
@@ -97,6 +98,7 @@ export interface AssistantJobDisplayFollowUp {
   approvalCount?: number;
   nextAction?: string;
   operatorState?: DelegatedWorkerOperatorFollowUpState;
+  deferredUntil?: number;
   actions?: DelegatedWorkerOperatorAction[];
 }
 
@@ -382,6 +384,9 @@ export function readDelegatedWorkerMetadata(metadata: Record<string, unknown> | 
         || delegated.handoff.operatorState === 'dismissed')
         ? { operatorState: delegated.handoff.operatorState }
         : {}),
+      ...(Number.isFinite(delegated.handoff.deferredUntil) && Number(delegated.handoff.deferredUntil) > 0
+        ? { deferredUntil: Number(delegated.handoff.deferredUntil) }
+        : {}),
     };
   }
 
@@ -533,6 +538,9 @@ function buildDelegatedWorkerFollowUp(
         operatorState,
         actions: ['replay', 'defer', 'dismiss'],
         ...(typeof handoff.nextAction === 'string' ? { nextAction: handoff.nextAction } : {}),
+        ...(Number.isFinite(handoff.deferredUntil) && Number(handoff.deferredUntil) > 0
+          ? { deferredUntil: Number(handoff.deferredUntil) }
+          : {}),
       };
     }
     return {

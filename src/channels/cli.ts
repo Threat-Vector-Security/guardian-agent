@@ -1970,9 +1970,23 @@ export class CLIChannel implements ChannelAdapter {
         const jobId = args[2]?.trim();
         const action = args[3]?.trim().toLowerCase();
         if (!jobId || (action !== 'replay' && action !== 'defer' && action !== 'keep_held' && action !== 'dismiss')) {
-          this.write(`\nUsage: ${this.cyan('/assistant jobs followup <jobId> <replay|defer|dismiss>')}\n\n`);
+          this.write(`\nUsage: ${this.cyan('/assistant jobs followup <jobId> <replay|defer|dismiss> [deferMinutes]')}\n\n`);
           return;
         }
+        const parsedDeferForMinutes = action === 'defer' && args[4] !== undefined
+          ? (/^\d+$/.test(args[4].trim()) ? Number.parseInt(args[4], 10) : Number.NaN)
+          : undefined;
+        if (
+          action === 'defer'
+          && args[4] !== undefined
+          && (typeof parsedDeferForMinutes !== 'number' || !Number.isFinite(parsedDeferForMinutes) || parsedDeferForMinutes <= 0)
+        ) {
+          this.write(`\nUsage: ${this.cyan('/assistant jobs followup <jobId> defer [deferMinutes]')}\n\n`);
+          return;
+        }
+        const deferForMinutes = parsedDeferForMinutes && parsedDeferForMinutes > 0
+          ? parsedDeferForMinutes
+          : undefined;
         const result = await this.dashboard.onAssistantJobFollowUpAction({
           jobId,
           action,
@@ -1981,6 +1995,7 @@ export class CLIChannel implements ChannelAdapter {
           actorPrincipalRole: 'owner',
           actorChannel: 'cli',
           actorSurfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
+          ...(deferForMinutes ? { deferForMinutes } : {}),
         });
         this.write('\n');
         this.write(`${result.success ? this.green('Success') : this.red('Error')}: ${result.message}\n`);

@@ -1436,6 +1436,8 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
         action?: 'replay' | 'defer' | 'keep_held' | 'dismiss';
         userId?: string;
         surfaceId?: string;
+        deferUntil?: number;
+        deferForMinutes?: number;
       }>(req, context.maxBodyBytes);
       if (!parsed.jobId || typeof parsed.jobId !== 'string') {
         sendJSON(res, 400, { success: false, message: 'Missing jobId' });
@@ -1456,6 +1458,8 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
         actorPrincipalRole: principal.principalRole,
         actorChannel: 'web',
         actorSurfaceId,
+        ...(typeof parsed.deferUntil === 'number' && Number.isFinite(parsed.deferUntil) ? { deferUntil: parsed.deferUntil } : {}),
+        ...(typeof parsed.deferForMinutes === 'number' && Number.isFinite(parsed.deferForMinutes) ? { deferForMinutes: parsed.deferForMinutes } : {}),
       });
       sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
       context.maybeEmitUIInvalidation(result, ['assistant', 'dashboard'], 'assistant.jobs.followup', url.pathname);

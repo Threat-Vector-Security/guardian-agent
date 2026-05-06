@@ -118,6 +118,8 @@ export function createAssistantDashboardCallbacks(
       actorPrincipalRole,
       actorChannel,
       actorSurfaceId,
+      deferUntil,
+      deferForMinutes,
     }) => {
       if (!options.runtime.workerManager) {
         return {
@@ -134,11 +136,14 @@ export function createAssistantDashboardCallbacks(
         ...(actorChannel ? { channel: actorChannel } : {}),
         ...(actorSurfaceId ? { surfaceId: actorSurfaceId } : {}),
       };
-      return options.runtime.workerManager.applyJobFollowUpAction(
-        jobId,
-        action,
-        Object.keys(actor).length > 0 ? actor : undefined,
-      );
+      const followUpOptions = {
+        ...(typeof deferUntil === 'number' ? { deferUntil } : {}),
+        ...(typeof deferForMinutes === 'number' ? { deferForMinutes } : {}),
+      };
+      const actorContext = Object.keys(actor).length > 0 ? actor : undefined;
+      return Object.keys(followUpOptions).length > 0
+        ? options.runtime.workerManager.applyJobFollowUpAction(jobId, action, actorContext, followUpOptions)
+        : options.runtime.workerManager.applyJobFollowUpAction(jobId, action, actorContext);
     },
 
     onAssistantRuns: ({

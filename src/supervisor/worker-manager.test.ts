@@ -6434,19 +6434,24 @@ describe('WorkerManager', () => {
         },
       },
     });
-    const deferred = manager.applyJobFollowUpAction(jobId!, 'defer', actor);
+    const deferredUntil = 987_000 + 15 * 60_000;
+    const deferred = manager.applyJobFollowUpAction(jobId!, 'defer', actor, { deferForMinutes: 15 });
     expect(deferred).toMatchObject({
       success: true,
       message: `Deferred held delegated result for ${jobId}.`,
+      details: {
+        deferredUntil,
+      },
     });
     expect(runTimeline.ingestDelegatedWorkerProgress).toHaveBeenLastCalledWith(expect.objectContaining({
       id: `delegated-worker:${jobId}:followup:deferred`,
       kind: 'followup_action',
       operatorAction: 'defer',
       operatorState: 'deferred',
+      deferredUntil,
       continuityKey: 'continuity-held-operator',
       activeExecutionRefs: ['code_session:Guardian Agent', 'delegated:repo-digest'],
-      detail: 'Operator deferred the delegated result for later review.',
+      detail: `Operator deferred the delegated result until ${new Date(deferredUntil).toISOString()}.`,
     }));
     expect(intentRoutingTrace.record).toHaveBeenLastCalledWith(expect.objectContaining({
       stage: 'delegated_worker_followup_action',
@@ -6457,6 +6462,7 @@ describe('WorkerManager', () => {
         jobId,
         operatorAction: 'defer',
         operatorState: 'deferred',
+        deferredUntil,
         actorPrincipalId: 'web-session:operator-1',
         actorPrincipalRole: 'owner',
         actorSurfaceId: 'web-guardian-chat',
@@ -6468,6 +6474,7 @@ describe('WorkerManager', () => {
       delegation: {
         handoff: {
           operatorState: 'deferred',
+          deferredUntil,
         },
       },
     });

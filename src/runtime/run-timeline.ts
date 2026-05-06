@@ -262,6 +262,7 @@ export interface DelegatedWorkerProgressEvent {
   reportingMode?: string;
   operatorAction?: DelegatedWorkerOperatorAction;
   operatorState?: DelegatedWorkerOperatorFollowUpState;
+  deferredUntil?: number;
   workerId?: string;
   requestPreview?: string;
   detail?: string;
