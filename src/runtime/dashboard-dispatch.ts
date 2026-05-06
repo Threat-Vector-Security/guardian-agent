@@ -134,6 +134,7 @@ export function createDashboardMessageDispatcher(args: {
       userId: canonicalUserId,
       principalId: msg.principalId,
     });
+    const dispatchStartedAt = now();
 
     let dispatchCodeSession = resolvedCodeSession ?? null;
     if (!dispatchCodeSession) {
@@ -637,6 +638,39 @@ export function createDashboardMessageDispatcher(args: {
         },
       });
     };
+    const durationBetween = (startedAt: number, completedAt: number): number => Math.max(0, completedAt - startedAt);
+    const buildDispatchLatencyTraceDetails = (latency: {
+      primaryRuntimeDispatchStartedAt: number;
+      primaryRuntimeDispatchCompletedAt: number;
+      traceCompletedAt: number;
+      fallbackRuntimeDispatchStartedAt?: number;
+      fallbackRuntimeDispatchCompletedAt?: number;
+    }): Record<string, number> => {
+      const runtimeDispatchStartedAt = latency.fallbackRuntimeDispatchStartedAt ?? latency.primaryRuntimeDispatchStartedAt;
+      const runtimeDispatchCompletedAt = latency.fallbackRuntimeDispatchCompletedAt ?? latency.primaryRuntimeDispatchCompletedAt;
+      return {
+        totalDispatchDurationMs: durationBetween(dispatchStartedAt, latency.traceCompletedAt),
+        preRuntimeDispatchDurationMs: durationBetween(dispatchStartedAt, latency.primaryRuntimeDispatchStartedAt),
+        runtimeDispatchDurationMs: durationBetween(runtimeDispatchStartedAt, runtimeDispatchCompletedAt),
+        postRuntimeDispatchDurationMs: durationBetween(runtimeDispatchCompletedAt, latency.traceCompletedAt),
+        primaryRuntimeDispatchDurationMs: durationBetween(
+          latency.primaryRuntimeDispatchStartedAt,
+          latency.primaryRuntimeDispatchCompletedAt,
+        ),
+        ...(typeof latency.fallbackRuntimeDispatchStartedAt === 'number'
+          && typeof latency.fallbackRuntimeDispatchCompletedAt === 'number'
+          ? {
+              fallbackRuntimeDispatchDurationMs: durationBetween(
+                latency.fallbackRuntimeDispatchStartedAt,
+                latency.fallbackRuntimeDispatchCompletedAt,
+              ),
+            }
+          : {}),
+        ...(typeof precomputedIntentGateway?.latencyMs === 'number'
+          ? { intentGatewayLatencyMs: Math.max(0, precomputedIntentGateway.latencyMs) }
+          : {}),
+      };
+    };
 
     return args.orchestrator.dispatch(
       {
@@ -651,6 +685,7 @@ export function createDashboardMessageDispatcher(args: {
         ...(selectedResponseSource ? { selectedResponseSource } : {}),
       },
       async (dispatchCtx) => {
+        const messageBuiltAt = now();
         const message = {
           id: randomUUID(),
           userId: canonicalUserId,
@@ -660,17 +695,21 @@ export function createDashboardMessageDispatcher(args: {
           channel,
           content: msg.content,
           metadata: effectiveMetadata,
-          timestamp: now(),
+          timestamp: messageBuiltAt,
           abortSignal: dispatchCtx.abortSignal,
         };
+        let primaryRuntimeDispatchStartedAt = messageBuiltAt;
+        let primaryRuntimeDispatchCompletedAt = messageBuiltAt;
 
         try {
           dispatchCtx.markStep('message_built', `messageId=${message.id}`);
+          primaryRuntimeDispatchStartedAt = now();
           const response = await dispatchCtx.runStep(
             'runtime_dispatch_message',
             async () => args.runtime.dispatchMessage(agentId, message),
             `agent=${agentId}`,
           );
+          primaryRuntimeDispatchCompletedAt = now();
           args.analytics.track({
             type: 'message_success',
             channel,
@@ -695,6 +734,11 @@ export function createDashboardMessageDispatcher(args: {
             agentId,
             contentPreview: response.content,
             details: {
+              ...buildDispatchLatencyTraceDetails({
+                primaryRuntimeDispatchStartedAt,
+                primaryRuntimeDispatchCompletedAt,
+                traceCompletedAt,
+              }),
               selectedAgentId: agentId,
               fallbackUsed: false,
               requestedTier,
@@ -749,6 +793,7 @@ export function createDashboardMessageDispatcher(args: {
             metadata: mergedMetadata,
           };
         } catch (err) {
+          primaryRuntimeDispatchCompletedAt = now();
           const routingCfg = args.configRef.current.routing;
           const fallbackEnabled = routingCfg?.fallbackOnFailure !== false;
           const fallbackId = routeDecision?.fallbackAgentId;
@@ -767,11 +812,13 @@ export function createDashboardMessageDispatcher(args: {
               metadata: { error: messageText, fallbackAttempt: 'true' },
             });
             try {
+              const fallbackRuntimeDispatchStartedAt = now();
               const fallbackResponse = await dispatchCtx.runStep(
                 'runtime_dispatch_fallback',
                 async () => args.runtime.dispatchMessage(fallbackId, message),
                 `fallback_agent=${fallbackId}`,
               );
+              const fallbackRuntimeDispatchCompletedAt = now();
               args.analytics.track({
                 type: 'message_success',
                 channel,
@@ -806,6 +853,13 @@ export function createDashboardMessageDispatcher(args: {
                 agentId: fallbackId,
                 contentPreview: fallbackResponse.content,
                 details: {
+                  ...buildDispatchLatencyTraceDetails({
+                    primaryRuntimeDispatchStartedAt,
+                    primaryRuntimeDispatchCompletedAt,
+                    fallbackRuntimeDispatchStartedAt,
+                    fallbackRuntimeDispatchCompletedAt,
+                    traceCompletedAt,
+                  }),
                   selectedAgentId: fallbackId,
                   fallbackUsed: true,
                   primaryAgentId: agentId,
@@ -860,6 +914,7 @@ export function createDashboardMessageDispatcher(args: {
           }
 
           const messageText = err instanceof Error ? err.message : String(err);
+          const traceCompletedAt = now();
           args.analytics.track({
             type: 'message_error',
             channel,
@@ -877,6 +932,11 @@ export function createDashboardMessageDispatcher(args: {
             agentId,
             contentPreview: messageText,
             details: {
+              ...buildDispatchLatencyTraceDetails({
+                primaryRuntimeDispatchStartedAt,
+                primaryRuntimeDispatchCompletedAt,
+                traceCompletedAt,
+              }),
               selectedAgentId: agentId,
               fallbackUsed: false,
               requestedTier,

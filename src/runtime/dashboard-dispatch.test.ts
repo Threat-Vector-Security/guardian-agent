@@ -209,6 +209,39 @@ describe('createDashboardMessageDispatcher', () => {
     }));
   });
 
+  it('records dispatch latency rollups in the routing trace', async () => {
+    let tick = 1_000;
+    const options = createOptions({
+      now: () => {
+        tick += 10;
+        return tick;
+      },
+    });
+    const dispatchDashboardMessage = createDashboardMessageDispatcher(options);
+
+    await dispatchDashboardMessage({
+      agentId: 'local-agent',
+      msg: {
+        content: 'summarize this',
+        userId: 'web-user',
+        channel: 'web',
+      },
+      precomputedIntentGateway: createGatewayRecord(),
+    });
+
+    expect(options.intentRoutingTrace.record).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'dispatch_response',
+      details: expect.objectContaining({
+        totalDispatchDurationMs: 40,
+        preRuntimeDispatchDurationMs: 20,
+        runtimeDispatchDurationMs: 10,
+        postRuntimeDispatchDurationMs: 10,
+        primaryRuntimeDispatchDurationMs: 10,
+        intentGatewayLatencyMs: 12,
+      }),
+    }));
+  });
+
   it('does not inject shared code-session context into external-path filesystem requests', async () => {
     const runtime = {
       dispatchMessage: vi.fn(async () => ({
