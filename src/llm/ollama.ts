@@ -58,11 +58,19 @@ export class OllamaProvider implements LLMProvider {
   }
 
   async chat(messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> {
-    const request = this.buildChatRequest(messages, options, false);
+    let request = this.buildChatRequest(messages, options, false);
     const { client, cleanup } = this.createClient(options?.signal);
 
     try {
-      const response = await client.chat(request);
+      let response: OllamaSdkChatResponse;
+      try {
+        response = await client.chat(request);
+      } catch (err) {
+        const strippedRequest = stripUnsupportedOllamaThink(request, err);
+        if (!strippedRequest) throw err;
+        request = strippedRequest;
+        response = await client.chat(request);
+      }
       return toUnifiedChatResponse(response);
     } catch (err) {
       throw toOllamaError(err, this.name, this.host, request.model);
@@ -72,11 +80,19 @@ export class OllamaProvider implements LLMProvider {
   }
 
   async *stream(messages: ChatMessage[], options?: ChatOptions): AsyncGenerator<ChatChunk> {
-    const request = this.buildChatRequest(messages, options, true);
+    let request = this.buildChatRequest(messages, options, true);
     const { client, cleanup } = this.createClient(options?.signal);
 
     try {
-      const stream = await client.chat(request);
+      let stream: AsyncIterable<OllamaSdkChatResponse>;
+      try {
+        stream = await client.chat(request);
+      } catch (err) {
+        const strippedRequest = stripUnsupportedOllamaThink(request, err);
+        if (!strippedRequest) throw err;
+        request = strippedRequest;
+        stream = await client.chat(request);
+      }
       for await (const part of stream) {
         yield {
           content: part.message?.content ?? '',
@@ -276,6 +292,20 @@ function readOllamaContextWindow(show: OllamaShowResponse): number | undefined {
     }
   }
   return undefined;
+}
+
+function stripUnsupportedOllamaThink<T extends OllamaChatRequest>(
+  request: T,
+  err: unknown,
+): T | null {
+  if (!Object.prototype.hasOwnProperty.call(request, 'think')) return null;
+  const raw = err instanceof Error ? err.message : String(err);
+  if (!/think|thinking|reasoning/i.test(raw) || !/unsupported|not supported|invalid|unknown/i.test(raw)) {
+    return null;
+  }
+  const next = { ...request } as Record<string, unknown>;
+  delete next['think'];
+  return next as T;
 }
 
 function toOllamaMessages(messages: ChatMessage[]): OllamaMessage[] {

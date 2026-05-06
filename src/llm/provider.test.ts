@@ -173,6 +173,50 @@ describe('OllamaProvider', () => {
     vi.unstubAllGlobals();
   });
 
+  it('retries Ollama chat without think mode when the selected model rejects it', async () => {
+    const fetchMock = vi.fn(async (_input, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      if (body.think !== undefined) {
+        return new Response(JSON.stringify({
+          error: 'thinking is not supported for this model',
+        }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({
+        model: 'mistral',
+        created_at: new Date().toISOString(),
+        message: { role: 'assistant', content: 'Basic path worked.' },
+        done: true,
+        done_reason: 'stop',
+        total_duration: 1,
+        load_duration: 1,
+        prompt_eval_count: 4,
+        prompt_eval_duration: 1,
+        eval_count: 5,
+        eval_duration: 1,
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const config: LLMConfig = { provider: 'ollama', model: 'mistral', think: 'high' };
+    const provider = createProvider(config);
+    const response = await provider.chat([{ role: 'user', content: 'hello' }]);
+
+    expect(response.content).toBe('Basic path worked.');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstRequest = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}'));
+    const secondRequest = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body ?? '{}'));
+    expect(firstRequest.think).toBe('high');
+    expect(secondRequest).not.toHaveProperty('think');
+
+    vi.unstubAllGlobals();
+  });
+
   it('should surface a helpful connectivity error when Ollama is unreachable', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
 
