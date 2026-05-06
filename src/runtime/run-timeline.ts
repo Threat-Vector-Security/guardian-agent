@@ -191,6 +191,10 @@ export interface RunTimelineListFilters {
   status?: DashboardRunStatus;
   kind?: DashboardRunKind;
   parentRunId?: string;
+  executionId?: string;
+  parentExecutionId?: string;
+  rootExecutionId?: string;
+  taskExecutionId?: string;
   channel?: string;
   agentId?: string;
   codeSessionId?: string;
@@ -284,6 +288,10 @@ export class RunTimelineStore {
         if (filters.status && detail.summary.status !== filters.status) return false;
         if (filters.kind && detail.summary.kind !== filters.kind) return false;
         if (filters.parentRunId && detail.summary.parentRunId !== filters.parentRunId) return false;
+        if (filters.executionId && detail.summary.executionId !== filters.executionId) return false;
+        if (filters.parentExecutionId && detail.summary.parentExecutionId !== filters.parentExecutionId) return false;
+        if (filters.rootExecutionId && detail.summary.rootExecutionId !== filters.rootExecutionId) return false;
+        if (filters.taskExecutionId && detail.summary.executionId !== filters.taskExecutionId) return false;
         if (filters.channel && detail.summary.channel !== filters.channel) return false;
         if (filters.agentId && detail.summary.agentId !== filters.agentId) return false;
         if (filters.codeSessionId && detail.summary.codeSessionId !== filters.codeSessionId) return false;

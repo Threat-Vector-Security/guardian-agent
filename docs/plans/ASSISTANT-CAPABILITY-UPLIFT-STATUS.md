@@ -84,7 +84,8 @@ Recommended reading order:
 - CLI `/assistant jobs` now supports operator filters for held, approval, delegated, status, reporting-mode, and run-class views so held delegated work is easier to isolate
 - Dashboard `Agent Runtime` now has matching job filters for held, approval, delegated, status, reporting-mode, and run-class job views
 - Dashboard `Runtime Execution` can filter run timelines by status, parent run, agent, channel, and code session in addition to continuity key and active execution reference
-- Dashboard `Runtime Execution` rows include parent/child drill-down actions for delegated and execution-graph troubleshooting
+- Dashboard `Runtime Execution` can filter run timelines by execution, parent-execution, root-execution, and task-execution lineage
+- Dashboard `Runtime Execution` rows include parent/child/graph drill-down actions for delegated and execution-graph troubleshooting
 
 ### Documentation alignment
 
@@ -121,7 +122,7 @@ Why this is next:
 
 - final continuity polish around any remaining surface drift or noisy resume cases
 - broader producer adoption for delegated run classes beyond the current brokered worker metadata path
-- richer execution-graph inspection beyond the current parent/child and context filters
+- richer execution-graph event inspection beyond the current lineage and context filters
 
 ### Medium-term
 

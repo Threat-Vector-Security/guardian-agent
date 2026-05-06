@@ -1456,6 +1456,10 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     const status = trimOptionalString(url.searchParams.get('status')) as import('../runtime/run-timeline.js').DashboardRunStatus | undefined;
     const kind = trimOptionalString(url.searchParams.get('kind')) as import('../runtime/run-timeline.js').DashboardRunKind | undefined;
     const parentRunId = trimOptionalString(url.searchParams.get('parentRunId'));
+    const executionId = trimOptionalString(url.searchParams.get('executionId'));
+    const parentExecutionId = trimOptionalString(url.searchParams.get('parentExecutionId'));
+    const rootExecutionId = trimOptionalString(url.searchParams.get('rootExecutionId'));
+    const taskExecutionId = trimOptionalString(url.searchParams.get('taskExecutionId'));
     const channel = trimOptionalString(url.searchParams.get('channel'));
     const agentId = trimOptionalString(url.searchParams.get('agentId'));
     const codeSessionId = trimOptionalString(url.searchParams.get('codeSessionId'));
@@ -1466,6 +1470,10 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       ...(status ? { status } : {}),
       ...(kind ? { kind } : {}),
       ...(parentRunId ? { parentRunId } : {}),
+      ...(executionId ? { executionId } : {}),
+      ...(parentExecutionId ? { parentExecutionId } : {}),
+      ...(rootExecutionId ? { rootExecutionId } : {}),
+      ...(taskExecutionId ? { taskExecutionId } : {}),
       ...(channel ? { channel } : {}),
       ...(agentId ? { agentId } : {}),
       ...(codeSessionId ? { codeSessionId } : {}),

@@ -62,6 +62,7 @@ function extractContextFiltersFromRunSummary(detail: DashboardRunDetail): Extrac
   const summary = detail.summary;
   return {
     ...(typeof summary.executionId === 'string' && summary.executionId.trim() ? { executionId: summary.executionId.trim() } : {}),
+    ...(typeof summary.executionId === 'string' && summary.executionId.trim() ? { taskExecutionId: summary.executionId.trim() } : {}),
     ...(typeof summary.rootExecutionId === 'string' && summary.rootExecutionId.trim() ? { rootExecutionId: summary.rootExecutionId.trim() } : {}),
     ...(typeof summary.codeSessionId === 'string' && summary.codeSessionId.trim() ? { codeSessionId: summary.codeSessionId.trim() } : {}),
   };
@@ -74,6 +75,7 @@ function mergeContextWithRunSummary(
   return {
     ...context,
     ...(context.executionId ? {} : summary.executionId ? { executionId: summary.executionId } : {}),
+    ...(context.taskExecutionId ? {} : summary.taskExecutionId ? { taskExecutionId: summary.taskExecutionId } : {}),
     ...(context.rootExecutionId ? {} : summary.rootExecutionId ? { rootExecutionId: summary.rootExecutionId } : {}),
     ...(context.codeSessionId ? {} : summary.codeSessionId ? { codeSessionId: summary.codeSessionId } : {}),
   };

@@ -31,6 +31,9 @@ const systemUiState = {
     activeExecutionRef: '',
     status: '',
     parentRunId: '',
+    executionId: '',
+    parentExecutionId: '',
+    rootExecutionId: '',
     agentId: '',
     channel: '',
     codeSessionId: '',
@@ -82,6 +85,9 @@ function buildRuntimeTimelineQueryParams(limit = 8) {
   const activeExecutionRef = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.activeExecutionRef);
   const status = normalizeRuntimeTimelineStatusFilter(systemUiState.runtimeTimelineFilters?.status);
   const parentRunId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.parentRunId);
+  const executionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.executionId);
+  const parentExecutionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.parentExecutionId);
+  const rootExecutionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.rootExecutionId);
   const agentId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.agentId);
   const channel = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.channel);
   const codeSessionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.codeSessionId);
@@ -91,6 +97,9 @@ function buildRuntimeTimelineQueryParams(limit = 8) {
     ...(activeExecutionRef ? { activeExecutionRef } : {}),
     ...(status ? { status } : {}),
     ...(parentRunId ? { parentRunId } : {}),
+    ...(executionId ? { executionId } : {}),
+    ...(parentExecutionId ? { parentExecutionId } : {}),
+    ...(rootExecutionId ? { rootExecutionId } : {}),
     ...(agentId ? { agentId } : {}),
     ...(channel ? { channel } : {}),
     ...(codeSessionId ? { codeSessionId } : {}),
@@ -948,6 +957,9 @@ function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRun
   const activeExecutionRef = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.activeExecutionRef);
   const status = normalizeRuntimeTimelineStatusFilter(systemUiState.runtimeTimelineFilters?.status);
   const parentRunId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.parentRunId);
+  const executionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.executionId);
+  const parentExecutionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.parentExecutionId);
+  const rootExecutionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.rootExecutionId);
   const agentId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.agentId);
   const channel = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.channel);
   const codeSessionId = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.codeSessionId);
@@ -990,6 +1002,18 @@ function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRun
       <div class="cfg-field" style="flex:1 1 14rem;min-width:12rem;margin:0">
         <label for="system-runtime-parent-run-id">Parent Run</label>
         <input id="system-runtime-parent-run-id" type="text" placeholder="assistant-run-id" value="${escAttr(parentRunId)}">
+      </div>
+      <div class="cfg-field" style="flex:1 1 14rem;min-width:12rem;margin:0">
+        <label for="system-runtime-execution-id">Execution</label>
+        <input id="system-runtime-execution-id" type="text" placeholder="execution id" value="${escAttr(executionId)}">
+      </div>
+      <div class="cfg-field" style="flex:1 1 14rem;min-width:12rem;margin:0">
+        <label for="system-runtime-parent-execution-id">Parent Exec</label>
+        <input id="system-runtime-parent-execution-id" type="text" placeholder="parent execution id" value="${escAttr(parentExecutionId)}">
+      </div>
+      <div class="cfg-field" style="flex:1 1 14rem;min-width:12rem;margin:0">
+        <label for="system-runtime-root-execution-id">Root Exec</label>
+        <input id="system-runtime-root-execution-id" type="text" placeholder="root execution id" value="${escAttr(rootExecutionId)}">
       </div>
       <div class="cfg-field" style="flex:1 1 12rem;min-width:10rem;margin:0">
         <label for="system-runtime-agent-id">Agent</label>
@@ -1075,6 +1099,7 @@ function renderRuntimeExecutionRows(kind, runs, emptyMessage) {
 function renderRuntimeExecutionRunActions(summary) {
   const runId = typeof summary?.runId === 'string' ? summary.runId.trim() : '';
   const parentRunId = typeof summary?.parentRunId === 'string' ? summary.parentRunId.trim() : '';
+  const rootExecutionId = typeof summary?.rootExecutionId === 'string' ? summary.rootExecutionId.trim() : '';
   const actions = [];
   if (runId) {
     actions.push(`
@@ -1087,6 +1112,13 @@ function renderRuntimeExecutionRunActions(summary) {
     actions.push(`
       <button class="btn btn-secondary btn-sm" type="button" data-system-runtime-run-filter="${escAttr(parentRunId)}">
         Parent
+      </button>
+    `);
+  }
+  if (rootExecutionId) {
+    actions.push(`
+      <button class="btn btn-secondary btn-sm" type="button" data-system-runtime-root-exec-filter="${escAttr(rootExecutionId)}">
+        Graph
       </button>
     `);
   }
@@ -1696,6 +1728,9 @@ function bindSystemEvents(container) {
       activeExecutionRef: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-active-exec-ref')?.value),
       status: normalizeRuntimeTimelineStatusFilter(container.querySelector('#system-runtime-status')?.value),
       parentRunId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-parent-run-id')?.value),
+      executionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-execution-id')?.value),
+      parentExecutionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-parent-execution-id')?.value),
+      rootExecutionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-root-execution-id')?.value),
       agentId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-agent-id')?.value),
       channel: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-channel')?.value),
       codeSessionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-code-session-id')?.value),
@@ -1709,6 +1744,9 @@ function bindSystemEvents(container) {
       activeExecutionRef: '',
       status: '',
       parentRunId: '',
+      executionId: '',
+      parentExecutionId: '',
+      rootExecutionId: '',
       agentId: '',
       channel: '',
       codeSessionId: '',
@@ -1717,6 +1755,9 @@ function bindSystemEvents(container) {
     const activeExecutionInput = container.querySelector('#system-runtime-active-exec-ref');
     const statusInput = container.querySelector('#system-runtime-status');
     const parentRunInput = container.querySelector('#system-runtime-parent-run-id');
+    const executionInput = container.querySelector('#system-runtime-execution-id');
+    const parentExecutionInput = container.querySelector('#system-runtime-parent-execution-id');
+    const rootExecutionInput = container.querySelector('#system-runtime-root-execution-id');
     const agentInput = container.querySelector('#system-runtime-agent-id');
     const channelInput = container.querySelector('#system-runtime-channel');
     const codeSessionInput = container.querySelector('#system-runtime-code-session-id');
@@ -1724,6 +1765,9 @@ function bindSystemEvents(container) {
     if (activeExecutionInput) activeExecutionInput.value = '';
     if (statusInput) statusInput.value = '';
     if (parentRunInput) parentRunInput.value = '';
+    if (executionInput) executionInput.value = '';
+    if (parentExecutionInput) parentExecutionInput.value = '';
+    if (rootExecutionInput) rootExecutionInput.value = '';
     if (agentInput) agentInput.value = '';
     if (channelInput) channelInput.value = '';
     if (codeSessionInput) codeSessionInput.value = '';
@@ -1751,6 +1795,21 @@ function bindSystemEvents(container) {
         parentRunId: '',
       };
       window.location.hash = `#/system?assistantRunId=${encodeURIComponent(runId)}`;
+    });
+  });
+
+  container.querySelectorAll('[data-system-runtime-root-exec-filter]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const rootExecutionId = normalizeRoutingTraceFilterValue(button.getAttribute('data-system-runtime-root-exec-filter'));
+      if (!rootExecutionId) return;
+      systemUiState.runtimeTimelineFilters = {
+        ...(systemUiState.runtimeTimelineFilters || {}),
+        parentRunId: '',
+        executionId: '',
+        parentExecutionId: '',
+        rootExecutionId,
+      };
+      void renderSystemPreserveScroll(container);
     });
   });
 

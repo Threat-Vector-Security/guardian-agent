@@ -783,6 +783,19 @@ describe('RunTimelineStore', () => {
     expect(store.listRuns({ parentRunId: 'req-delegated-worker' }).map((entry) => entry.summary.runId)).toEqual([
       'delegated-task:job-1',
     ]);
+    expect(store.listRuns({ executionId: 'exec-delegated-worker' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-delegated-worker',
+    ]);
+    expect(store.listRuns({ parentExecutionId: 'exec-delegated-worker' }).map((entry) => entry.summary.runId)).toEqual([
+      'delegated-task:job-1',
+    ]);
+    expect(store.listRuns({ rootExecutionId: 'exec-delegated-worker' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-delegated-worker',
+      'delegated-task:job-1',
+    ]);
+    expect(store.listRuns({ taskExecutionId: 'delegated-task:job-1' }).map((entry) => entry.summary.runId)).toEqual([
+      'delegated-task:job-1',
+    ]);
     expect(store.listRuns({ continuityKey: 'continuity-1' }).map((entry) => entry.summary.runId)).toEqual([
       'req-delegated-worker',
       'delegated-task:job-1',
