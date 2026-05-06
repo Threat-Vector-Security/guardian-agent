@@ -61,18 +61,45 @@ export class OpenAIProvider implements LLMProvider {
         try {
           response = await this.client.chat.completions.create(params, { signal: options?.signal });
         } catch (retryErr) {
-          throw wrapOpenAIError(retryErr, {
+          const strippedParams = stripOptionalCapabilityParams(params, retryErr);
+          if (strippedParams) {
+            try {
+              response = await this.client.chat.completions.create(strippedParams, { signal: options?.signal });
+            } catch (strippedErr) {
+              throw wrapOpenAIError(strippedErr, {
+                model: strippedParams.model as string,
+                providerLabel: this.providerLabel,
+                baseUrl: this.baseUrl,
+              });
+            }
+          } else {
+            throw wrapOpenAIError(retryErr, {
+              model: params.model as string,
+              providerLabel: this.providerLabel,
+              baseUrl: this.baseUrl,
+            });
+          }
+        }
+      } else {
+        const strippedParams = stripOptionalCapabilityParams(params, err);
+        if (strippedParams) {
+          try {
+            response = await this.client.chat.completions.create(strippedParams, { signal: options?.signal });
+            params = strippedParams;
+          } catch (retryErr) {
+            throw wrapOpenAIError(retryErr, {
+              model: strippedParams.model as string,
+              providerLabel: this.providerLabel,
+              baseUrl: this.baseUrl,
+            });
+          }
+        } else {
+          throw wrapOpenAIError(err, {
             model: params.model as string,
             providerLabel: this.providerLabel,
             baseUrl: this.baseUrl,
           });
         }
-      } else {
-        throw wrapOpenAIError(err, {
-          model: params.model as string,
-          providerLabel: this.providerLabel,
-          baseUrl: this.baseUrl,
-        });
       }
     }
     const choice = response.choices[0];
@@ -112,18 +139,45 @@ export class OpenAIProvider implements LLMProvider {
         try {
           stream = await this.client.chat.completions.create(params);
         } catch (retryErr) {
-          throw wrapOpenAIError(retryErr, {
+          const strippedParams = stripOptionalCapabilityParams(params, retryErr);
+          if (strippedParams) {
+            try {
+              stream = await this.client.chat.completions.create(strippedParams);
+            } catch (strippedErr) {
+              throw wrapOpenAIError(strippedErr, {
+                model: strippedParams.model as string,
+                providerLabel: this.providerLabel,
+                baseUrl: this.baseUrl,
+              });
+            }
+          } else {
+            throw wrapOpenAIError(retryErr, {
+              model: params.model as string,
+              providerLabel: this.providerLabel,
+              baseUrl: this.baseUrl,
+            });
+          }
+        }
+      } else {
+        const strippedParams = stripOptionalCapabilityParams(params, err);
+        if (strippedParams) {
+          try {
+            stream = await this.client.chat.completions.create(strippedParams);
+            params = strippedParams;
+          } catch (retryErr) {
+            throw wrapOpenAIError(retryErr, {
+              model: strippedParams.model as string,
+              providerLabel: this.providerLabel,
+              baseUrl: this.baseUrl,
+            });
+          }
+        } else {
+          throw wrapOpenAIError(err, {
             model: params.model as string,
             providerLabel: this.providerLabel,
             baseUrl: this.baseUrl,
           });
         }
-      } else {
-        throw wrapOpenAIError(err, {
-          model: params.model as string,
-          providerLabel: this.providerLabel,
-          baseUrl: this.baseUrl,
-        });
       }
     }
 
@@ -311,6 +365,34 @@ function shouldRetryWithMaxCompletionTokens(err: unknown): boolean {
   return status === 400
     && /max_tokens/i.test(raw)
     && /max_completion_tokens/i.test(raw);
+}
+
+const OPTIONAL_OPENAI_CAPABILITY_PARAMS = [
+  'reasoning_effort',
+  'verbosity',
+  'parallel_tool_calls',
+  'tool_choice',
+] as const;
+
+function stripOptionalCapabilityParams<T extends object>(
+  params: T,
+  err: unknown,
+): T | null {
+  const status = (err as { status?: number })?.status ?? 0;
+  if (status !== 400) return null;
+  const raw = err instanceof Error ? err.message : String(err);
+  if (!/unsupported|unknown|invalid/i.test(raw)) return null;
+  const paramsRecord = params as Record<string, unknown>;
+  const unsupported = OPTIONAL_OPENAI_CAPABILITY_PARAMS.filter((param) => (
+    Object.prototype.hasOwnProperty.call(paramsRecord, param)
+    && raw.toLowerCase().includes(param.toLowerCase())
+  ));
+  if (unsupported.length === 0) return null;
+  const next = { ...params } as Record<string, unknown>;
+  for (const param of OPTIONAL_OPENAI_CAPABILITY_PARAMS) {
+    delete next[param];
+  }
+  return next as T;
 }
 
 function shouldSendOpenAIReasoningEffort(providerName: string, model: string): boolean {

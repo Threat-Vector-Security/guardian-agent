@@ -338,6 +338,71 @@ describe('OpenAIProvider compatibility', () => {
     expect(create.mock.calls[1]?.[0]).not.toHaveProperty('max_tokens');
   });
 
+  it('retries without optional capability settings when an OpenAI-compatible endpoint rejects them', async () => {
+    const provider = new OpenAIProvider({
+      provider: 'openai',
+      model: 'gpt-5.1',
+      apiKey: 'sk-test',
+      reasoning: { effort: 'high' },
+      verbosity: 'high',
+      parallelToolCalls: true,
+      toolChoice: 'auto',
+    });
+
+    const create = vi.fn()
+      .mockRejectedValueOnce(Object.assign(
+        new Error("400 Unsupported parameter: 'reasoning_effort' is not supported with this model."),
+        { status: 400 },
+      ))
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: { content: 'Basic path worked.' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 4,
+          total_tokens: 9,
+        },
+        model: 'gpt-5.1',
+      });
+
+    (provider as any).client = {
+      chat: {
+        completions: {
+          create,
+        },
+      },
+      models: {
+        list: vi.fn(),
+      },
+    };
+
+    const response = await provider.chat([{ role: 'user', content: 'Hello?' }], {
+      tools: [{
+        name: 'lookup',
+        description: 'Look something up.',
+        parameters: { type: 'object', properties: {} },
+      }],
+    });
+
+    expect(response.content).toBe('Basic path worked.');
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      reasoning_effort: 'high',
+      verbosity: 'high',
+      parallel_tool_calls: true,
+      tool_choice: 'auto',
+    });
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('reasoning_effort');
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('verbosity');
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('parallel_tool_calls');
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('tool_choice');
+    expect(create.mock.calls[1]?.[0]).toHaveProperty('tools');
+  });
+
   it('passes JSON response format hints through to OpenAI-compatible providers', async () => {
     const provider = new OpenAIProvider({
       provider: 'openai',
