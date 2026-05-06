@@ -2551,6 +2551,12 @@ describe('CLIChannel with DashboardCallbacks', () => {
             contentPreview: 'Use Codex to fix the repo',
             details: {
               route: 'coding_task',
+              operation: 'coding_task',
+              executionClass: 'direct_tool',
+              preferredAnswerPath: 'tool_result',
+              candidates: ['coding_task', 'automation_task', 'general_chat', 'memory_lookup', 'security_review'],
+              requiredPlannedStepCount: 2,
+              requiredPlannedStepCategories: ['repo_read', 'edit', 'test', 'commit', 'handoff'],
               totalDispatchDurationMs: 124,
               intentGatewayLatencyMs: 14,
               runtimeDispatchDurationMs: 92,
@@ -2568,6 +2574,12 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const text = readOutput(output);
 
     expect(text).toContain('gateway_classified');
+    expect(text).toContain('op coding_task');
+    expect(text).toContain('class direct_tool');
+    expect(text).toContain('answer tool_result');
+    expect(text).toContain('candidates coding_task');
+    expect(text).toContain('steps 2');
+    expect(text).toContain('tools repo_read, edit, test, commit');
     expect(text).toContain('latency total 124ms');
     expect(text).toContain('gateway 14ms');
     expect(text).toContain('continuity continuity-keep');

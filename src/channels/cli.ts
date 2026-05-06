@@ -5317,6 +5317,23 @@ export class CLIChannel implements ChannelAdapter {
       ...(typeof details?.route === 'string' ? [`route ${details.route}`] : []),
       ...(typeof details?.tier === 'string' ? [`tier ${details.tier}`] : []),
       ...(latencySummary ? [latencySummary] : []),
+      ...(typeof details?.continuityKey === 'string' ? [`continuity ${details.continuityKey}`] : []),
+      ...(typeof details?.operation === 'string' ? [`op ${details.operation}`] : []),
+      ...(typeof details?.executionClass === 'string' ? [`class ${details.executionClass}`] : []),
+      ...(typeof details?.preferredAnswerPath === 'string' ? [`answer ${details.preferredAnswerPath}`] : []),
+      ...(typeof details?.requiredPlannedStepCount === 'number'
+        ? [`steps ${details.requiredPlannedStepCount}`]
+        : []),
+      ...this.formatTraceStringList(details, 'requiredPlannedStepCategories', {
+        prefix: 'tools',
+        separator: ', ',
+        limit: 4,
+      }),
+      ...this.formatTraceStringList(details, 'candidates', {
+        prefix: 'candidates',
+        separator: ' > ',
+        limit: 4,
+      }),
       ...(typeof details?.executionId === 'string' ? [`execution ${details.executionId}`] : []),
       ...(typeof details?.taskExecutionId === 'string' ? [`task ${details.taskExecutionId}`] : []),
       ...(typeof details?.codeSessionId === 'string' ? [`code ${details.codeSessionId}`] : []),
@@ -5331,16 +5348,27 @@ export class CLIChannel implements ChannelAdapter {
       ...(typeof details?.approvalCount === 'number' ? [`approvals ${details.approvalCount}`] : []),
       ...(typeof details?.runClass === 'string' ? [`run ${details.runClass}`] : []),
       ...(typeof details?.reason === 'string' ? [details.reason] : []),
-      ...(typeof details?.continuityKey === 'string' ? [`continuity ${details.continuityKey}`] : []),
-      ...(Array.isArray(details?.activeExecutionRefs) && details.activeExecutionRefs.length > 0
-        ? [`exec ${(details.activeExecutionRefs as unknown[])
-            .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-            .slice(0, 2)
-            .join(' | ')}`]
-        : []),
+      ...this.formatTraceStringList(details, 'activeExecutionRefs', {
+        prefix: 'exec',
+        separator: ' | ',
+        limit: 2,
+      }),
       ...(typeof details?.contextAssemblySummary === 'string' ? [details.contextAssemblySummary] : []),
     ];
-    return this.clipTableCell(parts.join(' | ') || '-', 112);
+    return this.clipTableCell(parts.join(' | ') || '-', 240);
+  }
+
+  private formatTraceStringList(
+    details: Record<string, unknown> | undefined,
+    key: string,
+    options: { prefix: string; separator: string; limit: number },
+  ): string[] {
+    const values = Array.isArray(details?.[key])
+      ? details[key]
+          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          .slice(0, options.limit)
+      : [];
+    return values.length > 0 ? [`${options.prefix} ${values.join(options.separator)}`] : [];
   }
 
   private summarizeIntentRoutingLatency(details: Record<string, unknown> | undefined): string | undefined {
