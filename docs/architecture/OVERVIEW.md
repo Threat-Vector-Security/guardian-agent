@@ -596,6 +596,7 @@ Unified `LLMProvider` interface for local, managed-cloud, and frontier provider 
 - `ProviderRegistry` remains internal-only: providers are curated in source rather than loaded dynamically from arbitrary packages
 - OpenAI-compatible providers use the shared OpenAI-compatible path while native adapters keep provider-specific behavior explicit
 - Ollama uses OpenAI-compatible `/v1/chat/completions` + native `/api/tags`
+- Capability-specific model settings are additive and non-blocking. Provider/model discovery may expose live capability metadata for controls such as reasoning effort, verbosity, tool choice, parallel tool calls, and Ollama think mode. Guardian uses that metadata to expose or omit optional controls, falls back to curated provider/model defaults when metadata is absent, and keeps the basic chat path usable instead of rejecting a provider solely because an optional capability cannot be proven.
 - Both `chat()` (full response) and `stream()` (AsyncGenerator) methods
 - Each agent and route can resolve provider assignment via config, control-plane state, Auto-mode tier preference, and failover rules
 - **Failover Provider** (`src/llm/failover-provider.ts`): wraps multiple providers with priority-based failover and per-provider circuit breakers. On transient/quota/timeout errors, automatically retries with the next available provider.

@@ -18,6 +18,7 @@ Provide one intuitive configuration surface (web + CLI) without an interactive s
 - Users do not hand-edit YAML for normal onboarding
 - Local vs external provider switching is explicit and simple
 - Provider testing and model visibility are built-in
+- Advanced provider controls are capability-aware and non-blocking: live model metadata narrows what the UI exposes when available, but missing metadata falls back to safe provider/model defaults instead of preventing model use
 - Web search settings are decoupled from LLM provider config
 - Telegram enable/token/chat-id configuration is part of the same panel
 - Coding assistant delegation configuration is part of the same panel
@@ -60,6 +61,8 @@ Provide one intuitive configuration surface (web + CLI) without an interactive s
 ### `POST /api/setup/apply` — Provider Configuration
 Applies LLM provider settings. Always requires explicit `providerType` field. If `providerType` is missing, the backend preserves the existing provider's type rather than defaulting (safety net against corruption).
 
+Advanced model controls are optional overlays, not admission gates. The Config Center may persist supported controls such as max tokens, temperature, top-p, reasoning effort, response verbosity, tool-choice behavior, parallel tool-call preference, Ollama keep-alive, Ollama think mode, and native Ollama options. The UI should use live model discovery when the provider exposes capability metadata, then constrain the editor with Guardian provider metadata and safe defaults. If a provider does not expose capability metadata, the model remains selectable and usable; Guardian should hide or omit unsupported controls where it can prove they are unsupported, and otherwise preserve basic request behavior rather than blocking the provider.
+
 ### `POST /api/config/search` — Web Search Configuration
 Dedicated endpoint for web search settings. Updates ONLY `assistant.tools.webSearch` and `fallbacks` — never touches LLM provider config. This prevents web search saves from corrupting provider settings.
 
@@ -71,6 +74,7 @@ Input fields:
 ## Runtime Behavior
 - Config writes persist to config YAML via backend callbacks
 - LLM/derived primary-provider updates apply live through `runtime.applyLLMConfiguration()`
+- Provider request builders should treat capability-specific settings as best-effort optional fields. Known unsupported fields must be omitted before dispatch. If stale or manually edited config contains an optional setting that the selected model path cannot accept, the provider layer should prefer a safe basic request over failing the whole turn where a deterministic sanitize/retry is possible.
 - Web search config changes apply immediately — `ToolExecutor.updateWebSearchConfig()` is called from `persistAndApplyConfig`, also clearing the search result cache so the new provider takes effect without restart
 - Coding assistant backend config changes apply immediately through the runtime coding-backend service; a restart is not required for enablement, default-backend, concurrency, or update-setting changes
 - Telegram channel structural updates still require restart
