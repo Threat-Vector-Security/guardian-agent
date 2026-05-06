@@ -65,6 +65,8 @@ export interface ModelInfo {
   contextWindow?: number;
   /** Provider-advertised model capabilities, when the live model API exposes them. */
   capabilities?: string[];
+  /** Provider-advertised request parameters for this model, when the live model API exposes them. */
+  supportedParameters?: string[];
 }
 
 /** Definition of a tool the LLM can call. */

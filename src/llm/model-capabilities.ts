@@ -39,6 +39,7 @@ export function inferModelCapabilities(input: {
   const model = input.model.trim();
   const liveModel = input.liveModels?.find((candidate) => candidate.id === model);
   const liveCapabilitySet = buildLiveCapabilitySet(liveModel);
+  const liveParameterSet = buildLiveParameterSet(liveModel);
   const isOllama = isOllamaProviderType(providerType);
   const isOpenAi = providerType === 'openai';
   const isAnthropic = providerType === 'anthropic';
@@ -59,19 +60,44 @@ export function inferModelCapabilities(input: {
     liveModelListed: !!liveModel,
     ...(liveModel?.contextWindow ? { contextWindow: liveModel.contextWindow } : {}),
     settings: {
-      maxTokens: supported('provider_metadata', 4096),
-      temperature: supported('provider_metadata', 0.7),
+      maxTokens: inferRequestParameter(liveParameterSet, {
+        parameters: ['max_tokens', 'max_completion_tokens', 'max_output_tokens'],
+        defaultValue: 4096,
+        fallback: supported('provider_metadata', 4096),
+        missingNote: 'The live model API did not advertise a first-class max-token parameter for this model.',
+      }),
+      temperature: inferRequestParameter(liveParameterSet, {
+        parameters: ['temperature'],
+        defaultValue: 0.7,
+        fallback: supported('provider_metadata', 0.7),
+        missingNote: 'The live model API did not advertise a first-class temperature parameter for this model.',
+      }),
       topP: isOllama || isOpenAi || isAnthropic || isOpenAiCompatible
-        ? supported('provider_metadata')
+        ? inferRequestParameter(liveParameterSet, {
+            parameters: ['top_p', 'topP'],
+            fallback: supported('provider_metadata'),
+            missingNote: 'The live model API did not advertise a first-class top-p parameter for this model.',
+          })
         : unsupported('fallback', 'No first-class top-p mapping is registered for this provider.'),
-      reasoningEffort: inferReasoningEffort(providerType, model, liveModel, liveCapabilitySet),
-      reasoningSummary: inferReasoningSummary(providerType, model, liveModel, liveCapabilitySet),
-      verbosity: inferVerbosity(providerType, model),
+      reasoningEffort: inferReasoningEffort(providerType, model, liveModel, liveCapabilitySet, liveParameterSet),
+      reasoningSummary: inferReasoningSummary(providerType, model, liveModel, liveCapabilitySet, liveParameterSet),
+      verbosity: inferVerbosity(providerType, model, liveParameterSet),
       parallelToolCalls: isOpenAi || isOpenAiCompatible
-        ? supported('provider_metadata', true)
+        ? inferRequestParameter(liveParameterSet, {
+            parameters: ['parallel_tool_calls', 'parallelToolCalls'],
+            defaultValue: true,
+            fallback: supported('provider_metadata', true),
+            missingNote: 'The live model API did not advertise a first-class parallel tool-call switch for this model.',
+          })
         : unsupported('fallback', 'This provider path does not expose a first-class parallel tool-call switch.'),
       toolChoice: isOpenAi || isOpenAiCompatible
-        ? supported('provider_metadata', 'auto', undefined, ['auto', 'none', 'required'])
+        ? inferRequestParameter(liveParameterSet, {
+            parameters: ['tool_choice', 'toolChoice'],
+            defaultValue: 'auto',
+            values: ['auto', 'none', 'required'],
+            fallback: supported('provider_metadata', 'auto', undefined, ['auto', 'none', 'required']),
+            missingNote: 'The live model API did not advertise a first-class tool-choice switch for this model.',
+          })
         : unsupported('fallback', 'This provider path does not expose a first-class tool-choice switch.'),
       ollamaThink: isOllama
         ? inferOllamaThink(liveModel, liveCapabilitySet)
@@ -81,6 +107,13 @@ export function inferModelCapabilities(input: {
         : unsupported('provider_metadata', 'Native Ollama options are only available on Ollama-family providers.'),
     },
   };
+}
+
+function buildLiveParameterSet(liveModel: ModelInfo | undefined): Set<string> | undefined {
+  if (!liveModel || !Array.isArray(liveModel.supportedParameters)) return undefined;
+  return new Set(liveModel.supportedParameters
+    .map((parameter) => parameter.trim().toLowerCase())
+    .filter(Boolean));
 }
 
 function buildLiveCapabilitySet(liveModel: ModelInfo | undefined): Set<string> | undefined {
@@ -114,13 +147,53 @@ function unsupported(source: ModelCapabilitySource, note: string): ModelSettingC
   };
 }
 
+function inferRequestParameter(
+  liveParameters: Set<string> | undefined,
+  options: {
+    parameters: string[];
+    fallback: ModelSettingCapability;
+    missingNote: string;
+    defaultValue?: string | number | boolean;
+    values?: string[];
+  },
+): ModelSettingCapability {
+  if (!liveParameters) return options.fallback;
+  if (hasAny(liveParameters, options.parameters)) {
+    return supported('api', options.defaultValue, undefined, options.values);
+  }
+  return unsupported('api', options.missingNote);
+}
+
+function hasAny(values: Set<string> | undefined, candidates: string[]): boolean {
+  if (!values) return false;
+  return candidates.some((candidate) => values.has(candidate.trim().toLowerCase()));
+}
+
 function inferReasoningEffort(
   providerType: string,
   model: string,
   liveModel?: ModelInfo,
   liveCapabilities?: Set<string>,
+  liveParameters?: Set<string>,
 ): ModelSettingCapability {
   const normalizedModel = model.trim().toLowerCase();
+  if (hasAny(liveParameters, ['reasoning_effort', 'reasoning.effort'])) {
+    return supported('api', 'medium', undefined, ['minimal', 'low', 'medium', 'high']);
+  }
+  if (hasAny(liveParameters, ['reasoning'])) {
+    return supported(
+      'api',
+      'medium',
+      'The live model API advertises a reasoning control for this model.',
+      ['minimal', 'low', 'medium', 'high'],
+    );
+  }
+  if (liveParameters) {
+    return unsupported(
+      'api',
+      'The live model API did not advertise a first-class reasoning effort control for this model.',
+    );
+  }
   if (isOllamaProviderType(providerType)) {
     return inferOllamaThink(liveModel, liveCapabilities);
   }
@@ -177,8 +250,12 @@ function inferReasoningSummary(
   model: string,
   liveModel?: ModelInfo,
   liveCapabilities?: Set<string>,
+  liveParameters?: Set<string>,
 ): ModelSettingCapability {
-  const reasoning = inferReasoningEffort(providerType, model, liveModel, liveCapabilities);
+  if (hasAny(liveParameters, ['reasoning_summary', 'reasoning.summary'])) {
+    return supported('api', 'auto', undefined, ['auto', 'concise', 'detailed', 'none']);
+  }
+  const reasoning = inferReasoningEffort(providerType, model, liveModel, liveCapabilities, liveParameters);
   if (!reasoning.supported || isOllamaProviderType(providerType)) {
     return unsupported(
       reasoning.source,
@@ -188,7 +265,20 @@ function inferReasoningSummary(
   return supported(reasoning.source, 'auto', undefined, ['auto', 'concise', 'detailed', 'none']);
 }
 
-function inferVerbosity(providerType: string, model: string): ModelSettingCapability {
+function inferVerbosity(
+  providerType: string,
+  model: string,
+  liveParameters?: Set<string>,
+): ModelSettingCapability {
+  if (hasAny(liveParameters, ['verbosity'])) {
+    return supported('api', 'medium', undefined, ['low', 'medium', 'high']);
+  }
+  if (liveParameters) {
+    return unsupported(
+      'api',
+      'The live model API did not advertise a first-class verbosity control for this model.',
+    );
+  }
   if (providerType === 'openai' && /^gpt-5(?:[.-]|$)/i.test(model.trim())) {
     return supported('model_heuristic', 'medium', undefined, ['low', 'medium', 'high']);
   }

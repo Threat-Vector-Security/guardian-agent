@@ -641,7 +641,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Local Ollama and Ollama Cloud both use the same native Ollama request controls inside Guardian.',
                   'Use the advanced section when you need to tune model behavior such as max tokens, temperature, top-p, timeout, keep-alive, think mode, or native Ollama options JSON.',
-                  'When model discovery is available, Guardian uses live model metadata where the provider exposes it, then falls back to safe provider/model defaults for controls such as reasoning effort or verbosity.',
+                  'When model discovery is available, Guardian uses live model metadata and supported request-parameter metadata where the provider exposes it, then falls back to safe provider/model defaults for controls such as reasoning effort or verbosity.',
                   'CLI `/providers` also shows the capability source for advanced controls, so terminal operators can see whether a setting came from live API metadata, provider metadata, a model-family rule, or safe defaults.',
                   'Advanced controls are enhancements, not blockers. If a selected model does not expose or support a control, Guardian keeps the model usable with basic settings.',
                   'Leave advanced settings empty unless you have a concrete reason to override the defaults.',
@@ -767,7 +767,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Use the web chat provider selector when you want one turn to go through a specific enabled provider profile, or use CLI `/mode` when you want to force `local`, `managed cloud`, or `frontier` directly.',
                   'Advanced hosted settings can persist supported model controls such as max tokens, temperature, top-p, reasoning effort, verbosity, tool-choice behavior, and parallel tool-call preference.',
-                  'Capability-aware controls are populated from live model discovery when available, then constrained by Guardian provider metadata and safe defaults so unsupported settings are not presented as universal.',
+                  'Capability-aware controls are populated from live model discovery, including provider-advertised supported request parameters when available, then constrained by Guardian provider metadata and safe defaults so unsupported settings are not presented as universal.',
                   'If a provider or model cannot use an optional advanced setting, Guardian falls back to the basic request path where possible instead of blocking the model.',
                   'Auto mode chooses between local, managed cloud, and frontier based on your saved provider policy and the kind of request you asked for.',
                   'Auto mode only considers enabled provider profiles. Disabled profiles stay saved in the config UI but are ignored until you re-enable them.',

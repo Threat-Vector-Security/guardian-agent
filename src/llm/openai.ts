@@ -206,10 +206,17 @@ export class OpenAIProvider implements LLMProvider {
       const list = await this.client.models.list();
       const models: ModelInfo[] = [];
       for await (const model of list) {
+        const record = model as unknown as Record<string, unknown>;
+        const capabilities = readStringArray(record, 'capabilities');
+        const supportedParameters = readStringArray(record, 'supported_parameters');
+        const contextWindow = readContextWindow(record);
         models.push({
           id: model.id,
-          name: model.id,
+          name: readString(record, 'name') ?? model.id,
           provider: this.name,
+          ...(contextWindow ? { contextWindow } : {}),
+          ...(capabilities.length > 0 ? { capabilities } : {}),
+          ...(Object.prototype.hasOwnProperty.call(record, 'supported_parameters') ? { supportedParameters } : {}),
         });
       }
       return models;
@@ -328,6 +335,32 @@ export class OpenAIProvider implements LLMProvider {
   }
 }
 
+function readString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function readStringArray(record: Record<string, unknown>, key: string): string[] {
+  const value = record[key];
+  return Array.isArray(value)
+    ? value
+        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        .map((item) => item.trim())
+    : [];
+}
+
+function readContextWindow(record: Record<string, unknown>): number | undefined {
+  for (const key of ['context_window', 'contextWindow', 'context_length', 'contextLength']) {
+    const value = record[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  }
+  return undefined;
+}
+
 function toOpenAIMessage(msg: ChatMessage): OpenAI.ChatCompletionMessageParam {
   if (msg.role === 'tool') {
     return {
@@ -396,13 +429,13 @@ function stripOptionalCapabilityParams<T extends object>(
 }
 
 function shouldSendOpenAIReasoningEffort(providerName: string, model: string): boolean {
-  if (providerName !== 'openai') return false;
+  if (providerName !== 'openai') return true;
   const normalized = model.trim().toLowerCase();
   return /^(?:o\d(?:-|$)|gpt-5(?:[.-]|$)|gpt-4\.1(?:[.-]|$))/.test(normalized);
 }
 
 function shouldSendOpenAIVerbosity(providerName: string, model: string): boolean {
-  if (providerName !== 'openai') return false;
+  if (providerName !== 'openai') return true;
   return /^gpt-5(?:[.-]|$)/i.test(model.trim());
 }
 

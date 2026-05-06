@@ -44,6 +44,46 @@ describe('inferModelCapabilities', () => {
     expect(ordinary.settings.reasoningEffort.supported).toBe(false);
   });
 
+  it('prefers live provider-supported parameters over model-family assumptions', () => {
+    const capabilities = inferModelCapabilities({
+      providerType: 'openrouter',
+      model: 'openai/gpt-5.1',
+      liveModels: [
+        {
+          id: 'openai/gpt-5.1',
+          name: 'GPT-5.1',
+          provider: 'openrouter',
+          supportedParameters: [
+            'temperature',
+            'top_p',
+            'reasoning_effort',
+            'verbosity',
+            'tool_choice',
+          ],
+        },
+      ],
+    });
+
+    expect(capabilities.settings.temperature).toMatchObject({
+      supported: true,
+      source: 'api',
+    });
+    expect(capabilities.settings.reasoningEffort).toMatchObject({
+      supported: true,
+      source: 'api',
+      values: ['minimal', 'low', 'medium', 'high'],
+    });
+    expect(capabilities.settings.verbosity).toMatchObject({
+      supported: true,
+      source: 'api',
+      values: ['low', 'medium', 'high'],
+    });
+    expect(capabilities.settings.parallelToolCalls).toMatchObject({
+      supported: false,
+      source: 'api',
+    });
+  });
+
   it('maps Ollama reasoning to think mode and hides hosted-only knobs', () => {
     const capabilities = inferModelCapabilities({
       providerType: 'ollama',

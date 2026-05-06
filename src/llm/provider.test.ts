@@ -447,6 +447,45 @@ describe('OpenAIProvider compatibility', () => {
     expect(create.mock.calls[1]?.[0]).toHaveProperty('tools');
   });
 
+  it('sends configured optional capability settings to OpenAI-compatible providers', async () => {
+    const provider = new OpenAIProvider({
+      provider: 'openrouter',
+      model: 'openai/gpt-5.1',
+      apiKey: 'or-test',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      reasoning: { effort: 'high' },
+      verbosity: 'high',
+    }, 'openrouter');
+
+    const create = vi.fn().mockResolvedValue({
+      choices: [
+        {
+          message: { content: 'ok' },
+          finish_reason: 'stop',
+        },
+      ],
+      model: 'openai/gpt-5.1',
+    });
+
+    (provider as any).client = {
+      chat: {
+        completions: {
+          create,
+        },
+      },
+      models: {
+        list: vi.fn(),
+      },
+    };
+
+    await provider.chat([{ role: 'user', content: 'Hello?' }]);
+
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      reasoning_effort: 'high',
+      verbosity: 'high',
+    });
+  });
+
   it('passes JSON response format hints through to OpenAI-compatible providers', async () => {
     const provider = new OpenAIProvider({
       provider: 'openai',
@@ -598,6 +637,45 @@ describe('OpenAIProvider compatibility', () => {
 
     expect(create.mock.calls[0]?.[0]).not.toHaveProperty('models');
     expect(create.mock.calls[0]?.[0]).not.toHaveProperty('route');
+  });
+
+  it('maps OpenAI-compatible model catalog metadata into supported parameters', async () => {
+    const provider = new OpenAIProvider({
+      provider: 'openrouter',
+      model: 'openai/gpt-5.1',
+      apiKey: 'or-test',
+      baseUrl: 'https://openrouter.ai/api/v1',
+    }, 'openrouter');
+
+    (provider as any).client = {
+      chat: {
+        completions: {
+          create: vi.fn(),
+        },
+      },
+      models: {
+        list: vi.fn().mockResolvedValue([
+          {
+            id: 'openai/gpt-5.1',
+            name: 'GPT-5.1',
+            context_length: 128000,
+            supported_parameters: ['temperature', 'top_p', 'reasoning_effort', 'verbosity', 'tool_choice'],
+            capabilities: ['tools'],
+          },
+        ]),
+      },
+    };
+
+    await expect(provider.listModels()).resolves.toEqual([
+      {
+        id: 'openai/gpt-5.1',
+        name: 'GPT-5.1',
+        provider: 'openrouter',
+        contextWindow: 128000,
+        supportedParameters: ['temperature', 'top_p', 'reasoning_effort', 'verbosity', 'tool_choice'],
+        capabilities: ['tools'],
+      },
+    ]);
   });
 
   it('surfaces provider-specific model-not-found guidance for xAI', async () => {
