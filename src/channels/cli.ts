@@ -14,9 +14,18 @@ import { readFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { ChannelAdapter, MessageCallback } from './types.js';
-import type { DashboardCallbacks, DashboardCodeSessionsList, DashboardCodingBackendInfo, SSEEvent } from './web-types.js';
+import type {
+  DashboardCallbacks,
+  DashboardCodeSessionsList,
+  DashboardCodingBackendInfo,
+  DashboardModelSettingCapability,
+  DashboardProviderInfo,
+  SSEEvent,
+} from './web-types.js';
 import type { SetupApplyInput } from '../runtime/setup.js';
 import { createLogger } from '../util/logging.js';
+import { inferModelCapabilities } from '../llm/model-capabilities.js';
+import { isOllamaProviderType } from '../llm/provider-metadata.js';
 import {
   findCliHelpTopic,
 } from './cli-command-guide.js';
@@ -1689,8 +1698,55 @@ export class CLIChannel implements ChannelAdapter {
       if (p.availableModels && p.availableModels.length > 0) {
         this.write(`\n${this.bold(p.name)} models: ${p.availableModels.join(', ')}\n`);
       }
+      this.write(`${this.bold(p.name)} advanced controls: ${this.formatProviderCapabilitySummary(p)}\n`);
     }
     this.write('\n');
+  }
+
+  private formatProviderCapabilitySummary(provider: DashboardProviderInfo): string {
+    const liveModels = (provider.availableModels ?? []).map((model) => ({
+      id: model,
+      name: model,
+      provider: provider.type,
+    }));
+    const capabilities = inferModelCapabilities({
+      providerType: provider.type,
+      model: provider.model,
+      liveModels,
+    });
+    const controls = [
+      this.formatCapabilityControl('reasoning', capabilities.settings.reasoningEffort),
+      this.formatCapabilityControl('summary', capabilities.settings.reasoningSummary),
+      this.formatCapabilityControl('verbosity', capabilities.settings.verbosity),
+    ];
+    if (isOllamaProviderType(provider.type)) {
+      controls.push(this.formatCapabilityControl('think', capabilities.settings.ollamaThink));
+    }
+    const catalog = capabilities.liveModelListed
+      ? 'live model listed'
+      : 'using provider/model defaults';
+    return `${catalog}; ${controls.join('; ')}`;
+  }
+
+  private formatCapabilityControl(label: string, capability: DashboardModelSettingCapability): string {
+    if (!capability.supported) {
+      return `${label}: default`;
+    }
+    return `${label}: ${this.formatCapabilitySource(capability.source)}`;
+  }
+
+  private formatCapabilitySource(source: DashboardModelSettingCapability['source']): string {
+    switch (source) {
+      case 'api':
+        return 'live API';
+      case 'provider_metadata':
+        return 'provider metadata';
+      case 'model_heuristic':
+        return 'model family';
+      case 'fallback':
+      default:
+        return 'safe default';
+    }
   }
 
   // ─── /budget ─────────────────────────────────────────────────

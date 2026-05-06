@@ -2736,6 +2736,9 @@ describe('CLIChannel with DashboardCallbacks', () => {
     expect(text).toContain('gpt-oss:120b');
     expect(text).toContain('llama3.3');
     expect(text).toContain('mistral');
+    expect(text).toContain('advanced controls');
+    expect(text).toContain('think: provider metadata');
+    expect(text).toContain('reasoning: default');
 
     await cli.stop();
   });

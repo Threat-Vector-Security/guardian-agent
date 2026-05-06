@@ -642,6 +642,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Local Ollama and Ollama Cloud both use the same native Ollama request controls inside Guardian.',
                   'Use the advanced section when you need to tune model behavior such as max tokens, temperature, top-p, timeout, keep-alive, think mode, or native Ollama options JSON.',
                   'When model discovery is available, Guardian uses live model metadata where the provider exposes it, then falls back to safe provider/model defaults for controls such as reasoning effort or verbosity.',
+                  'CLI `/providers` also shows the capability source for advanced controls, so terminal operators can see whether a setting came from live API metadata, provider metadata, a model-family rule, or safe defaults.',
                   'Advanced controls are enhancements, not blockers. If a selected model does not expose or support a control, Guardian keeps the model usable with basic settings.',
                   'Leave advanced settings empty unless you have a concrete reason to override the defaults.',
                 ],

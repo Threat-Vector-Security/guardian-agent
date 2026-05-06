@@ -166,6 +166,7 @@ export const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
     ],
     notes: [
       'This is a provider connectivity check, not a guaranteed end-to-end inference test.',
+      'The advanced-controls line shows whether reasoning, verbosity, or thinking controls come from live API metadata, provider metadata, a model-family rule, or a safe default.',
       'For local Ollama models, use ollama run <model> "hello" to prove the selected model can actually initialize.',
     ],
   },
