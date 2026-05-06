@@ -11,6 +11,7 @@ import type {
   ChatResponse as OllamaSdkChatResponse,
   Message as OllamaMessage,
   Options as OllamaOptions,
+  ShowResponse as OllamaShowResponse,
   Tool as OllamaTool,
   ToolCall as OllamaSdkToolCall,
 } from 'ollama';
@@ -94,10 +95,27 @@ export class OllamaProvider implements LLMProvider {
     const { client, cleanup } = this.createClient();
     try {
       const list = await client.list();
-      return list.models.map((model) => ({
+      const models = list.models.map((model) => ({
         id: model.name,
         name: model.name,
         provider: this.name,
+      }));
+      return Promise.all(models.map(async (model) => {
+        try {
+          const show = await client.show({ model: model.id });
+          const capabilities = Array.isArray(show.capabilities)
+            ? show.capabilities.filter((capability): capability is string => typeof capability === 'string' && capability.trim().length > 0)
+            : [];
+          const contextWindow = readOllamaContextWindow(show);
+          return {
+            ...model,
+            ...(contextWindow ? { contextWindow } : {}),
+            ...(capabilities.length > 0 ? { capabilities } : {}),
+          };
+        } catch (err) {
+          log.debug({ err, provider: this.name, host: this.host, model: model.id }, 'Failed to load Ollama model metadata');
+          return model;
+        }
       }));
     } catch (err) {
       log.warn({ err, provider: this.name, host: this.host }, 'Failed to list Ollama models');
@@ -233,6 +251,31 @@ async function normalizeOllamaSdkErrorResponse(response: Response): Promise<Resp
     statusText: response.statusText,
     headers,
   });
+}
+
+function readOllamaContextWindow(show: OllamaShowResponse): number | undefined {
+  const info = show.model_info as unknown;
+  if (!info || typeof info !== 'object') return undefined;
+  const record = info instanceof Map
+    ? Object.fromEntries(info.entries())
+    : info as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    const normalizedKey = key.toLowerCase();
+    if (!normalizedKey.endsWith('.context_length') && normalizedKey !== 'context_length') {
+      continue;
+    }
+    const value = record[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
 }
 
 function toOllamaMessages(messages: ChatMessage[]): OllamaMessage[] {

@@ -58,6 +58,7 @@ import type {
   RemoteExecutionWorkspaceContext,
 } from '../runtime/remote-execution/types.js';
 import { MarketingStore } from './marketing-store.js';
+import type { ProviderToolModelItem } from './builtin/provider-tools.js';
 import { ToolApprovalStore } from './approvals.js';
 import { ToolRegistry } from './registry.js';
 import { canonicalizePolicyPathValue, normalizePathForHost } from './path-normalization.js';
@@ -636,7 +637,7 @@ export interface ToolExecutorOptions {
     isPreferredFrontier?: boolean;
   }>>;
   /** Load the available models for one configured LLM provider profile. */
-  listModelsForLlmProvider?: (providerName: string) => Promise<string[]>;
+  listModelsForLlmProvider?: (providerName: string) => Promise<Array<string | ProviderToolModelItem>>;
   /** Persist approval-gated provider/default/preferred routing updates. */
   onLlmProviderConfigUpdate?: (updates: ConfigUpdate) => Promise<DashboardMutationResult>;
   /** Async pre-execution hook (Guardian Agent inline evaluation). Called after

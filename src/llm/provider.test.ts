@@ -211,6 +211,47 @@ describe('OllamaProvider', () => {
     vi.unstubAllGlobals();
   });
 
+  it('enriches Ollama models with live capability metadata from /api/show', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/tags')) {
+        return new Response(JSON.stringify({
+          models: [
+            { name: 'qwen3:32b', size: 1000 },
+          ],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/show')) {
+        return new Response(JSON.stringify({
+          capabilities: ['completion', 'thinking'],
+          model_info: {
+            'qwen3.context_length': 32768,
+          },
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ error: 'unexpected request' }), { status: 404 });
+    }));
+
+    const config: LLMConfig = { provider: 'ollama', model: 'qwen3:32b' };
+    const provider = createProvider(config);
+    const models = await provider.listModels();
+
+    expect(models[0]).toMatchObject({
+      id: 'qwen3:32b',
+      provider: 'ollama',
+      contextWindow: 32768,
+      capabilities: ['completion', 'thinking'],
+    });
+
+    vi.unstubAllGlobals();
+  });
+
   it('should return empty list on connection failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
 

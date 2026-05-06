@@ -131,6 +131,48 @@ describe('provider tools', () => {
     });
   });
 
+  it('returns structured model metadata when provider discovery exposes capabilities', async () => {
+    const registry = new ToolRegistry();
+    registerBuiltinProviderTools({
+      registry,
+      requireString,
+      listProviders: async () => [{
+        name: 'ollama',
+        type: 'ollama',
+        model: 'qwen3:32b',
+        locality: 'local',
+        tier: 'local',
+        connected: true,
+        availableModels: ['qwen3:32b'],
+        isDefault: true,
+      }],
+      listModelsForProvider: async () => [{
+        id: 'qwen3:32b',
+        name: 'qwen3:32b',
+        provider: 'ollama',
+        contextWindow: 32768,
+        capabilities: ['completion', 'thinking'],
+      }],
+    });
+
+    const result = await runRegisteredTool(registry, 'llm_provider_models', {
+      provider: 'ollama',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      provider: 'ollama',
+      activeModel: 'qwen3:32b',
+      modelCount: 1,
+      models: ['qwen3:32b'],
+      modelDetails: [{
+        id: 'qwen3:32b',
+        contextWindow: 32768,
+        capabilities: ['completion', 'thinking'],
+      }],
+    });
+  });
+
   it('updates the preferred managed-cloud provider bucket', async () => {
     const registry = new ToolRegistry();
     const updateConfig = vi.fn(async () => ({ success: true, message: 'updated' }));

@@ -60,4 +60,35 @@ describe('inferModelCapabilities', () => {
     });
     expect(capabilities.settings.toolChoice.supported).toBe(false);
   });
+
+  it('uses live Ollama thinking capability metadata when available', () => {
+    const thinking = inferModelCapabilities({
+      providerType: 'ollama',
+      model: 'qwen3:32b',
+      liveModels: [
+        { id: 'qwen3:32b', name: 'qwen3:32b', provider: 'ollama', capabilities: ['completion', 'thinking'] },
+      ],
+    });
+    const plain = inferModelCapabilities({
+      providerType: 'ollama',
+      model: 'mistral',
+      liveModels: [
+        { id: 'mistral', name: 'mistral', provider: 'ollama', capabilities: ['completion'] },
+      ],
+    });
+
+    expect(thinking.settings.ollamaThink).toMatchObject({
+      supported: true,
+      source: 'api',
+    });
+    expect(thinking.settings.reasoningEffort).toMatchObject({
+      supported: true,
+      source: 'api',
+    });
+    expect(plain.settings.ollamaThink).toMatchObject({
+      supported: false,
+      source: 'api',
+    });
+    expect(plain.settings.reasoningEffort.supported).toBe(false);
+  });
 });

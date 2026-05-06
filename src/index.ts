@@ -79,7 +79,7 @@ import { CodeWorkspaceTrustService } from './runtime/code-workspace-trust-servic
 import { PackageInstallNativeProtectionScanner } from './runtime/package-install-native-protection.js';
 import { PackageInstallTrustService } from './runtime/package-install-trust-service.js';
 import { getReferenceGuide, formatGuideForTelegram } from './reference-guide.js';
-import type { LLMProvider } from './llm/types.js';
+import type { LLMProvider, ModelInfo } from './llm/types.js';
 import { IdentityService } from './runtime/identity.js';
 import { AnalyticsService } from './runtime/analytics.js';
 import { getQuickActions } from './quick-actions.js';
@@ -715,7 +715,7 @@ function buildDashboardCallbacks(
     isPreferredManagedCloud?: boolean;
     isPreferredFrontier?: boolean;
   }>>;
-  listModelsForConfiguredLlmProvider: (providerName: string) => Promise<string[]>;
+  listModelsForConfiguredLlmProvider: (providerName: string) => Promise<ModelInfo[]>;
   applyDirectLlmProviderConfigUpdate: (updates: import('./channels/web-types.js').ConfigUpdate) => Promise<DashboardMutationResult>;
 } {
   const summarizeMemoryText = (value: string | undefined, maxChars = 160): string => {
@@ -1609,7 +1609,7 @@ function buildDashboardCallbacks(
         };
       });
   };
-  const listModelsForConfiguredLlmProvider = async (providerName: string): Promise<string[]> => {
+  const listModelsForConfiguredLlmProvider = async (providerName: string): Promise<ModelInfo[]> => {
     const normalizedProviderName = providerName.trim();
     if (!normalizedProviderName) {
       throw new Error('Provider name is required to load available models.');
@@ -1627,7 +1627,13 @@ function buildDashboardCallbacks(
       throw new Error(`Provider '${normalizedProviderName}' is missing a resolved credential, so available models cannot be loaded.`);
     }
     const models = await getProviderRegistry().createProvider(resolvedConfig).listModels();
-    return Array.from(new Set(models.map((model) => model.id)));
+    const uniqueModels = new Map<string, ModelInfo>();
+    for (const model of models) {
+      if (!uniqueModels.has(model.id)) {
+        uniqueModels.set(model.id, model);
+      }
+    }
+    return [...uniqueModels.values()];
   };
   const assistantDashboard = createAssistantDashboardCallbacks({
     configRef,

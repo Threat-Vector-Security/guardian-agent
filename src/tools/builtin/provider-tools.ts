@@ -16,11 +16,21 @@ export interface ProviderToolInventoryItem {
   isPreferredFrontier?: boolean;
 }
 
+export interface ProviderToolModelItem {
+  id: string;
+  name?: string;
+  provider?: string;
+  contextWindow?: number;
+  capabilities?: string[];
+}
+
+type ProviderToolModelCatalog = Array<string | ProviderToolModelItem>;
+
 interface ProviderToolRegistrarContext {
   registry: ToolRegistry;
   requireString: (value: unknown, field: string) => string;
   listProviders?: () => Promise<ProviderToolInventoryItem[]>;
-  listModelsForProvider?: (providerName: string) => Promise<string[]>;
+  listModelsForProvider?: (providerName: string) => Promise<ProviderToolModelCatalog>;
   updateConfig?: (updates: ConfigUpdate) => Promise<DashboardMutationResult>;
 }
 
@@ -46,6 +56,30 @@ function buildProviderSummary(provider: ProviderToolInventoryItem | undefined): 
     isPreferredManagedCloud: !!provider.isPreferredManagedCloud,
     isPreferredFrontier: !!provider.isPreferredFrontier,
     ...(provider.availableModels?.length ? { availableModels: provider.availableModels } : {}),
+  };
+}
+
+function normalizeProviderModelCatalog(models: ProviderToolModelCatalog): {
+  modelIds: string[];
+  modelDetails: ProviderToolModelItem[];
+  hasModelDetails: boolean;
+} {
+  const details = models.map((model) => {
+    if (typeof model === 'string') {
+      return { id: model };
+    }
+    return model;
+  }).filter((model) => model.id.trim().length > 0);
+  const modelIds = Array.from(new Set(details.map((model) => model.id)));
+  return {
+    modelIds,
+    modelDetails: details,
+    hasModelDetails: details.some((model) => (
+      typeof model.name === 'string'
+      || typeof model.provider === 'string'
+      || typeof model.contextWindow === 'number'
+      || (Array.isArray(model.capabilities) && model.capabilities.length > 0)
+    )),
   };
 }
 
@@ -126,7 +160,7 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
       if (!provider) {
         return { success: false, error: `Provider '${providerName}' is not configured.` };
       }
-      const models = await context.listModelsForProvider(providerName);
+      const models = normalizeProviderModelCatalog(await context.listModelsForProvider(providerName));
       return {
         success: true,
         output: {
@@ -134,8 +168,9 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
           activeModel: provider.model,
           locality: provider.locality,
           connected: provider.connected,
-          modelCount: models.length,
-          models,
+          modelCount: models.modelIds.length,
+          models: models.modelIds,
+          ...(models.hasModelDetails ? { modelDetails: models.modelDetails } : {}),
         },
       };
     },
@@ -201,11 +236,11 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
           if (!model) {
             return { success: false, error: 'model is required for set_model.' };
           }
-          const models = await context.listModelsForProvider(providerName);
-          if (!models.includes(model)) {
+          const models = normalizeProviderModelCatalog(await context.listModelsForProvider(providerName));
+          if (!models.modelIds.includes(model)) {
             return {
               success: false,
-              error: `Model '${model}' is not available for provider '${providerName}'. Available models: ${models.join(', ') || '(none)'}.`,
+              error: `Model '${model}' is not available for provider '${providerName}'. Available models: ${models.modelIds.join(', ') || '(none)'}.`,
             };
           }
           if (provider.model === model) {

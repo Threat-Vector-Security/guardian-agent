@@ -38,6 +38,7 @@ export function inferModelCapabilities(input: {
   const providerType = input.providerType.trim().toLowerCase();
   const model = input.model.trim();
   const liveModel = input.liveModels?.find((candidate) => candidate.id === model);
+  const liveCapabilitySet = buildLiveCapabilitySet(liveModel);
   const isOllama = isOllamaProviderType(providerType);
   const isOpenAi = providerType === 'openai';
   const isAnthropic = providerType === 'anthropic';
@@ -63,8 +64,8 @@ export function inferModelCapabilities(input: {
       topP: isOllama || isOpenAi || isAnthropic || isOpenAiCompatible
         ? supported('provider_metadata')
         : unsupported('fallback', 'No first-class top-p mapping is registered for this provider.'),
-      reasoningEffort: inferReasoningEffort(providerType, model),
-      reasoningSummary: inferReasoningSummary(providerType, model),
+      reasoningEffort: inferReasoningEffort(providerType, model, liveModel, liveCapabilitySet),
+      reasoningSummary: inferReasoningSummary(providerType, model, liveModel, liveCapabilitySet),
       verbosity: inferVerbosity(providerType, model),
       parallelToolCalls: isOpenAi || isOpenAiCompatible
         ? supported('provider_metadata', true)
@@ -73,13 +74,21 @@ export function inferModelCapabilities(input: {
         ? supported('provider_metadata', 'auto', undefined, ['auto', 'none', 'required'])
         : unsupported('fallback', 'This provider path does not expose a first-class tool-choice switch.'),
       ollamaThink: isOllama
-        ? supported('provider_metadata', 'default', undefined, ['default', 'off', 'on', 'low', 'medium', 'high'])
+        ? inferOllamaThink(liveModel, liveCapabilitySet)
         : unsupported('provider_metadata', 'Ollama thinking mode is only available on Ollama-family providers.'),
       nativeOllamaOptions: isOllama
         ? supported('provider_metadata')
         : unsupported('provider_metadata', 'Native Ollama options are only available on Ollama-family providers.'),
     },
   };
+}
+
+function buildLiveCapabilitySet(liveModel: ModelInfo | undefined): Set<string> | undefined {
+  if (!liveModel?.capabilities) return undefined;
+  const normalized = liveModel.capabilities
+    .map((capability) => capability.trim().toLowerCase())
+    .filter(Boolean);
+  return normalized.length > 0 ? new Set(normalized) : undefined;
 }
 
 function supported(
@@ -105,15 +114,15 @@ function unsupported(source: ModelCapabilitySource, note: string): ModelSettingC
   };
 }
 
-function inferReasoningEffort(providerType: string, model: string): ModelSettingCapability {
+function inferReasoningEffort(
+  providerType: string,
+  model: string,
+  liveModel?: ModelInfo,
+  liveCapabilities?: Set<string>,
+): ModelSettingCapability {
   const normalizedModel = model.trim().toLowerCase();
   if (isOllamaProviderType(providerType)) {
-    return supported(
-      'provider_metadata',
-      'default',
-      'Mapped to Ollama think mode for Ollama-family models.',
-      ['default', 'off', 'on', 'low', 'medium', 'high'],
-    );
+    return inferOllamaThink(liveModel, liveCapabilities);
   }
   if (providerType === 'openai' && /^(?:o\d(?:-|$)|gpt-5(?:[.-]|$)|gpt-4\.1(?:[.-]|$))/.test(normalizedModel)) {
     return supported('model_heuristic', 'medium', undefined, ['minimal', 'low', 'medium', 'high']);
@@ -124,8 +133,52 @@ function inferReasoningEffort(providerType: string, model: string): ModelSetting
   );
 }
 
-function inferReasoningSummary(providerType: string, model: string): ModelSettingCapability {
-  const reasoning = inferReasoningEffort(providerType, model);
+function inferOllamaThink(
+  liveModel: ModelInfo | undefined,
+  liveCapabilities: Set<string> | undefined,
+): ModelSettingCapability {
+  const values = ['default', 'off', 'on', 'low', 'medium', 'high'];
+  if (!liveModel) {
+    return supported(
+      'provider_metadata',
+      'default',
+      'Mapped to Ollama think mode for Ollama-family models when the model supports thinking.',
+      values,
+    );
+  }
+  if (!liveCapabilities) {
+    return supported(
+      'provider_metadata',
+      'default',
+      'The live model catalog did not include per-model capability metadata, so Guardian keeps the provider-level Ollama thinking control available.',
+      values,
+    );
+  }
+  if (
+    liveCapabilities.has('thinking')
+    || liveCapabilities.has('think')
+    || liveCapabilities.has('reasoning')
+  ) {
+    return supported(
+      'api',
+      'default',
+      'The live model API advertises thinking support for this model.',
+      values,
+    );
+  }
+  return unsupported(
+    'api',
+    'The live model API did not advertise thinking support for this model.',
+  );
+}
+
+function inferReasoningSummary(
+  providerType: string,
+  model: string,
+  liveModel?: ModelInfo,
+  liveCapabilities?: Set<string>,
+): ModelSettingCapability {
+  const reasoning = inferReasoningEffort(providerType, model, liveModel, liveCapabilities);
   if (!reasoning.supported || isOllamaProviderType(providerType)) {
     return unsupported(
       reasoning.source,

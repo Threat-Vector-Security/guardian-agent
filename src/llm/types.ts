@@ -63,6 +63,8 @@ export interface ModelInfo {
   provider: string;
   /** Context window size (tokens). */
   contextWindow?: number;
+  /** Provider-advertised model capabilities, when the live model API exposes them. */
+  capabilities?: string[];
 }
 
 /** Definition of a tool the LLM can call. */
