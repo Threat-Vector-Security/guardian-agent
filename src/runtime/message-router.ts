@@ -25,6 +25,8 @@ export interface RouteDecision {
   agentId: string;
   confidence: RouteConfidence;
   reason: string;
+  /** Short, user-safe explanation for visible routing feedback. */
+  notice?: string;
   /** Agent to try if the primary agent fails. */
   fallbackAgentId?: string;
   /** Complexity score (0-1) when tier routing was used. */
@@ -335,6 +337,7 @@ export class MessageRouter {
         agentId: externalAgent!.id,
         confidence: 'medium',
         reason: preferred.reason,
+        ...(preferred.notice ? { notice: preferred.notice } : {}),
         ...(preferred.complexityScore !== undefined ? { complexityScore: preferred.complexityScore } : {}),
         tier: 'external',
       };
@@ -344,6 +347,7 @@ export class MessageRouter {
         agentId: localAgent.id,
         confidence: 'medium',
         reason: preferred.reason,
+        ...(preferred.notice ? { notice: preferred.notice } : {}),
         ...(preferred.complexityScore !== undefined ? { complexityScore: preferred.complexityScore } : {}),
         tier: 'local',
       };
@@ -355,6 +359,7 @@ export class MessageRouter {
       agentId: primary.id,
       confidence: preferred.confidence,
       reason: preferred.reason,
+      ...(preferred.notice ? { notice: preferred.notice } : {}),
       fallbackAgentId: fallback.id,
       ...(preferred.complexityScore !== undefined ? { complexityScore: preferred.complexityScore } : {}),
       tier: preferred.tier,
@@ -402,6 +407,7 @@ export class MessageRouter {
     tier: 'local' | 'external';
     confidence: RouteConfidence;
     reason: string;
+    notice?: string;
     complexityScore?: number;
   } {
     if (decision.entities.codingBackend && decision.entities.codingBackendRequested === true) {
@@ -417,6 +423,7 @@ export class MessageRouter {
         tier: 'external',
         confidence: decision.confidence === 'low' ? 'medium' : 'high',
         reason: `intent route=${decision.route} high-judgment repo work contextPressure=${decision.expectedContextPressure} answerPath=${decision.preferredAnswerPath} preferredTier=${decision.preferredTier} → tier external`,
+        notice: 'Auto selected the external lane for higher-context repo work.',
       };
     }
 

@@ -35,7 +35,7 @@ import {
   formatPendingApprovalMessage,
   shouldUseStructuredPendingApprovalMessage,
 } from '../runtime/pending-approval-copy.js';
-import { formatCompactResponseSourceLabel } from '../runtime/model-routing-ux.js';
+import { formatCompactResponseSourceLabel, formatResponseSourceNotice } from '../runtime/model-routing-ux.js';
 import { resolveCodeSessionTarget } from '../runtime/code-session-targets.js';
 import type { DashboardRunDetail, DashboardRunTimelineItem, DashboardRunStatus } from '../runtime/run-timeline.js';
 import { assistantTraceMatchesContextFilters } from '../runtime/trace-context-filters.js';
@@ -230,6 +230,11 @@ function formatCliResponseContent(response: { content: string; metadata?: Record
     ? formatPendingApprovalMessage(approvals)
     : (response.content.trim() || (approvals.length > 0 ? formatPendingApprovalMessage(approvals) : ''));
   const sourceLabel = formatCompactResponseSourceLabel(response.metadata);
+  const sourceNotice = formatResponseSourceNotice(response.metadata);
+  const sourcePrefix = sourceLabel ? `${sourceLabel} ` : '';
+  if (sourceNotice) {
+    return `${sourcePrefix}${sourceNotice}\n${content}`;
+  }
   return sourceLabel ? `${sourceLabel} ${content}` : content;
 }
 

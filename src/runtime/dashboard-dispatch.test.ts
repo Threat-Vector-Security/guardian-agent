@@ -541,6 +541,49 @@ describe('createDashboardMessageDispatcher', () => {
     });
   });
 
+  it('carries route notices into response-source metadata', async () => {
+    const options = createOptions({
+      runtime: {
+        dispatchMessage: vi.fn(async () => ({
+          content: 'External review complete.',
+          metadata: {
+            responseSource: {
+              locality: 'external',
+              providerName: 'openai',
+              providerTier: 'frontier',
+              model: 'gpt-5.4',
+            },
+          },
+        })),
+      },
+    });
+    const dispatchDashboardMessage = createDashboardMessageDispatcher(options);
+
+    const result = await dispatchDashboardMessage({
+      agentId: 'external-agent',
+      msg: {
+        content: 'review the repo',
+        userId: 'web-user',
+        channel: 'web',
+      },
+      routeDecision: {
+        agentId: 'external-agent',
+        confidence: 'high',
+        reason: 'intent route=coding_task high-judgment repo work',
+        tier: 'external',
+        notice: 'Auto selected the external lane for higher-context repo work.',
+      },
+    });
+
+    expect(result.metadata?.responseSource).toMatchObject({
+      locality: 'external',
+      providerName: 'openai',
+      providerTier: 'frontier',
+      tier: 'external',
+      notice: 'Auto selected the external lane for higher-context repo work.',
+    });
+  });
+
   it('does not graft the selected profile onto a fallback provider response', async () => {
     const config = createConfig();
     config.llm['openrouter-direct'] = {

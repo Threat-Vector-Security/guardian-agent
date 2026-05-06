@@ -24,4 +24,15 @@ describe('describeResponseSource', () => {
     expect(source.providerTier).toBe('managed_cloud');
     expect(source.label).toBe('managed cloud · ollama-cloud');
   });
+
+  it('includes routing notices in the badge title', () => {
+    const source = describeResponseSource({
+      locality: 'external',
+      providerTier: 'frontier',
+      notice: 'Auto selected the external lane for higher-context repo work.',
+    });
+
+    expect(source.label).toBe('frontier');
+    expect(source.title).toContain('Auto selected the external lane for higher-context repo work.');
+  });
 });

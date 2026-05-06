@@ -236,6 +236,7 @@ export function createDashboardMessageDispatcher(args: {
         : args.router.findAgentByRole('external')?.id === agentId
           ? 'external'
           : undefined);
+    const routeNotice = routeDecision?.notice?.trim() || undefined;
     const mergeResponseSourceMetadata = (metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
       const existingResponseSource = metadata?.responseSource && typeof metadata.responseSource === 'object'
         ? metadata.responseSource as Record<string, unknown>
@@ -265,12 +266,13 @@ export function createDashboardMessageDispatcher(args: {
       const mismatchNotice = requestedTier && resolvedLocality && requestedTier !== resolvedLocality
         ? `Requested ${requestedTier} route, final response came from ${resolvedLocality}${resolvedProviderName ? ` (${resolvedProviderName})` : ''}.`
         : providerFallbackNotice;
-      const mergedResponseSource = existingResponseSource || mismatchNotice
+      const notice = mismatchNotice ?? routeNotice;
+      const mergedResponseSource = existingResponseSource || notice
         ? {
             ...(selectedSourceRecord ?? {}),
             ...(existingResponseSource ?? {}),
             ...(requestedTier ? { tier: requestedTier } : {}),
-            ...(mismatchNotice && !existingResponseSource?.notice ? { notice: mismatchNotice } : {}),
+            ...(notice && !existingResponseSource?.notice ? { notice } : {}),
           }
         : undefined;
       const mergedMetadata: Record<string, unknown> = {

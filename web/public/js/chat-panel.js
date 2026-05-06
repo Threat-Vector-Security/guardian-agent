@@ -1398,10 +1398,22 @@ function mergeResponseActivitySummary(activitySummary, metadata) {
   return {
     label: semanticItem.title,
     items,
+    ...(semanticItem.persistent === true ? { persistent: true } : {}),
   };
 }
 
 function buildSemanticResponseActivityItem(metadata) {
+  const responseNotice = typeof metadata?.responseSource?.notice === 'string'
+    ? metadata.responseSource.notice.trim()
+    : '';
+  if (responseNotice) {
+    return {
+      title: 'Routing',
+      detail: responseNotice,
+      persistent: true,
+    };
+  }
+
   const planner = metadata?.plannerExecution;
   if (planner && typeof planner === 'object') {
     const status = String(planner.status || '').trim();

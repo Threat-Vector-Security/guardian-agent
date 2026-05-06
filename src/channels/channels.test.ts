@@ -212,6 +212,31 @@ describe('CLIChannel', () => {
     await cli.stop();
   });
 
+  it('shows response source notices for chat replies', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const cli = new CLIChannel({ input, output });
+
+    await cli.start(async () => ({
+      content: 'Here is the repo review.',
+      metadata: {
+        responseSource: {
+          locality: 'external',
+          providerTier: 'frontier',
+          notice: 'Auto selected the external lane for higher-context repo work.',
+        },
+      },
+    }));
+
+    input.write('review it\n');
+    await new Promise(r => setTimeout(r, 150));
+
+    const text = output.read()?.toString() ?? '';
+    expect(text).toContain('[frontier] Auto selected the external lane for higher-context repo work.\nHere is the repo review.');
+
+    await cli.stop();
+  });
+
   it('supports legacy pendingApprovals metadata in CLI approval prompts', async () => {
     const input = new PassThrough();
     const output = new PassThrough();

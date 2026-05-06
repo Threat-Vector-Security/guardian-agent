@@ -219,3 +219,8 @@ export function formatCompactResponseSourceLabel(metadata?: Record<string, unkno
   const parts: string[] = [source.providerTier ? formatProviderTierLabel(source.providerTier) : source.locality];
   return `[${parts.join(' · ')}]`;
 }
+
+export function formatResponseSourceNotice(metadata?: Record<string, unknown>): string {
+  const source = readResponseSourceMetadata(metadata);
+  return source?.notice?.trim() ?? '';
+}

@@ -775,6 +775,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Guardian still requires at least one enabled AI profile overall, so disabling the last remaining provider is rejected.',
                   'In Configuration > AI Providers > Model Tier Selection Policy choose whether Auto should stay balanced or bias more aggressively toward frontier quality.',
                   'Balanced Auto can keep lighter external work on the selected managed-cloud family while escalating heavier repo-grounded planning, review, verification, synthesis, or security-heavy work to the frontier default. Basic repo inspection uses the managed-cloud model with an iterative search/read loop.',
+                  'When Auto chooses a stronger lane for higher-context repo work, web chat and CLI can show a short routing notice beside the normal response-source label.',
                   'Provider changes propagate to the running web UI immediately.',
                 ],
               },

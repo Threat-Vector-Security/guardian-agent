@@ -535,6 +535,7 @@ describe('MessageRouter', () => {
       expect(result.confidence).toBe('high');
       expect(result.reason).toContain('high-judgment repo work');
       expect(result.reason).toContain('preferredTier=local');
+      expect(result.notice).toBe('Auto selected the external lane for higher-context repo work.');
       expect(result.fallbackAgentId).toBe('local');
     });
 

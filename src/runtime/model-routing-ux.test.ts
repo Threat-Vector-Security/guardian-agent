@@ -3,6 +3,7 @@ import {
   buildLocalModelTooComplicatedMessage,
   formatCompactResponseSourceLabel,
   formatResponseSourceLabel,
+  formatResponseSourceNotice,
   isLocalToolCallParseError,
   readResponseSourceMetadata,
   shouldBypassLocalModelComplexityGuard,
@@ -72,6 +73,16 @@ describe('model-routing-ux', () => {
         usedFallback: true,
       },
     })).toBe('[managed cloud]');
+  });
+
+  it('formats response source notices', () => {
+    expect(formatResponseSourceNotice({
+      responseSource: {
+        locality: 'external',
+        notice: 'Auto selected the external lane for higher-context repo work.',
+      },
+    })).toBe('Auto selected the external lane for higher-context repo work.');
+    expect(formatResponseSourceNotice({})).toBe('');
   });
 
   it('returns the friendly local-model complexity message', () => {
