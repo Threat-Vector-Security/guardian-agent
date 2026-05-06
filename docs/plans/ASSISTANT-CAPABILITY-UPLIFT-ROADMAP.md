@@ -36,7 +36,7 @@ What is already done:
 - stronger operator visibility through routing trace, execution timeline, matched-run correlation, and deep links into coding sessions and exact events
 - delegated worker lineage, bounded handoff summaries, and explicit follow-up policy
 - delegated run classes for `in_invocation`, `short_lived`, `long_running`, and `automation_owned`
-- bounded operator controls for held delegated results: replay, keep-held, and dismiss
+- bounded operator controls for held delegated results: replay, defer, and dismiss
 
 What is not fully done yet:
 

@@ -184,7 +184,7 @@ The first runtime-foundation slice is now landed:
 - delegated run classes now exist for `in_invocation`, `short_lived`, `long_running`, and `automation_owned`
 - delegated run-class selection and follow-up defaults are now centralized so ordinary code-session replies stay inline while explicit/background delegated runs can be held for operator review
 - approved delegated tool completions now stamp run-class metadata into routing trace and timeline payloads, improving class-based inspection outside the brokered worker completion path
-- held delegated results can now stay operator-held with bounded replay, keep-held, and dismiss controls exposed through Dashboard, web API, and CLI
+- held delegated results can now stay operator-held with bounded replay, defer, and dismiss controls exposed through Dashboard, web API, and CLI
 
 This means the plan has moved beyond design-only status.
 
@@ -196,18 +196,18 @@ This means the plan has moved beyond design-only status.
 - approval blockers, clarification blockers, and workspace-switch blockers now have different delegated follow-up behavior instead of one generic path
 - delegated status is visible in assistant job views, dispatch traces, and the unified execution timeline
 - longer-running delegated classes can now hold results for operator review instead of always forcing immediate inline reporting
-- operators can replay, keep held, or dismiss those held delegated results through bounded controls
+- operators can replay, defer, or dismiss those held delegated results through bounded controls
 - Runtime Execution and assistant job views can filter delegated work by run class, reporting mode, and unresolved blocker kind
 
 ## Still To Do For Future Uplift
 
 - extend the class model into richer long-running/background delegation behavior rather than only bounded completion handling
-- add more explicit operator controls for deferred follow-up and replay decisions as the runtime grows
+- add richer scheduled follow-up controls as the long-running runtime grows
 
 The next implementation slice should focus on:
 
 - continuity-aware long-running/background execution beyond bounded completion handling
-- richer deferred follow-up controls as background runtime ownership grows
+- richer scheduled follow-up controls as background runtime ownership grows
 - additional harness coverage for replay/defer behavior once long-running execution is active
 
 ---

@@ -2169,10 +2169,10 @@ export class WorkerManager {
       return { success: false, message: `Job ${jobId} has already been dismissed.`, statusCode: 409, errorCode: 'JOB_ALREADY_DISMISSED' };
     }
 
-    if (action === 'keep_held') {
-      return this.updateDelegatedJobFollowUpState(job, delegated, 'kept_held', {
-        successMessage: `Held delegated result for ${jobId}.`,
-        auditActionType: 'delegated_worker_followup_kept',
+    if (action === 'defer' || action === 'keep_held') {
+      return this.updateDelegatedJobFollowUpState(job, delegated, 'deferred', {
+        successMessage: `Deferred held delegated result for ${jobId}.`,
+        auditActionType: 'delegated_worker_followup_deferred',
         operatorAction: action,
         ...(actor ? { actor } : {}),
       });
@@ -3711,6 +3711,8 @@ function describeDelegatedFollowUpTimelineDetail(
   switch (operatorState) {
     case 'replayed':
       return 'Operator replayed the held delegated result to the conversation.';
+    case 'deferred':
+      return 'Operator deferred the delegated result for later review.';
     case 'kept_held':
       return 'Operator kept the delegated result held for later review.';
     case 'dismissed':

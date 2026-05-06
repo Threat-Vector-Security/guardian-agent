@@ -104,10 +104,10 @@ Recommended reading order:
 - delegated follow-up state now projects into assistant-dispatch traces and the unified execution timeline through bounded handoff nodes instead of only raw delegated prose
 - delegated run classes now exist for `in_invocation`, `short_lived`, `long_running`, and `automation_owned` work, with `long_running` and `automation_owned` able to hold results for operator review
 - delegated worker producers now stamp run-class metadata from explicit policy, automation origin, direct-reasoning mode, background delegation signals, and approved delegated tool completions before job, trace, and timeline state is recorded
-- Dashboard `Agent Runtime`, the web assistant API, and CLI `/assistant jobs followup <jobId> <replay|keep_held|dismiss>` now expose bounded operator controls for held delegated results
-- held delegated result actions now preserve execution lineage, surface id, continuity key, active execution refs, code-session id, and run class through replay, keep-held, and dismiss updates
-- held delegated result replay, keep-held, and dismiss actions now emit shared run-timeline breadcrumbs on the correlated parent and delegated task runs, carrying continuity and execution lineage when available
-- held delegated result replay, keep-held, and dismiss actions now emit routing-trace rows with bounded job, execution, continuity, run-class, operator-action, and channel-supplied actor/surface fields for harness troubleshooting
+- Dashboard `Agent Runtime`, the web assistant API, and CLI `/assistant jobs followup <jobId> <replay|defer|dismiss>` now expose bounded operator controls for held delegated results
+- held delegated result actions now preserve execution lineage, surface id, continuity key, active execution refs, code-session id, and run class through replay, defer, and dismiss updates
+- held delegated result replay, defer, and dismiss actions now emit shared run-timeline breadcrumbs on the correlated parent and delegated task runs, carrying continuity and execution lineage when available
+- held delegated result replay, defer, and dismiss actions now emit routing-trace rows with bounded job, execution, continuity, run-class, operator-action, and channel-supplied actor/surface fields for harness troubleshooting
 
 ---
 

@@ -1528,8 +1528,8 @@ function renderAssistantJobActions(job) {
       ${actions.includes('replay')
         ? `<button class="btn btn-secondary btn-sm" type="button" data-assistant-job-action="replay" data-assistant-job-id="${escAttr(job.id || '')}">Replay</button>`
         : ''}
-      ${actions.includes('keep_held')
-        ? `<button class="btn btn-secondary btn-sm" type="button" data-assistant-job-action="keep_held" data-assistant-job-id="${escAttr(job.id || '')}">Keep Held</button>`
+      ${(actions.includes('defer') || actions.includes('keep_held'))
+        ? `<button class="btn btn-secondary btn-sm" type="button" data-assistant-job-action="${actions.includes('defer') ? 'defer' : 'keep_held'}" data-assistant-job-id="${escAttr(job.id || '')}">Defer</button>`
         : ''}
       ${actions.includes('dismiss')
         ? `<button class="btn btn-secondary btn-sm" type="button" data-assistant-job-action="dismiss" data-assistant-job-id="${escAttr(job.id || '')}">Dismiss</button>`

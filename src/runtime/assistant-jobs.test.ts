@@ -218,7 +218,36 @@ describe('AssistantJobTracker', () => {
       label: 'Held for operator review',
       needsOperatorAction: true,
       operatorState: 'pending',
-      actions: ['replay', 'keep_held', 'dismiss'],
+      actions: ['replay', 'defer', 'dismiss'],
+    });
+  });
+
+  it('labels deferred delegated jobs with replay controls', () => {
+    const display = buildAssistantJobDisplay({
+      source: 'system',
+      detail: 'Brokered worker dispatch for local',
+      metadata: {
+        delegation: {
+          kind: 'brokered_worker',
+          originChannel: 'web',
+          runClass: 'long_running',
+          handoff: {
+            summary: 'Repository digest is complete.',
+            runClass: 'long_running',
+            nextAction: 'Replay or dismiss the held delegated result.',
+            reportingMode: 'held_for_operator',
+            operatorState: 'deferred',
+          },
+        },
+      },
+    });
+
+    expect(display.followUp).toMatchObject({
+      reportingMode: 'held_for_operator',
+      label: 'Deferred for later review',
+      needsOperatorAction: true,
+      operatorState: 'deferred',
+      actions: ['replay', 'defer', 'dismiss'],
     });
   });
 

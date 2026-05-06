@@ -22,7 +22,7 @@ Current as-built deltas:
 - Automations history deep links support `assistantRunId` and `assistantRunItemId` so a caller can land on a specific timeline event instead of only the run row
 - Coding Workspace deep links support `sessionId`, `assistantRunId`, and `assistantRunItemId` so a caller can land on the exact session-local activity event instead of only the run card
 - System `Agent Runtime` and CLI `/assistant jobs` now expose merged assistant and delegated-worker jobs with bounded origin, outcome, and follow-up summaries, including replay controls for held delegated results
-- delegated worker follow-up is now projected into assistant-dispatch traces and the global execution timeline as `Delegated follow-up` handoff nodes, including blocked approval-held and status-only outcomes; operator replay, keep-held, and dismiss actions for held results are also projected as bounded `note` breadcrumbs on the correlated parent and delegated task runs
+- delegated worker follow-up is now projected into assistant-dispatch traces and the global execution timeline as `Delegated follow-up` handoff nodes, including blocked approval-held and status-only outcomes; operator replay, defer, and dismiss actions for held results are also projected as bounded `note` breadcrumbs on the correlated parent and delegated task runs
 - delegated worker lifecycle is now also projected live into the global execution timeline as `handoff_started`, live `note`, and terminal `handoff_completed` items so operators can watch brokered workers start, run, block, complete, or fail without waiting for the final reply
 - graph-backed timeline rows now include a bounded allowlisted detail payload for useful operator facts such as result status, verification decision, artifact trust, run class, reporting mode, worker id, and task-run id
 - insufficiency-driven delegated retries now surface as a distinct retry breadcrumb between the running and terminal lifecycle events, and routing trace rows record that retry as `delegated_worker_retrying` with the stronger execution-profile details when Guardian escalates the child run
@@ -102,7 +102,7 @@ Current delegation-related sources of truth also include:
   - producer-owned delegated run-class policy for explicit, automation-owned, direct-reasoning, coding-session, and orchestration-role contexts
   - live delegated-worker lifecycle updates that feed the shared run timeline and routing trace
   - server-owned delegated follow-up policy (`inline_response`, `held_for_approval`, `status_only`, operator-held review)
-  - held-result replay, keep-held, and dismiss controls for operator-held delegated completions
+  - held-result replay, defer, and dismiss controls for operator-held delegated completions
 
 ## As-Built Architecture
 

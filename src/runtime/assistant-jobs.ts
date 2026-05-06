@@ -15,8 +15,8 @@ export type AssistantJobStatus = 'running' | 'succeeded' | 'failed' | 'blocked' 
 export type AssistantJobSource = 'manual' | 'scheduled' | 'system';
 export type DelegatedWorkerRunClass = 'in_invocation' | 'short_lived' | 'long_running' | 'automation_owned';
 export type DelegatedWorkerReportingMode = 'inline_response' | 'held_for_approval' | 'status_only' | 'held_for_operator';
-export type DelegatedWorkerOperatorFollowUpState = 'pending' | 'kept_held' | 'replayed' | 'dismissed';
-export type DelegatedWorkerOperatorAction = 'replay' | 'keep_held' | 'dismiss';
+export type DelegatedWorkerOperatorFollowUpState = 'pending' | 'deferred' | 'kept_held' | 'replayed' | 'dismissed';
+export type DelegatedWorkerOperatorAction = 'replay' | 'defer' | 'keep_held' | 'dismiss';
 
 export interface AssistantJobRecord {
   id: string;
@@ -376,6 +376,7 @@ export function readDelegatedWorkerMetadata(metadata: Record<string, unknown> | 
         ? { reportingMode: delegated.handoff.reportingMode }
         : {}),
       ...((delegated.handoff.operatorState === 'pending'
+        || delegated.handoff.operatorState === 'deferred'
         || delegated.handoff.operatorState === 'kept_held'
         || delegated.handoff.operatorState === 'replayed'
         || delegated.handoff.operatorState === 'dismissed')
@@ -520,7 +521,17 @@ function buildDelegatedWorkerFollowUp(
         label: 'Replayed to operator',
         needsOperatorAction: true,
         operatorState,
-        actions: ['replay', 'dismiss'],
+        actions: ['replay', 'defer', 'dismiss'],
+        ...(typeof handoff.nextAction === 'string' ? { nextAction: handoff.nextAction } : {}),
+      };
+    }
+    if (operatorState === 'deferred' || operatorState === 'kept_held') {
+      return {
+        reportingMode: handoff.reportingMode,
+        label: 'Deferred for later review',
+        needsOperatorAction: true,
+        operatorState,
+        actions: ['replay', 'defer', 'dismiss'],
         ...(typeof handoff.nextAction === 'string' ? { nextAction: handoff.nextAction } : {}),
       };
     }
@@ -529,7 +540,7 @@ function buildDelegatedWorkerFollowUp(
       label: 'Held for operator review',
       needsOperatorAction: true,
       operatorState,
-      actions: ['replay', 'keep_held', 'dismiss'],
+      actions: ['replay', 'defer', 'dismiss'],
       ...(typeof handoff.nextAction === 'string' ? { nextAction: handoff.nextAction } : {}),
     };
   }

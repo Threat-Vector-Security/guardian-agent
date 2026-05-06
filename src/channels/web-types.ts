@@ -1001,8 +1001,8 @@ export interface DashboardAssistantState {
           blockerKind?: string;
           approvalCount?: number;
           nextAction?: string;
-          operatorState?: 'pending' | 'kept_held' | 'replayed' | 'dismissed';
-          actions?: Array<'replay' | 'keep_held' | 'dismiss'>;
+          operatorState?: 'pending' | 'deferred' | 'kept_held' | 'replayed' | 'dismissed';
+          actions?: Array<'replay' | 'defer' | 'keep_held' | 'dismiss'>;
         };
       };
     }>;
@@ -1355,7 +1355,7 @@ export interface DashboardCallbacks {
   onAssistantState?: () => DashboardAssistantState;
   onAssistantJobFollowUpAction?: (input: {
     jobId: string;
-    action: 'replay' | 'keep_held' | 'dismiss';
+    action: 'replay' | 'defer' | 'keep_held' | 'dismiss';
     actorUserId?: string;
     actorPrincipalId?: string;
     actorPrincipalRole?: string;

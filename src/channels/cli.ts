@@ -1969,8 +1969,8 @@ export class CLIChannel implements ChannelAdapter {
         }
         const jobId = args[2]?.trim();
         const action = args[3]?.trim().toLowerCase();
-        if (!jobId || (action !== 'replay' && action !== 'keep_held' && action !== 'dismiss')) {
-          this.write(`\nUsage: ${this.cyan('/assistant jobs followup <jobId> <replay|keep_held|dismiss>')}\n\n`);
+        if (!jobId || (action !== 'replay' && action !== 'defer' && action !== 'keep_held' && action !== 'dismiss')) {
+          this.write(`\nUsage: ${this.cyan('/assistant jobs followup <jobId> <replay|defer|dismiss>')}\n\n`);
           return;
         }
         const result = await this.dashboard.onAssistantJobFollowUpAction({

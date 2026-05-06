@@ -1433,7 +1433,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     try {
       const parsed = await readJsonBody<{
         jobId?: string;
-        action?: 'replay' | 'keep_held' | 'dismiss';
+        action?: 'replay' | 'defer' | 'keep_held' | 'dismiss';
         userId?: string;
         surfaceId?: string;
       }>(req, context.maxBodyBytes);
@@ -1441,7 +1441,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
         sendJSON(res, 400, { success: false, message: 'Missing jobId' });
         return true;
       }
-      if (parsed.action !== 'replay' && parsed.action !== 'keep_held' && parsed.action !== 'dismiss') {
+      if (parsed.action !== 'replay' && parsed.action !== 'defer' && parsed.action !== 'keep_held' && parsed.action !== 'dismiss') {
         sendJSON(res, 400, { success: false, message: 'Invalid follow-up action' });
         return true;
       }

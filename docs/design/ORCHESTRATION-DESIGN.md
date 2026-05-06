@@ -189,7 +189,7 @@ Current as-built delegation foundations:
 - operator-facing assistant job summaries derive bounded display state for delegated origin, outcome, and follow-up instead of forcing channels to parse raw delegated metadata
 - delegated completion now follows a server-owned reporting policy: `inline_response`, `held_for_approval`, `status_only`, or operator-held review
 - clarification and workspace-switch delegated blockers can downgrade to status-only operator messaging while approval blockers stay inline and approval-held
-- operator-held delegated results can be replayed, kept held, or dismissed through bounded operator controls instead of forcing a fresh worker run
+- operator-held delegated results can be replayed, deferred, or dismissed through bounded operator controls instead of forcing a fresh worker run
 - delegated follow-up state is projected into both assistant-job views and assistant-dispatch trace/timeline nodes instead of being implicit in raw worker prose
 - delegated-worker lifecycle breadcrumbs are also recorded in audit
 
@@ -351,7 +351,7 @@ It should continue to follow these rules:
 - surface delegated status through the same operator views that already expose assistant jobs, traces, and timeline state
 - normalize delegated follow-up policy on the server so clarification/workspace blockers can downgrade to status-only operator messaging while approval blockers stay approval-held
 - derive bounded delegated display summaries centrally so channels render the same operator-facing follow-up semantics instead of inventing their own string parsing
-- keep held-result replay under the same bounded output-guard path rather than letting delegated results bypass normal response sanitization
+- keep replay of held results under the same bounded output-guard path rather than letting delegated results bypass normal response sanitization
 - keep follow-up policy server-owned so delegated work does not gain new authority or silently cross trust boundaries
 
 ## Runtime Model

@@ -2303,8 +2303,13 @@ function describeDelegatedWorkerFollowUpAction(
   if (operatorAction === 'replay' || operatorState === 'replayed') {
     return 'Held result replayed';
   }
-  if (operatorAction === 'keep_held' || operatorState === 'kept_held') {
-    return 'Held result kept';
+  if (
+    operatorAction === 'defer'
+    || operatorAction === 'keep_held'
+    || operatorState === 'deferred'
+    || operatorState === 'kept_held'
+  ) {
+    return 'Held result deferred';
   }
   if (operatorAction === 'dismiss' || operatorState === 'dismissed') {
     return 'Held result dismissed';
