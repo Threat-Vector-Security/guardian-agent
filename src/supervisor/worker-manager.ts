@@ -331,6 +331,14 @@ interface WorkerJobFollowUpActionResult {
   details?: Record<string, unknown>;
 }
 
+type WorkerJobFollowUpActorContext = {
+  userId?: string;
+  principalId?: string;
+  principalRole?: string;
+  channel?: string;
+  surfaceId?: string;
+};
+
 export class WorkerManager {
   private readonly workers = new Map<string, WorkerProcess>();
   private readonly sessionToWorker = new Map<string, string>();
@@ -2146,6 +2154,7 @@ export class WorkerManager {
   applyJobFollowUpAction(
     jobId: string,
     action: DelegatedWorkerOperatorAction,
+    actor?: WorkerJobFollowUpActorContext,
   ): WorkerJobFollowUpActionResult {
     const job = this.delegatedJobTracker.getJob(jobId);
     if (!job) {
@@ -2164,6 +2173,7 @@ export class WorkerManager {
         successMessage: `Held delegated result for ${jobId}.`,
         auditActionType: 'delegated_worker_followup_kept',
         operatorAction: action,
+        ...(actor ? { actor } : {}),
       });
     }
     if (action === 'dismiss') {
@@ -2172,6 +2182,7 @@ export class WorkerManager {
         successMessage: `Dismissed held delegated result for ${jobId}.`,
         auditActionType: 'delegated_worker_followup_dismissed',
         operatorAction: action,
+        ...(actor ? { actor } : {}),
       });
     }
 
@@ -2201,6 +2212,7 @@ export class WorkerManager {
       successMessage: `Replayed held delegated result for ${jobId}.`,
       auditActionType: 'delegated_worker_followup_replayed',
       operatorAction: action,
+      ...(actor ? { actor } : {}),
       details: {
         content: replayedContent,
         redacted: !scan.clean,
@@ -2296,6 +2308,7 @@ export class WorkerManager {
       successMessage: string;
       auditActionType: string;
       operatorAction: DelegatedWorkerOperatorAction;
+      actor?: WorkerJobFollowUpActorContext;
       details?: Record<string, unknown>;
     },
   ): WorkerJobFollowUpActionResult {
@@ -2330,18 +2343,21 @@ export class WorkerManager {
       type: 'broker_action',
       severity: 'info',
       agentId: readDelegatedAgentId(job.metadata) ?? 'unknown',
-      userId: undefined,
-      channel: delegated.originChannel,
+      userId: options.actor?.userId ?? options.actor?.principalId,
+      channel: options.actor?.channel ?? delegated.originChannel,
       controller: 'WorkerManager',
       details: {
         actionType: options.auditActionType,
         jobId: job.id,
         reportingMode: handoff.reportingMode,
         operatorState,
+        ...(options.actor?.principalId ? { actorPrincipalId: options.actor.principalId } : {}),
+        ...(options.actor?.principalRole ? { actorPrincipalRole: options.actor.principalRole } : {}),
+        ...(options.actor?.surfaceId ? { actorSurfaceId: options.actor.surfaceId } : {}),
       },
     });
     this.publishDelegatedFollowUpTimeline(job, delegated, handoff, operatorState, options.operatorAction);
-    this.recordDelegatedFollowUpTrace(job, delegated, handoff, operatorState, options.operatorAction);
+    this.recordDelegatedFollowUpTrace(job, delegated, handoff, operatorState, options.operatorAction, options.actor);
     return {
       success: true,
       message: options.successMessage,
@@ -2392,13 +2408,15 @@ export class WorkerManager {
     handoff: DelegatedWorkerHandoff,
     operatorState: DelegatedWorkerOperatorFollowUpState,
     operatorAction: DelegatedWorkerOperatorAction,
+    actor?: WorkerJobFollowUpActorContext,
   ): void {
     const requestId = delegated.requestId ?? delegated.executionId ?? job.id;
     this.observability.intentRoutingTrace?.record({
       stage: 'delegated_worker_followup_action',
       requestId,
       ...(delegated.requestId ? { messageId: delegated.requestId } : {}),
-      ...(delegated.originChannel ? { channel: delegated.originChannel } : {}),
+      ...(actor?.userId || actor?.principalId ? { userId: actor.userId ?? actor.principalId } : {}),
+      ...(actor?.channel || delegated.originChannel ? { channel: actor?.channel ?? delegated.originChannel } : {}),
       agentId: delegated.agentId ?? readDelegatedAgentId(job.metadata) ?? 'unknown',
       contentPreview: describeDelegatedFollowUpTimelineDetail(operatorState),
       details: {
@@ -2417,6 +2435,9 @@ export class WorkerManager {
         ...(handoff.reportingMode ? { reportingMode: handoff.reportingMode } : {}),
         operatorAction,
         operatorState,
+        ...(actor?.principalId ? { actorPrincipalId: actor.principalId } : {}),
+        ...(actor?.principalRole ? { actorPrincipalRole: actor.principalRole } : {}),
+        ...(actor?.surfaceId ? { actorSurfaceId: actor.surfaceId } : {}),
       },
     });
   }

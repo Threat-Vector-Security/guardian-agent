@@ -6247,6 +6247,7 @@ describe('WorkerManager', () => {
       ingestExecutionGraphEvent: vi.fn(),
     };
     const intentRoutingTrace = { record: vi.fn() };
+    const auditLog = { record: vi.fn() };
 
     const manager = new WorkerManager(
       {
@@ -6254,7 +6255,7 @@ describe('WorkerManager', () => {
       } as never,
       {
         getFallbackProviderConfig: () => undefined,
-        auditLog: { record: vi.fn() },
+        auditLog,
         outputGuardian: {
           scanResponse: vi.fn((content: string) => ({ clean: true, secrets: [], sanitized: content })),
         },
@@ -6337,7 +6338,15 @@ describe('WorkerManager', () => {
       },
     });
 
-    const replayed = manager.applyJobFollowUpAction(jobId!, 'replay');
+    const actor = {
+      userId: 'operator-1',
+      principalId: 'web-session:operator-1',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    };
+
+    const replayed = manager.applyJobFollowUpAction(jobId!, 'replay', actor);
     expect(replayed).toMatchObject({
       success: true,
       details: {
@@ -6377,6 +6386,7 @@ describe('WorkerManager', () => {
       stage: 'delegated_worker_followup_action',
       requestId: 'm-held-operator',
       messageId: 'm-held-operator',
+      userId: 'operator-1',
       channel: 'web',
       agentId: 'local',
       contentPreview: 'Operator replayed the held delegated result to the conversation.',
@@ -6394,6 +6404,20 @@ describe('WorkerManager', () => {
         reportingMode: 'held_for_operator',
         operatorAction: 'replay',
         operatorState: 'replayed',
+        actorPrincipalId: 'web-session:operator-1',
+        actorPrincipalRole: 'owner',
+        actorSurfaceId: 'web-guardian-chat',
+      }),
+    }));
+    expect(auditLog.record).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: 'broker_action',
+      userId: 'operator-1',
+      channel: 'web',
+      details: expect.objectContaining({
+        actionType: 'delegated_worker_followup_replayed',
+        actorPrincipalId: 'web-session:operator-1',
+        actorPrincipalRole: 'owner',
+        actorSurfaceId: 'web-guardian-chat',
       }),
     }));
 
@@ -6412,7 +6436,7 @@ describe('WorkerManager', () => {
       },
     });
 
-    const dismissed = manager.applyJobFollowUpAction(jobId!, 'dismiss');
+    const dismissed = manager.applyJobFollowUpAction(jobId!, 'dismiss', actor);
     expect(dismissed).toMatchObject({
       success: true,
       message: `Dismissed held delegated result for ${jobId}.`,
@@ -6429,10 +6453,15 @@ describe('WorkerManager', () => {
     expect(intentRoutingTrace.record).toHaveBeenLastCalledWith(expect.objectContaining({
       stage: 'delegated_worker_followup_action',
       requestId: 'm-held-operator',
+      userId: 'operator-1',
+      channel: 'web',
       details: expect.objectContaining({
         jobId,
         operatorAction: 'dismiss',
         operatorState: 'dismissed',
+        actorPrincipalId: 'web-session:operator-1',
+        actorPrincipalRole: 'owner',
+        actorSurfaceId: 'web-guardian-chat',
       }),
     }));
 

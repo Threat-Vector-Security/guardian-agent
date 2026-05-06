@@ -174,6 +174,7 @@ describe('createAssistantDashboardCallbacks', () => {
         },
       ],
     };
+    const applyJobFollowUpAction = vi.fn(() => ({ success: true, message: 'ok' }));
     const callbacks = createAssistantDashboardCallbacks({
       configRef: { current: createConfig() },
       runtime: {
@@ -182,7 +183,7 @@ describe('createAssistantDashboardCallbacks', () => {
         scheduler: { getJobs: vi.fn(() => []) },
         workerManager: {
           getJobState: vi.fn(() => ({ summary: { total: 0, running: 0, succeeded: 0, failed: 0 }, jobs: [] })),
-          applyJobFollowUpAction: vi.fn(() => ({ success: true, message: 'ok' })),
+          applyJobFollowUpAction,
         },
       } as never,
       orchestrator: {
@@ -232,6 +233,22 @@ describe('createAssistantDashboardCallbacks', () => {
       runs: [runTimelineEntry],
     });
     expect(callbacks.onAssistantRunDetail?.('run-1')).toEqual(runTimelineEntry);
+    expect(callbacks.onAssistantJobFollowUpAction?.({
+      jobId: 'job-1',
+      action: 'replay',
+      actorUserId: 'operator-1',
+      actorPrincipalId: 'web-session:operator-1',
+      actorPrincipalRole: 'owner',
+      actorChannel: 'web',
+      actorSurfaceId: 'web-guardian-chat',
+    })).toEqual({ success: true, message: 'ok' });
+    expect(applyJobFollowUpAction).toHaveBeenCalledWith('job-1', 'replay', {
+      userId: 'operator-1',
+      principalId: 'web-session:operator-1',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    });
     expect(refreshRunTimelineSnapshots).toHaveBeenCalledTimes(2);
   });
 

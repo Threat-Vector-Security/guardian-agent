@@ -5,6 +5,11 @@ import { readJsonBody, sendJSON } from './web-json.js';
 import { resolveWebSurfaceId } from '../runtime/channel-surface-ids.js';
 import { redactWebResponse } from './web-redaction.js';
 
+type RequestPrincipal = {
+  principalId: string;
+  principalRole: import('../tools/types.js').PrincipalRole;
+};
+
 type PrivilegedTicketAction =
   | 'auth.config'
   | 'auth.rotate'
@@ -28,6 +33,7 @@ interface WebRuntimeRoutesContext {
   url: URL;
   maxBodyBytes: number;
   dashboard: DashboardCallbacks;
+  resolveRequestPrincipal: (req: IncomingMessage) => RequestPrincipal;
   maybeEmitUIInvalidation: (result: unknown, topics: string[], reason: string, path: string) => void;
   requirePrivilegedTicket: (
     req: IncomingMessage,
@@ -1425,7 +1431,12 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       return true;
     }
     try {
-      const parsed = await readJsonBody<{ jobId?: string; action?: 'replay' | 'keep_held' | 'dismiss' }>(req, context.maxBodyBytes);
+      const parsed = await readJsonBody<{
+        jobId?: string;
+        action?: 'replay' | 'keep_held' | 'dismiss';
+        userId?: string;
+        surfaceId?: string;
+      }>(req, context.maxBodyBytes);
       if (!parsed.jobId || typeof parsed.jobId !== 'string') {
         sendJSON(res, 400, { success: false, message: 'Missing jobId' });
         return true;
@@ -1434,9 +1445,17 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
         sendJSON(res, 400, { success: false, message: 'Invalid follow-up action' });
         return true;
       }
+      const principal = context.resolveRequestPrincipal(req);
+      const actorUserId = trimOptionalString(parsed.userId) ?? url.searchParams.get('userId') ?? 'web-user';
+      const actorSurfaceId = resolveWebSurfaceId(trimOptionalString(parsed.surfaceId) ?? url.searchParams.get('surfaceId') ?? undefined);
       const result = await dashboard.onAssistantJobFollowUpAction({
         jobId: parsed.jobId,
         action: parsed.action,
+        actorUserId,
+        actorPrincipalId: principal.principalId,
+        actorPrincipalRole: principal.principalRole,
+        actorChannel: 'web',
+        actorSurfaceId,
       });
       sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
       context.maybeEmitUIInvalidation(result, ['assistant', 'dashboard'], 'assistant.jobs.followup', url.pathname);

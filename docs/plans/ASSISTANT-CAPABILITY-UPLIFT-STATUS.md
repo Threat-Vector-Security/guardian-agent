@@ -107,7 +107,7 @@ Recommended reading order:
 - Dashboard `Agent Runtime`, the web assistant API, and CLI `/assistant jobs followup <jobId> <replay|keep_held|dismiss>` now expose bounded operator controls for held delegated results
 - held delegated result actions now preserve execution lineage, surface id, continuity key, active execution refs, code-session id, and run class through replay, keep-held, and dismiss updates
 - held delegated result replay, keep-held, and dismiss actions now emit shared run-timeline breadcrumbs on the correlated parent and delegated task runs, carrying continuity and execution lineage when available
-- held delegated result replay, keep-held, and dismiss actions now emit routing-trace rows with bounded job, execution, continuity, run-class, and operator-action fields for harness troubleshooting
+- held delegated result replay, keep-held, and dismiss actions now emit routing-trace rows with bounded job, execution, continuity, run-class, operator-action, and channel-supplied actor/surface fields for harness troubleshooting
 
 ---
 

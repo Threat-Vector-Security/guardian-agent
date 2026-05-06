@@ -1356,6 +1356,11 @@ export interface DashboardCallbacks {
   onAssistantJobFollowUpAction?: (input: {
     jobId: string;
     action: 'replay' | 'keep_held' | 'dismiss';
+    actorUserId?: string;
+    actorPrincipalId?: string;
+    actorPrincipalRole?: string;
+    actorChannel?: string;
+    actorSurfaceId?: string;
   }) => Promise<DashboardMutationResult> | DashboardMutationResult;
   onAssistantRuns?: (args: {
     limit?: number;

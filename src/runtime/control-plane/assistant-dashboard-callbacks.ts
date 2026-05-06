@@ -110,7 +110,15 @@ export function createAssistantDashboardCallbacks(
       };
     },
 
-    onAssistantJobFollowUpAction: ({ jobId, action }) => {
+    onAssistantJobFollowUpAction: ({
+      jobId,
+      action,
+      actorUserId,
+      actorPrincipalId,
+      actorPrincipalRole,
+      actorChannel,
+      actorSurfaceId,
+    }) => {
       if (!options.runtime.workerManager) {
         return {
           success: false,
@@ -119,7 +127,18 @@ export function createAssistantDashboardCallbacks(
           errorCode: 'WORKER_MANAGER_UNAVAILABLE',
         };
       }
-      return options.runtime.workerManager.applyJobFollowUpAction(jobId, action);
+      const actor = {
+        ...(actorUserId ? { userId: actorUserId } : {}),
+        ...(actorPrincipalId ? { principalId: actorPrincipalId } : {}),
+        ...(actorPrincipalRole ? { principalRole: actorPrincipalRole } : {}),
+        ...(actorChannel ? { channel: actorChannel } : {}),
+        ...(actorSurfaceId ? { surfaceId: actorSurfaceId } : {}),
+      };
+      return options.runtime.workerManager.applyJobFollowUpAction(
+        jobId,
+        action,
+        Object.keys(actor).length > 0 ? actor : undefined,
+      );
     },
 
     onAssistantRuns: ({ limit, status, kind, parentRunId, channel, agentId, codeSessionId, continuityKey, activeExecutionRef }) => {

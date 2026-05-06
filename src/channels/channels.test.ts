@@ -2632,6 +2632,11 @@ describe('CLIChannel with DashboardCallbacks', () => {
     expect(onAssistantJobFollowUpAction).toHaveBeenCalledWith({
       jobId: 'job-123',
       action: 'replay',
+      actorUserId: 'owner',
+      actorPrincipalId: 'owner',
+      actorPrincipalRole: 'owner',
+      actorChannel: 'cli',
+      actorSurfaceId: 'cli-guardian-chat',
     });
     expect(text).toContain('Success: Replayed held delegated result.');
     expect(text).toContain('Held delegated output');
@@ -5345,6 +5350,8 @@ describe('WebChannel', () => {
         body: JSON.stringify({
           jobId: 'job-123',
           action: 'replay',
+          userId: 'operator-1',
+          surfaceId: 'web-guardian-chat',
         }),
       });
 
@@ -5364,6 +5371,11 @@ describe('WebChannel', () => {
       expect(received).toEqual({
         jobId: 'job-123',
         action: 'replay',
+        actorUserId: 'operator-1',
+        actorPrincipalId: 'web-bearer',
+        actorPrincipalRole: 'owner',
+        actorChannel: 'web',
+        actorSurfaceId: 'web-guardian-chat',
       });
     });
 

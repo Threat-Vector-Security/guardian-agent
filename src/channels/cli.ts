@@ -1976,6 +1976,11 @@ export class CLIChannel implements ChannelAdapter {
         const result = await this.dashboard.onAssistantJobFollowUpAction({
           jobId,
           action,
+          actorUserId: this.defaultUserId,
+          actorPrincipalId: this.defaultUserId,
+          actorPrincipalRole: 'owner',
+          actorChannel: 'cli',
+          actorSurfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
         });
         this.write('\n');
         this.write(`${result.success ? this.green('Success') : this.red('Error')}: ${result.message}\n`);

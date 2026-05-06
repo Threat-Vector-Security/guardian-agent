@@ -994,6 +994,7 @@ export class WebChannel implements ChannelAdapter {
         url,
         maxBodyBytes: this.maxBodyBytes,
         dashboard: this.dashboard,
+        resolveRequestPrincipal: (request) => this.resolveRequestPrincipal(request),
         maybeEmitUIInvalidation: (result, topics, reason, path) => this.maybeEmitUIInvalidation(result, topics, reason, path),
         requirePrivilegedTicket: (request, response, requestUrl, action, presented) =>
           this.requirePrivilegedTicket(request, response, requestUrl, action, presented),
