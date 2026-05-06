@@ -13,7 +13,9 @@ function normalizeProviderTier(tier) {
 function inferProviderTier(providerName, providerProfileName) {
   const normalized = normalizeProviderIdentity(providerName || providerProfileName);
   if (!normalized) return null;
-  if (normalized.startsWith('ollamacloud')) return 'managed_cloud';
+  if (normalized.startsWith('ollamacloud') || normalized.startsWith('openrouter') || normalized.startsWith('nvidia')) {
+    return 'managed_cloud';
+  }
   if (normalized.startsWith('ollama')) return 'local';
   if (
     normalized.startsWith('openai')

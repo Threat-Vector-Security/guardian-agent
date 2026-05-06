@@ -2960,6 +2960,11 @@ function normalizeCodeResponseSource(value) {
   return {
     locality,
     ...(typeof value.providerName === 'string' && value.providerName ? { providerName: value.providerName } : {}),
+    ...(typeof value.providerProfileName === 'string' && value.providerProfileName ? { providerProfileName: value.providerProfileName } : {}),
+    ...(value.providerTier === 'local' || value.providerTier === 'managed_cloud' || value.providerTier === 'frontier'
+      ? { providerTier: value.providerTier }
+      : {}),
+    ...(typeof value.model === 'string' && value.model ? { model: value.model } : {}),
     ...(value.tier === 'local' || value.tier === 'external' ? { tier: value.tier } : {}),
     ...(value.usedFallback === true ? { usedFallback: true } : {}),
     ...(typeof value.notice === 'string' && value.notice ? { notice: value.notice } : {}),

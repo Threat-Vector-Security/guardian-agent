@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildChatResponseSourceMetadata,
   buildLocalModelTooComplicatedMessage,
   formatCompactResponseSourceLabel,
   formatResponseSourceLabel,
@@ -51,6 +52,38 @@ describe('model-routing-ux', () => {
         totalTokens: 920,
         cacheCreationTokens: 400,
       },
+    });
+  });
+
+  it('keeps fallback provider tiers from execution profile metadata', () => {
+    const metadata = buildChatResponseSourceMetadata({
+      response: {
+        content: 'fallback answer',
+        model: 'nvidia/llama',
+        finishReason: 'stop',
+      },
+      providerName: 'nvidia-general',
+      providerLocality: 'external',
+      selectedExecutionProfile: {
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerTier: 'managed_cloud',
+        providerLocality: 'external',
+        fallbackProviderTiers: {
+          'ollama-cloud-coding': 'managed_cloud',
+          'nvidia-general': 'managed_cloud',
+          openai: 'frontier',
+        },
+      },
+      usedFallback: true,
+    });
+
+    expect(metadata).toMatchObject({
+      locality: 'external',
+      providerName: 'nvidia-general',
+      providerTier: 'managed_cloud',
+      model: 'nvidia/llama',
+      usedFallback: true,
     });
   });
 

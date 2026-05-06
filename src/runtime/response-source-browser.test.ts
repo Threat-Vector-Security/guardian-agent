@@ -25,6 +25,17 @@ describe('describeResponseSource', () => {
     expect(source.label).toBe('managed cloud · ollama-cloud');
   });
 
+  it('infers managed-cloud tier labels for OpenRouter and NVIDIA profile names', () => {
+    expect(describeResponseSource({
+      locality: 'external',
+      providerName: 'nvidia-general',
+    }).providerTier).toBe('managed_cloud');
+    expect(describeResponseSource({
+      locality: 'external',
+      providerName: 'openrouter-tools',
+    }).providerTier).toBe('managed_cloud');
+  });
+
   it('includes routing notices in the badge title', () => {
     const source = describeResponseSource({
       locality: 'external',

@@ -1,5 +1,5 @@
 import type { ChatResponse } from '../llm/types.js';
-import { formatProviderTierLabel, getProviderLocality, getProviderTier } from '../llm/provider-metadata.js';
+import { formatProviderTierLabel, getProviderLocality, getProviderTier, type ProviderTier } from '../llm/provider-metadata.js';
 import type { SelectedExecutionProfile } from './execution-profiles.js';
 
 export interface ResponseUsageMetadata {
@@ -57,6 +57,42 @@ function normalizeProviderIdentity(value: string | undefined): string {
   return (value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
 }
 
+function inferProviderTierFromName(providerName: string | undefined): ProviderTier | undefined {
+  const normalized = normalizeProviderIdentity(providerName);
+  if (!normalized) return undefined;
+  if (normalized.startsWith('ollamacloud') || normalized.startsWith('openrouter') || normalized.startsWith('nvidia')) {
+    return 'managed_cloud';
+  }
+  if (normalized.startsWith('ollama')) {
+    return 'local';
+  }
+  if (
+    normalized.startsWith('openai')
+    || normalized.startsWith('anthropic')
+    || normalized.startsWith('claude')
+    || normalized.startsWith('groq')
+    || normalized.startsWith('mistral')
+    || normalized.startsWith('deepseek')
+    || normalized.startsWith('together')
+    || normalized.startsWith('xai')
+    || normalized.startsWith('grok')
+    || normalized.startsWith('google')
+    || normalized.startsWith('gemini')
+  ) {
+    return 'frontier';
+  }
+  return undefined;
+}
+
+function resolveExecutionProfileFallbackTier(
+  providerName: string | undefined,
+  executionProfile: Pick<SelectedExecutionProfile, 'fallbackProviderTiers'> | null | undefined,
+): ProviderTier | undefined {
+  const trimmed = providerName?.trim();
+  if (!trimmed || !executionProfile?.fallbackProviderTiers) return undefined;
+  return executionProfile.fallbackProviderTiers[trimmed];
+}
+
 function readResponseProviderName(response: ChatResponse | undefined): string {
   if (!response || typeof response !== 'object') return '';
   const value = (response as unknown as Record<string, unknown>).providerName;
@@ -73,7 +109,7 @@ export function buildChatResponseSourceMetadata(input: {
   response?: ChatResponse;
   selectedExecutionProfile?: Pick<
     SelectedExecutionProfile,
-    'providerLocality' | 'providerModel' | 'providerName' | 'providerTier' | 'providerType'
+    'fallbackProviderTiers' | 'providerLocality' | 'providerModel' | 'providerName' | 'providerTier' | 'providerType'
   > | null;
   providerName?: string;
   providerLocality?: 'local' | 'external';
@@ -110,7 +146,12 @@ export function buildChatResponseSourceMetadata(input: {
   if (!locality) return undefined;
   const providerTier = useSelectedExecutionProfile
     ? executionProfile.providerTier
-    : (getProviderTier(providerName) ?? (locality === 'local' ? 'local' : undefined));
+    : (
+        resolveExecutionProfileFallbackTier(actualProviderName || providerName, executionProfile)
+        ?? getProviderTier(providerName)
+        ?? inferProviderTierFromName(providerName)
+        ?? (locality === 'local' ? 'local' : undefined)
+      );
   const model = input.response?.model?.trim() || executionProfile?.providerModel?.trim() || '';
   const usage = input.response?.usage;
   return {
@@ -173,7 +214,9 @@ export function readResponseSourceMetadata(metadata?: Record<string, unknown>): 
     providerProfileName: typeof record.providerProfileName === 'string' ? record.providerProfileName : undefined,
     providerTier: record.providerTier === 'local' || record.providerTier === 'managed_cloud' || record.providerTier === 'frontier'
       ? record.providerTier
-      : (typeof record.providerName === 'string' ? getProviderTier(record.providerName) : undefined),
+      : (typeof record.providerName === 'string'
+        ? getProviderTier(record.providerName) ?? inferProviderTierFromName(record.providerName)
+        : undefined),
     model: typeof record.model === 'string' ? record.model : undefined,
     tier: record.tier === 'local' || record.tier === 'external' ? record.tier : undefined,
     usedFallback: record.usedFallback === true,
