@@ -5256,9 +5256,11 @@ export class CLIChannel implements ChannelAdapter {
     const details = entry.details && typeof entry.details === 'object'
       ? entry.details
       : undefined;
+    const latencySummary = this.summarizeIntentRoutingLatency(details);
     const parts = [
       ...(typeof details?.route === 'string' ? [`route ${details.route}`] : []),
       ...(typeof details?.tier === 'string' ? [`tier ${details.tier}`] : []),
+      ...(latencySummary ? [latencySummary] : []),
       ...(typeof details?.executionId === 'string' ? [`execution ${details.executionId}`] : []),
       ...(typeof details?.taskExecutionId === 'string' ? [`task ${details.taskExecutionId}`] : []),
       ...(typeof details?.codeSessionId === 'string' ? [`code ${details.codeSessionId}`] : []),
@@ -5282,7 +5284,35 @@ export class CLIChannel implements ChannelAdapter {
         : []),
       ...(typeof details?.contextAssemblySummary === 'string' ? [details.contextAssemblySummary] : []),
     ];
-    return this.clipTableCell(parts.join(' | ') || '-', 72);
+    return this.clipTableCell(parts.join(' | ') || '-', 112);
+  }
+
+  private summarizeIntentRoutingLatency(details: Record<string, unknown> | undefined): string | undefined {
+    const total = this.readTraceDuration(details, 'totalDispatchDurationMs');
+    const gateway = this.readTraceDuration(details, 'intentGatewayLatencyMs');
+    const runtime = this.readTraceDuration(details, 'runtimeDispatchDurationMs');
+    const fallback = this.readTraceDuration(details, 'fallbackRuntimeDispatchDurationMs');
+    if (total === undefined && gateway === undefined && runtime === undefined && fallback === undefined) {
+      return undefined;
+    }
+    const segments = [
+      gateway !== undefined ? `gateway ${this.formatTraceDuration(gateway)}` : undefined,
+      runtime !== undefined ? `runtime ${this.formatTraceDuration(runtime)}` : undefined,
+      fallback !== undefined ? `fallback ${this.formatTraceDuration(fallback)}` : undefined,
+    ].filter((value): value is string => !!value);
+    const prefix = total !== undefined
+      ? `latency total ${this.formatTraceDuration(total)}`
+      : 'latency';
+    return segments.length > 0 ? `${prefix} (${segments.join(', ')})` : prefix;
+  }
+
+  private readTraceDuration(details: Record<string, unknown> | undefined, key: string): number | undefined {
+    const value = details?.[key];
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+  }
+
+  private formatTraceDuration(value: number): string {
+    return `${Math.round(value)}ms`;
   }
 
   private writeTable(headers: string[], rows: string[][]): void {

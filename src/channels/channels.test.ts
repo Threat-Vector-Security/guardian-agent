@@ -2551,6 +2551,10 @@ describe('CLIChannel with DashboardCallbacks', () => {
             contentPreview: 'Use Codex to fix the repo',
             details: {
               route: 'coding_task',
+              totalDispatchDurationMs: 124,
+              intentGatewayLatencyMs: 14,
+              runtimeDispatchDurationMs: 92,
+              preRuntimeDispatchDurationMs: 18,
               continuityKey: 'continuity-keep',
               activeExecutionRefs: ['code_session:Repo Fix'],
             },
@@ -2564,6 +2568,8 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const text = readOutput(output);
 
     expect(text).toContain('gateway_classified');
+    expect(text).toContain('latency total 124ms');
+    expect(text).toContain('gateway 14ms');
     expect(text).toContain('continuity continuity-keep');
     expect(text).toContain('Use Codex to fix the repo');
 
