@@ -2719,7 +2719,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
                     approvalCount: 1,
                     nextAction: 'Approve the pending coding backend run.',
                     reportingMode: 'held_for_approval',
-                    runClass: 'short_lived',
+                    runClass: 'long_running',
                   },
                 },
               },
@@ -2753,6 +2753,13 @@ describe('CLIChannel with DashboardCallbacks', () => {
     expect(text).toContain('Approval pending');
     expect(text).toContain('Showing operator-relevant jobs.');
     expect(text).not.toContain("automation named 'scans'");
+
+    await sendCommand(input, '/assistant jobs held long-running 2');
+    const filteredText = readOutput(output);
+
+    expect(filteredText).toContain('Filtered jobs: held, long-running.');
+    expect(filteredText).toContain('Approval pending');
+    expect(filteredText).not.toContain("automation named 'scans'");
 
     await cli.stop();
   });

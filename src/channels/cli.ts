@@ -39,7 +39,10 @@ import { formatCompactResponseSourceLabel, formatResponseSourceNotice } from '..
 import { resolveCodeSessionTarget } from '../runtime/code-session-targets.js';
 import type { DashboardRunDetail, DashboardRunTimelineItem, DashboardRunStatus } from '../runtime/run-timeline.js';
 import { assistantTraceMatchesContextFilters } from '../runtime/trace-context-filters.js';
-import { selectOperatorRelevantAssistantJobs } from '../runtime/assistant-jobs.js';
+import {
+  selectOperatorRelevantAssistantJobs,
+  type AssistantJobRecord,
+} from '../runtime/assistant-jobs.js';
 import { CLI_GUARDIAN_CHAT_SURFACE_ID } from '../runtime/channel-surface-ids.js';
 
 import { getGuardianBaseDir } from '../util/env.js';
@@ -65,6 +68,48 @@ const CLI_SAFE_APPROVAL_PROGRESS_STAGES = [
   { afterMs: 12_000, title: 'Still working', detail: 'Waiting on tools or provider.' },
   { afterMs: 30_000, title: 'Still working', detail: 'This continuation is taking longer than usual.' },
 ] as const;
+const ASSISTANT_JOB_FILTER_ALIASES: Record<string, string> = {
+  delegated: 'delegated',
+  delegation: 'delegated',
+  worker: 'delegated',
+  held: 'held',
+  approval: 'approval',
+  approvals: 'approval',
+  pending: 'held',
+  running: 'running',
+  blocked: 'blocked',
+  failed: 'failed',
+  error: 'failed',
+  errors: 'failed',
+  succeeded: 'succeeded',
+  success: 'succeeded',
+  completed: 'succeeded',
+  cancelled: 'cancelled',
+  canceled: 'cancelled',
+  inline: 'inline_response',
+  'inline-response': 'inline_response',
+  'inline_response': 'inline_response',
+  status: 'status_only',
+  'status-only': 'status_only',
+  'status_only': 'status_only',
+  'held-for-approval': 'held_for_approval',
+  'held_for_approval': 'held_for_approval',
+  'held-for-operator': 'held_for_operator',
+  'held_for_operator': 'held_for_operator',
+  'operator-held': 'held_for_operator',
+  'operator_held': 'held_for_operator',
+  'in-invocation': 'in_invocation',
+  'in_invocation': 'in_invocation',
+  short: 'short_lived',
+  'short-lived': 'short_lived',
+  'short_lived': 'short_lived',
+  long: 'long_running',
+  'long-running': 'long_running',
+  'long_running': 'long_running',
+  automation: 'automation_owned',
+  'automation-owned': 'automation_owned',
+  'automation_owned': 'automation_owned',
+};
 const APPROVAL_CONFIRM_PATTERN = /^(?:approve|approved|yes|y|ok|okay|sure|go ahead|confirm|proceed|accept)\b/i;
 const APPROVAL_DENY_PATTERN = /^(?:deny|denied|no|n|reject|decline|cancel)\b/i;
 
@@ -1395,6 +1440,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /budget                                Per-agent resource usage\n');
     this.write('  /watchdog                              Watchdog check results\n');
     this.write('  /assistant [summary|sessions|jobs|policy|traces|routing] [limit]  Assistant control-plane state\n');
+    this.write('  /assistant jobs [held|delegated|running|failed|long-running]       Filter tracked jobs\n');
     this.write('\n');
     this.write(this.bold('Configuration\n'));
     this.write('  /config                                View full config (redacted)\n');
@@ -1944,15 +1990,23 @@ export class CLIChannel implements ChannelAdapter {
 
       const jobArgs = args.slice(1);
       const showAll = jobArgs.some((value) => value.toLowerCase() === 'all');
+      const filters = this.parseAssistantJobFilters(jobArgs);
       const parsed = jobArgs.find((value) => /^\d+$/.test(value))
         ? Number.parseInt(jobArgs.find((value) => /^\d+$/.test(value))!, 10)
         : 12;
       const limit = Number.isFinite(parsed) && parsed > 0 ? parsed : 12;
-      const jobs = showAll
-        ? state.jobs.jobs.slice(0, limit)
+      const baseJobs = showAll || filters.length > 0
+        ? state.jobs.jobs
         : selectOperatorRelevantAssistantJobs(state.jobs.jobs, limit);
+      const jobs = (filters.length > 0
+        ? baseJobs.filter((job) => this.assistantJobMatchesFilters(job, filters))
+        : baseJobs).slice(0, limit);
       if (jobs.length === 0) {
-        this.write('\nNo tracked jobs yet.\n\n');
+        if (filters.length > 0) {
+          this.write(`\nNo tracked jobs matched filters: ${this.formatAssistantJobFilters(filters)}.\n\n`);
+        } else {
+          this.write('\nNo tracked jobs yet.\n\n');
+        }
         return;
       }
       const headers = ['Job', 'Source', 'Status', 'Started', 'Duration', 'Detail', 'Error'];
@@ -1976,7 +2030,9 @@ export class CLIChannel implements ChannelAdapter {
 
       this.write('\n');
       this.writeTable(headers, rows);
-      if (!showAll && jobs.length < state.jobs.jobs.length) {
+      if (filters.length > 0) {
+        this.write(`\nFiltered jobs: ${this.formatAssistantJobFilters(filters)}. Use ${this.cyan('/assistant jobs all')} for the raw recent feed.\n`);
+      } else if (!showAll && jobs.length < state.jobs.jobs.length) {
         this.write(`\nShowing operator-relevant jobs. Use ${this.cyan('/assistant jobs all')} for the raw recent feed.\n`);
       }
       this.write('\n');
@@ -2125,12 +2181,114 @@ export class CLIChannel implements ChannelAdapter {
       }
       this.write(`\n  Use ${this.cyan('/assistant sessions')} for full table.\n`);
     }
-    this.write(`  Use ${this.cyan('/assistant jobs')} for background jobs.\n`);
+    this.write(`  Use ${this.cyan('/assistant jobs held')} or ${this.cyan('/assistant jobs delegated')} to filter background jobs.\n`);
     this.write(`  Use ${this.cyan('/assistant policy')} for recent policy decisions.\n`);
     this.write(`  Use ${this.cyan('/assistant traces')} for request step traces.\n`);
     this.write(`  Use ${this.cyan('/assistant routing')} for durable routing trace decisions.\n`);
 
     this.write('\n');
+  }
+
+  private parseAssistantJobFilters(args: string[]): string[] {
+    const filters: string[] = [];
+    const seen = new Set<string>();
+    for (const arg of args) {
+      const token = arg.trim().toLowerCase();
+      if (!token || token === 'all' || /^\d+$/.test(token)) continue;
+      const filter = ASSISTANT_JOB_FILTER_ALIASES[token];
+      if (!filter || seen.has(filter)) continue;
+      seen.add(filter);
+      filters.push(filter);
+    }
+    return filters;
+  }
+
+  private formatAssistantJobFilters(filters: string[]): string {
+    return filters.map((filter) => filter.replace(/_/g, '-')).join(', ');
+  }
+
+  private assistantJobMatchesFilters(job: AssistantJobRecord, filters: string[]): boolean {
+    return filters.every((filter) => {
+      if (filter === 'delegated') {
+        return this.isDelegatedAssistantJob(job);
+      }
+      if (filter === 'held') {
+        return this.isHeldAssistantJob(job);
+      }
+      if (filter === 'approval') {
+        return this.isApprovalAssistantJob(job);
+      }
+      if (filter === 'running'
+        || filter === 'blocked'
+        || filter === 'failed'
+        || filter === 'succeeded'
+        || filter === 'cancelled') {
+        return job.status === filter;
+      }
+      if (filter === 'inline_response'
+        || filter === 'held_for_approval'
+        || filter === 'status_only'
+        || filter === 'held_for_operator') {
+        return this.getAssistantJobReportingMode(job) === filter;
+      }
+      if (filter === 'in_invocation'
+        || filter === 'short_lived'
+        || filter === 'long_running'
+        || filter === 'automation_owned') {
+        return this.getAssistantJobRunClass(job) === filter;
+      }
+      return true;
+    });
+  }
+
+  private isDelegatedAssistantJob(job: AssistantJobRecord): boolean {
+    const delegation = this.getAssistantJobDelegation(job);
+    return job.type === 'delegated_worker' || delegation?.kind === 'brokered_worker';
+  }
+
+  private isHeldAssistantJob(job: AssistantJobRecord): boolean {
+    const reportingMode = this.getAssistantJobReportingMode(job);
+    return job.display?.followUp?.needsOperatorAction === true
+      || reportingMode === 'held_for_approval'
+      || reportingMode === 'held_for_operator'
+      || this.isApprovalAssistantJob(job);
+  }
+
+  private isApprovalAssistantJob(job: AssistantJobRecord): boolean {
+    const handoff = this.getAssistantJobHandoff(job);
+    return job.display?.followUp?.blockerKind === 'approval'
+      || (job.display?.followUp?.approvalCount ?? 0) > 0
+      || handoff?.unresolvedBlockerKind === 'approval'
+      || (typeof handoff?.approvalCount === 'number' && handoff.approvalCount > 0);
+  }
+
+  private getAssistantJobReportingMode(job: AssistantJobRecord): string | undefined {
+    const displayMode = job.display?.followUp?.reportingMode;
+    if (displayMode) return displayMode;
+    const handoff = this.getAssistantJobHandoff(job);
+    return typeof handoff?.reportingMode === 'string' ? handoff.reportingMode : undefined;
+  }
+
+  private getAssistantJobRunClass(job: AssistantJobRecord): string | undefined {
+    const handoff = this.getAssistantJobHandoff(job);
+    if (typeof handoff?.runClass === 'string') return handoff.runClass;
+    const delegation = this.getAssistantJobDelegation(job);
+    return typeof delegation?.runClass === 'string' ? delegation.runClass : undefined;
+  }
+
+  private getAssistantJobDelegation(job: AssistantJobRecord): Record<string, unknown> | null {
+    const delegation = job.metadata?.delegation;
+    return delegation && typeof delegation === 'object'
+      ? delegation as Record<string, unknown>
+      : null;
+  }
+
+  private getAssistantJobHandoff(job: AssistantJobRecord): Record<string, unknown> | null {
+    const delegation = this.getAssistantJobDelegation(job);
+    const handoff = delegation?.handoff;
+    return handoff && typeof handoff === 'object'
+      ? handoff as Record<string, unknown>
+      : null;
   }
 
   private describeAssistantJob(job: {

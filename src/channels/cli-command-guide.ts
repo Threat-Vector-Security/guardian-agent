@@ -194,7 +194,7 @@ export const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
       '/assistant',
       '/assistant summary',
       '/assistant sessions [limit]',
-      '/assistant jobs [limit|all]',
+      '/assistant jobs [limit|all|held|delegated|running|failed|long-running]',
       '/assistant policy [limit]',
       '/assistant traces [limit]',
       '/assistant routing [limit]',
@@ -204,12 +204,14 @@ export const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
       '/assistant traces continuity=shared-tier:owner exec=code_session:Repo Fix',
       '/assistant routing 20 continuity=shared-tier:owner',
       '/assistant jobs 10',
+      '/assistant jobs held long-running',
       '/assistant jobs all',
     ],
     notes: [
       'traces shows in-memory assistant dispatch traces; routing shows the durable intent-routing decision log.',
       'Both traces and routing accept continuity=<key> and exec=<ref> filters.',
       'jobs defaults to the operator-relevant recent view; use `all` to inspect the raw recent job feed including routine background delegated work.',
+      'jobs accepts filters such as `held`, `approval`, `delegated`, `running`, `failed`, `inline`, `status-only`, `long-running`, and `automation-owned`.',
     ],
   },
   {

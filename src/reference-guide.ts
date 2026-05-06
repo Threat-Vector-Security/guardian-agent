@@ -455,6 +455,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Use `/assistant summary`, `/assistant sessions`, `/assistant jobs`, `/assistant traces`, `/assistant routing`, and `/assistant policy` for the same operational visibility in the terminal. `/assistant routing` includes route, latency, continuity, candidate-lane, and planned-step context when those details are available.',
                   'Use `/assistant jobs all` when you want the raw recent job feed instead of the filtered operator view.',
+                  'Use `/assistant jobs held`, `/assistant jobs delegated`, `/assistant jobs running`, `/assistant jobs failed`, or run-class filters such as `/assistant jobs long-running` when you need to isolate specific background or delegated work.',
                   'Use `/assistant jobs followup <jobId> <replay|keep_held|dismiss>` when a held result is waiting for operator review.',
                   'Use `/tools` to inspect tool policy and pending approvals, and `/approve` or `/deny` as fallback commands if native prompts are not suitable.',
                   'Use `/mode` to switch between auto, local, managed cloud, and frontier routing without changing agent definitions.',
