@@ -14,6 +14,7 @@ import {
   markApprovalUiProcessing,
   markApprovalUiResolved,
 } from './approval-ui-state.js';
+import { resolveSafeWorkingLabel } from './chat-activity-copy.js';
 import { buildApprovalContinuationSummaryPart, decideChatApproval } from './chat-approval.js';
 import { resolveChatDispatchAgentId } from './chat-dispatch-routing.js';
 import {
@@ -114,6 +115,9 @@ function clearPersistedActiveRequest(requestId) {
 }
 
 function clearActiveChatIndicator() {
+  if (activeChatIndicator?.fallbackTimer) {
+    clearInterval(activeChatIndicator.fallbackTimer);
+  }
   if (activeChatIndicator?.element?.isConnected) {
     activeChatIndicator.element.remove();
   }
@@ -135,10 +139,24 @@ function updateActiveChatIndicatorLabel(label) {
 
 function updateActiveChatIndicatorTimeline(run) {
   if (!activeChatIndicator || !run?.summary) return;
+  if (activeChatIndicator.fallbackTimer) {
+    clearInterval(activeChatIndicator.fallbackTimer);
+    activeChatIndicator.fallbackTimer = null;
+  }
   activeChatIndicator.timeline = run;
   if (activeChatIndicator.element?.isConnected) {
     updateThinkingEl(activeChatIndicator.element, run);
   }
+}
+
+function startActiveChatFallbackTicker(startedAt = Date.now(), options = {}) {
+  if (!activeChatIndicator) return;
+  const applyLabel = () => {
+    if (!activeChatIndicator || activeChatIndicator.timeline) return;
+    updateActiveChatIndicatorLabel(resolveSafeWorkingLabel(Date.now() - startedAt, options));
+  };
+  applyLabel();
+  activeChatIndicator.fallbackTimer = setInterval(applyLabel, 1000);
 }
 
 function syncActiveChatIndicator(historyEl, agentId) {
@@ -578,10 +596,11 @@ export async function initChatPanel(container) {
     history.appendChild(thinkingEl);
     setActiveChatIndicator({
       historyKey,
-      label: 'Continuing after approval…',
+      label: 'Reading the request…',
       timeline: null,
       element: thinkingEl,
     });
+    startActiveChatFallbackTicker(Date.now(), { mode: 'approval' });
     history.scrollTop = history.scrollHeight;
 
     const onRunTimeline = (data) => {
@@ -857,10 +876,11 @@ export async function initChatPanel(container) {
     history.appendChild(thinkingEl);
     setActiveChatIndicator({
       historyKey,
-      label: 'Starting…',
+      label: 'Reading the request…',
       timeline: null,
       element: thinkingEl,
     });
+    startActiveChatFallbackTicker();
     history.scrollTop = history.scrollHeight;
 
     try {
