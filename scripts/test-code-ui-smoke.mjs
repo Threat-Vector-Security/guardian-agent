@@ -200,6 +200,136 @@ function createChatCompletionResponse({ model, content = '', finishReason = 'sto
   };
 }
 
+function isIntentGatewayRequest(systemPrompt, parsed) {
+  const prompt = typeof systemPrompt === 'string' ? systemPrompt : '';
+  const tools = Array.isArray(parsed.tools) ? parsed.tools : [];
+  return prompt.includes('Guardian\'s intent gateway')
+    || prompt.includes('Route definitions:')
+    || tools.some((tool) => (
+      tool?.name === 'route_intent'
+      || tool?.function?.name === 'route_intent'
+    ));
+}
+
+function buildCodingIntentDecision(latestUser) {
+  const normalized = String(latestUser || '');
+  if (/make the answer 42/i.test(normalized)) {
+    return {
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'update',
+      summary: 'Update answerValue in the selected coding workspace file.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      simpleVsComplex: 'simple',
+      preferredAnswerPath: 'tool_loop',
+      planned_steps: [
+        {
+          kind: 'write',
+          summary: 'Edit the selected workspace file so answerValue is 42.',
+          expectedToolCategories: ['code_edit'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Confirm the answerValue update.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    };
+  }
+
+  if (/slow repo summary/i.test(normalized)) {
+    return {
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Summarize the current coding workspace repository.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'medium',
+      simpleVsComplex: 'simple',
+      preferredAnswerPath: 'direct',
+      planned_steps: [
+        {
+          kind: 'read',
+          summary: 'Inspect the current coding workspace repository.',
+          expectedToolCategories: ['repo_inspect'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return a concise repository summary.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    };
+  }
+
+  if (normalized.includes('answerValue')) {
+    return {
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Find where answerValue is defined in the current coding workspace.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'medium',
+      simpleVsComplex: 'simple',
+      preferredAnswerPath: 'direct',
+      planned_steps: [
+        {
+          kind: 'search',
+          summary: 'Search the current coding workspace for answerValue.',
+          expectedToolCategories: ['repo_search'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Report where answerValue is defined.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    };
+  }
+
+  return null;
+}
+
+function buildIntentGatewayMockToolCalls(decision, parsed) {
+  const tools = Array.isArray(parsed.tools) ? parsed.tools : [];
+  const shouldUseToolCall = tools.some((tool) => (
+    tool?.name === 'route_intent'
+    || tool?.function?.name === 'route_intent'
+  ));
+  return shouldUseToolCall
+    ? [{
+        id: 'code-ui-route-intent',
+        name: 'route_intent',
+        arguments: JSON.stringify(decision),
+      }]
+    : null;
+}
+
 async function startFakeProvider(workspaceRoot) {
   const examplePath = path.join(workspaceRoot, 'src', 'example.ts');
   const server = http.createServer(async (req, res) => {
@@ -218,6 +348,7 @@ async function startFakeProvider(workspaceRoot) {
       const parsed = await readJsonBody(req);
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       const toolMessages = messages.filter((message) => message.role === 'tool');
+      const systemPrompt = messages.find((message) => message.role === 'system')?.content;
       const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
       const sendResponse = ({ content = '', finishReason = 'stop', toolCalls } = {}) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -237,6 +368,17 @@ async function startFakeProvider(workspaceRoot) {
               }),
         ));
       };
+
+      const intentDecision = isIntentGatewayRequest(systemPrompt, parsed)
+        ? buildCodingIntentDecision(latestUser)
+        : null;
+      if (intentDecision) {
+        const routeToolCalls = buildIntentGatewayMockToolCalls(intentDecision, parsed);
+        sendResponse(routeToolCalls
+          ? { finishReason: 'tool_calls', toolCalls: routeToolCalls }
+          : { content: JSON.stringify(intentDecision) });
+        return;
+      }
 
       if (latestUser.includes('[Code Approval Continuation]')) {
         sendResponse({
