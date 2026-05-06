@@ -86,6 +86,7 @@ Recommended reading order:
 - Dashboard `Runtime Execution` can filter run timelines by status, parent run, agent, channel, and code session in addition to continuity key and active execution reference
 - Dashboard `Runtime Execution` can filter run timelines by execution, parent-execution, root-execution, and task-execution lineage
 - Dashboard `Runtime Execution` can filter graph-backed timelines by graph event kind, graph node kind, graph producer, and tool name
+- Dashboard `Runtime Execution` graph-backed rows now show bounded allowlisted event facts such as result status, verification decision, artifact trust, run class, reporting mode, worker id, and task-run id when those fields are available
 - Dashboard `Runtime Execution` rows include parent/child/graph drill-down actions for delegated and execution-graph troubleshooting
 
 ### Documentation alignment
@@ -110,10 +111,10 @@ Recommended reading order:
 ## Current Focus
 
 Recommended current implementation focus:
-- continuity-aware long-running delegated work and richer execution-graph event detail on top of the lineage/handoff foundation
+- continuity-aware long-running delegated work on top of the lineage/handoff foundation
 
 Why this is next:
-- the class model, producer adoption, operator controls, and timeline filters now exist, so the next step is making long-running work resumable and easier to reason about at scale
+- the class model, producer adoption, operator controls, timeline filters, and bounded graph-event details now exist, so the next step is making long-running work resumable and easier to reason about at scale
 - background delegation is still the largest unfinished capability lane
 
 ---
@@ -123,7 +124,6 @@ Why this is next:
 ### Near-term
 
 - final continuity polish around any remaining surface drift or noisy resume cases
-- richer execution-graph event detail surfaces beyond the current graph metadata and context filters
 
 ### Medium-term
 

@@ -24,6 +24,7 @@ Current as-built deltas:
 - System `Agent Runtime` and CLI `/assistant jobs` now expose merged assistant and delegated-worker jobs with bounded origin, outcome, and follow-up summaries, including replay controls for held delegated results
 - delegated worker follow-up is now projected into assistant-dispatch traces and the global execution timeline as `Delegated follow-up` handoff nodes, including blocked approval-held and status-only outcomes
 - delegated worker lifecycle is now also projected live into the global execution timeline as `handoff_started`, live `note`, and terminal `handoff_completed` items so operators can watch brokered workers start, run, block, complete, or fail without waiting for the final reply
+- graph-backed timeline rows now include a bounded allowlisted detail payload for useful operator facts such as result status, verification decision, artifact trust, run class, reporting mode, worker id, and task-run id
 - insufficiency-driven delegated retries now surface as a distinct retry breadcrumb between the running and terminal lifecycle events, and routing trace rows record that retry as `delegated_worker_retrying` with the stronger execution-profile details when Guardian escalates the child run
 - delegated retry breadcrumbs now cover both exact-file repo inspections that came back truncated or uncertain and progress-only delegated replies that never produced a terminal answer
 - delegated-worker trace rows now also carry the effective delegated intent metadata (`delegatedIntentSource`, route, operation, execution class, repo-grounding/tool-synthesis flags, preferred answer path, and context pressure) so operators can see why Guardian considered the child run retryable
@@ -225,10 +226,16 @@ interface DashboardRunTimelineItem {
   timestamp: number;
   type: DashboardRunTimelineItemType;
   status: 'info' | 'running' | 'blocked' | 'succeeded' | 'failed' | 'warning';
-  source: 'orchestrator' | 'workflow' | 'code_session' | 'system';
+  source: 'orchestrator' | 'workflow' | 'code_session' | 'system' | 'execution_graph';
   title: string;
   detail?: string;
+  graphId?: string;
+  graphEventKind?: string;
+  graphProducer?: string;
+  graphSequence?: number;
+  graphDetail?: DashboardRunTimelineGraphDetail;
   nodeId?: string;
+  nodeKind?: string;
   toolName?: string;
   approvalId?: string;
   verificationKind?: 'test' | 'lint' | 'build' | 'manual';
@@ -239,6 +246,7 @@ interface DashboardRunTimelineItem {
 Rules:
 
 - `detail` must stay within the existing safe preview boundary. Use `messagePreview`, `argsPreview`, `resultPreview`, and short verification summaries.
+- `graphDetail` is an allowlisted fact block for execution-graph rows. It must contain only bounded operator-safe fields and must not mirror arbitrary event payloads.
 - `contextAssembly` is the typed operator-facing payload for bounded continuity, memory-scope, memory-selection, and knowledge-base diagnostics. Raw tool arguments or model prompts still do not belong here.
 - `provider_call` nodes are operator-facing provenance only. They may include provider/model names, duration, and token/cache counts, but they must not include raw prompt bodies or unbounded tool payloads.
 - `handoff_started` and `handoff_completed` items are also used for delegated-worker follow-up projection, not only deterministic workflow handoffs.

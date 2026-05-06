@@ -1253,12 +1253,30 @@ function renderRuntimeExecutionTimelineItems(items, runId) {
               <div class="ops-task-sub">${esc(formatTime(item.timestamp))}</div>
               ${renderRuntimeExecutionEventMeta(item)}
               ${item.detail ? `<div style="margin-top:0.35rem;color:var(--text-secondary)">${esc(item.detail)}</div>` : ''}
+              ${renderRuntimeExecutionGraphDetail(item.graphDetail)}
               ${renderRunTimelineContextAssembly(contextAssembly, esc)}
             </div>
           `;
         }).join('')}
       </div>
     </details>
+  `;
+}
+
+function renderRuntimeExecutionGraphDetail(graphDetail) {
+  const fields = Array.isArray(graphDetail?.fields)
+    ? graphDetail.fields.filter((field) => field && field.label && field.value)
+    : [];
+  if (fields.length === 0) return '';
+  return `
+    <div style="margin-top:0.4rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:0.35rem">
+      ${fields.slice(0, 10).map((field) => `
+        <div style="border:1px solid var(--border);background:var(--bg);padding:0.35rem 0.45rem">
+          <div class="ops-task-sub" style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0">${esc(field.label)}</div>
+          <div style="font-size:0.82rem;color:var(--text-primary);overflow-wrap:anywhere">${esc(field.value)}</div>
+        </div>
+      `).join('')}
+    </div>
   `;
 }
 

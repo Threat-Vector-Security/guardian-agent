@@ -63,12 +63,22 @@ export interface DashboardRunTimelineItem {
   graphEventKind?: string;
   graphProducer?: string;
   graphSequence?: number;
+  graphDetail?: DashboardRunTimelineGraphDetail;
   nodeId?: string;
   nodeKind?: string;
   toolName?: string;
   approvalId?: string;
   verificationKind?: 'test' | 'lint' | 'build' | 'manual';
   contextAssembly?: DashboardRunTimelineContextAssembly;
+}
+
+export interface DashboardRunTimelineGraphDetailField {
+  label: string;
+  value: string;
+}
+
+export interface DashboardRunTimelineGraphDetail {
+  fields: DashboardRunTimelineGraphDetailField[];
 }
 
 export interface DashboardRunTimelineContextMemoryEntry {

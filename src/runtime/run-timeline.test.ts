@@ -963,6 +963,10 @@ describe('RunTimelineStore', () => {
         toolName: 'fs_search',
         resultStatus: 'succeeded',
         resultPreview: 'Search results for RunTimelineStore (2 matches).',
+        workerId: 'worker-direct',
+        taskRunId: 'task-direct',
+        runClass: 'long_running',
+        reportingMode: 'held_for_operator',
       },
     }));
 
@@ -1006,6 +1010,15 @@ describe('RunTimelineStore', () => {
       title: 'Tool completed: Fs Search',
       status: 'succeeded',
       detail: 'Search results for RunTimelineStore (2 matches).',
+      graphDetail: {
+        fields: expect.arrayContaining([
+          { label: 'Result', value: 'succeeded' },
+          { label: 'Run Class', value: 'long_running' },
+          { label: 'Reporting', value: 'held_for_operator' },
+          { label: 'Worker', value: 'worker-direct' },
+          { label: 'Task Run', value: 'task-direct' },
+        ]),
+      },
     });
     expect(store.listRuns({ graphEventKind: 'tool_call_completed' }).map((entry) => entry.summary.runId)).toEqual([
       'req-direct',

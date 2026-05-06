@@ -1,5 +1,6 @@
 import type {
   DashboardRunStatus,
+  DashboardRunTimelineGraphDetail,
   DashboardRunSummary,
   DashboardRunTimelineItem,
 } from '../run-timeline.js';
@@ -59,6 +60,7 @@ function buildGraphTimelineItem(
   runId: string,
   event: ExecutionGraphEvent,
 ): DashboardRunTimelineItem | null {
+  const graphDetail = buildGraphEventDetailFields(event);
   const shared = {
     id: `graph-event:${event.eventId}:${runId}`,
     runId,
@@ -68,6 +70,7 @@ function buildGraphTimelineItem(
     graphEventKind: event.kind,
     graphProducer: event.producer,
     graphSequence: event.sequence,
+    ...(graphDetail ? { graphDetail } : {}),
     ...(event.nodeId ? { nodeId: event.nodeId } : {}),
     ...(event.nodeKind ? { nodeKind: event.nodeKind } : {}),
   };
@@ -183,6 +186,61 @@ function buildGraphEventDetail(event: ExecutionGraphEvent): string | undefined {
     normalizeText(stringPayload(event, 'preview')),
   ].filter((value): value is string => !!value && value !== MISSING_CLASSIFICATION_SUMMARY);
   return truncateText(parts.join('\n'), 220);
+}
+
+function buildGraphEventDetailFields(event: ExecutionGraphEvent): DashboardRunTimelineGraphDetail | undefined {
+  const fields: DashboardRunTimelineGraphDetail['fields'] = [];
+  addGraphDetailField(fields, 'Result', payloadText(event, 'resultStatus'));
+  addGraphDetailField(fields, 'Decision', payloadText(event, 'decision'));
+  addGraphDetailField(fields, 'Retryable', payloadBoolean(event, 'retryable'));
+  addGraphDetailField(fields, 'Next Action', payloadText(event, 'requiredNextAction'));
+  addGraphDetailField(fields, 'Missing Evidence', payloadStringList(event, 'missingEvidenceKinds'));
+  addGraphDetailField(fields, 'Unsatisfied Steps', payloadStringList(event, 'unsatisfiedStepIds'));
+  addGraphDetailField(fields, 'Quality Notes', payloadStringList(event, 'qualityNotes'));
+  addGraphDetailField(fields, 'Artifact', payloadText(event, 'artifactType'));
+  addGraphDetailField(fields, 'Artifact Label', payloadText(event, 'label'));
+  addGraphDetailField(fields, 'Artifact ID', payloadText(event, 'artifactId'));
+  addGraphDetailField(fields, 'Trust', payloadText(event, 'trustLevel'));
+  addGraphDetailField(fields, 'Taint', payloadStringList(event, 'taintReasons'));
+  addGraphDetailField(fields, 'Redaction', payloadText(event, 'redactionPolicy'));
+  addGraphDetailField(fields, 'Blocker', payloadText(event, 'blockerKind') ?? payloadText(event, 'kind'));
+  addGraphDetailField(fields, 'Run Class', payloadText(event, 'runClass'));
+  addGraphDetailField(fields, 'Reporting', payloadText(event, 'reportingMode'));
+  addGraphDetailField(fields, 'Lifecycle', payloadText(event, 'lifecycle'));
+  addGraphDetailField(fields, 'Worker', payloadText(event, 'workerId'));
+  addGraphDetailField(fields, 'Task Run', payloadText(event, 'taskRunId'));
+  addGraphDetailField(fields, 'Subject Artifact', payloadText(event, 'subjectArtifactId'));
+  return fields.length > 0 ? { fields } : undefined;
+}
+
+function addGraphDetailField(
+  fields: DashboardRunTimelineGraphDetail['fields'],
+  label: string,
+  value: string | undefined,
+): void {
+  if (!value) return;
+  fields.push({ label, value: truncateText(value, 160) ?? value });
+}
+
+function payloadText(event: ExecutionGraphEvent, key: string): string | undefined {
+  const value = event.payload[key];
+  if (typeof value === 'string') return normalizeText(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return undefined;
+}
+
+function payloadBoolean(event: ExecutionGraphEvent, key: string): string | undefined {
+  const value = event.payload[key];
+  return typeof value === 'boolean' ? (value ? 'Yes' : 'No') : undefined;
+}
+
+function payloadStringList(event: ExecutionGraphEvent, key: string): string | undefined {
+  const value = event.payload[key];
+  if (!Array.isArray(value)) return undefined;
+  const parts = value
+    .map((entry) => typeof entry === 'string' ? normalizeText(entry) : undefined)
+    .filter((entry): entry is string => !!entry);
+  return parts.length > 0 ? parts.slice(0, 6).join(', ') : undefined;
 }
 
 function buildToolCompletionTitle(toolName: string | undefined, event: ExecutionGraphEvent): string {
