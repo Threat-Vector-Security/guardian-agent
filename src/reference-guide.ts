@@ -150,6 +150,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Frontier path: add OpenAI, Anthropic, Google Gemini, Groq, Mistral, DeepSeek, Together, or xAI when you want a stronger hosted fallback or an explicit high-quality tier.',
                   'Use Configuration > AI Providers or CLI `/providers` to confirm connectivity and model discovery after each provider change.',
                   'Use Auto mode for normal operation once the provider tiers you care about are configured correctly.',
+                  'When an external provider is temporarily unavailable, Guardian can retry another configured provider in the same selected external tier and show the final source in web chat and CLI source labels.',
                 ],
               },
               {

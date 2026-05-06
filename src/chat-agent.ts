@@ -870,6 +870,7 @@ interface DegradedDirectIntentResponseInput {
     messages: ChatMessage[],
     options?: import('./llm/types.js').ChatOptions,
     fallbackProviderOrder?: string[],
+    selectedExecutionProfile?: SelectedExecutionProfile | null,
   ): Promise<import('./llm/types.js').ChatResponse> {
     return chatWithFallbackHelper({
       agentId: this.id,
@@ -877,6 +878,7 @@ interface DegradedDirectIntentResponseInput {
       messages,
       options,
       fallbackProviderOrder,
+      selectedExecutionProfile,
       fallbackChain: this.fallbackChain,
       log,
     });
@@ -887,6 +889,7 @@ interface DegradedDirectIntentResponseInput {
     messages: ChatMessage[],
     options?: import('./llm/types.js').ChatOptions,
     fallbackProviderOrder?: string[],
+    selectedExecutionProfile?: SelectedExecutionProfile | null,
   ): Promise<{
     response: import('./llm/types.js').ChatResponse;
     providerName: string;
@@ -901,6 +904,7 @@ interface DegradedDirectIntentResponseInput {
       messages,
       options,
       fallbackProviderOrder,
+      selectedExecutionProfile,
       fallbackChain: this.fallbackChain,
       log,
     });
@@ -1933,6 +1937,7 @@ interface DegradedDirectIntentResponseInput {
         messages,
         options,
         providerOrder,
+        selectedExecutionProfile,
       ),
       executeStoredFilesystemSave: (input) => this.executeStoredFilesystemSave(input),
       codingRoutes: buildCodingRoutes(),
@@ -2338,6 +2343,7 @@ interface DegradedDirectIntentResponseInput {
         messages,
         options,
         providerOrder,
+        selectedExecutionProfile,
       ),
       resolveToolResultProviderKind: (nextCtx, provider) => this.resolveToolResultProviderKind(nextCtx, provider),
       sanitizeToolResultForLlm: (toolName, result, providerKind) => this.sanitizeToolResultForLlm(
@@ -4056,6 +4062,9 @@ interface DegradedDirectIntentResponseInput {
       maxAdditionalSections: 3,
       maxRuntimeNotices: 6,
       fallbackProviderOrder: providerOrder.filter((candidate) => candidate !== providerProfileName),
+      fallbackProviderTiers: Object.fromEntries(
+        providerOrder.map((candidate) => [candidate, providerTier] as const),
+      ),
       reason: 'Captured from the live tool-loop context for approval resume.',
     };
   }
@@ -4076,6 +4085,7 @@ interface DegradedDirectIntentResponseInput {
         messages,
         options,
         fallbackProviderOrder,
+        input.selectedExecutionProfile,
       ),
       ...(this.fallbackChain
         ? {

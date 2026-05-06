@@ -58,6 +58,7 @@ export interface SelectedExecutionProfile {
   maxAdditionalSections: number;
   maxRuntimeNotices: number;
   fallbackProviderOrder: string[];
+  fallbackProviderTiers?: Record<string, ProviderTier>;
   reason: string;
   routingMode?: RoutingTierMode;
   selectionSource?: ExecutionProfileSelectionSource;
@@ -466,6 +467,22 @@ function buildFallbackProviderOrder(
     }
   }
   return ordered;
+}
+
+function buildFallbackProviderTierMap(
+  config: GuardianAgentConfig,
+  providerOrder: readonly string[],
+): Record<string, ProviderTier> {
+  const tiers: Record<string, ProviderTier> = {};
+  for (const providerName of providerOrder) {
+    const trimmed = providerName.trim();
+    if (!trimmed || tiers[trimmed]) continue;
+    const tier = getProviderTier(config.llm[trimmed]?.provider ?? trimmed);
+    if (tier) {
+      tiers[trimmed] = tier;
+    }
+  }
+  return tiers;
 }
 
 function shouldPreferFrontier(
@@ -1150,6 +1167,12 @@ export function selectExecutionProfile(input: {
     expectedContextPressure,
     preferredAnswerPath,
   });
+  const fallbackProviderOrder = buildFallbackProviderOrder(
+    input.config,
+    effectiveProviderName,
+    tierSelection.tier,
+    policy,
+  );
   return {
     id: shape.id,
     providerName: effectiveProviderName,
@@ -1164,12 +1187,8 @@ export function selectExecutionProfile(input: {
     toolContextMode: shape.toolContextMode,
     maxAdditionalSections: shape.maxAdditionalSections,
     maxRuntimeNotices: shape.maxRuntimeNotices,
-    fallbackProviderOrder: buildFallbackProviderOrder(
-      input.config,
-      effectiveProviderName,
-      tierSelection.tier,
-      policy,
-    ),
+    fallbackProviderOrder,
+    fallbackProviderTiers: buildFallbackProviderTierMap(input.config, fallbackProviderOrder),
     reason: providerSelection?.reasonSuffix
       ? `${tierSelection.reason}; ${providerSelection.reasonSuffix}`
       : tierSelection.reason,
@@ -1369,6 +1388,7 @@ export function serializeSelectedExecutionProfile(
     maxAdditionalSections: profile.maxAdditionalSections,
     maxRuntimeNotices: profile.maxRuntimeNotices,
     fallbackProviderOrder: [...profile.fallbackProviderOrder],
+    ...(profile.fallbackProviderTiers ? { fallbackProviderTiers: { ...profile.fallbackProviderTiers } } : {}),
     reason: profile.reason,
     ...(profile.routingMode ? { routingMode: profile.routingMode } : {}),
     ...(profile.selectionSource ? { selectionSource: profile.selectionSource } : {}),
@@ -1412,6 +1432,19 @@ export function readSelectedExecutionProfileMetadata(
       .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
       .map((value) => value.trim())
     : [providerName];
+  const fallbackProviderTiers = record.fallbackProviderTiers
+    && typeof record.fallbackProviderTiers === 'object'
+    && !Array.isArray(record.fallbackProviderTiers)
+    ? Object.fromEntries(
+        Object.entries(record.fallbackProviderTiers as Record<string, unknown>)
+          .filter((entry): entry is [string, ProviderTier] => (
+            typeof entry[0] === 'string'
+            && entry[0].trim().length > 0
+            && isProviderTier(entry[1])
+          ))
+          .map(([name, tier]) => [name.trim(), tier]),
+      )
+    : undefined;
   return {
     id: record.id === 'local_direct'
       || record.id === 'local_tool'
@@ -1445,6 +1478,9 @@ export function readSelectedExecutionProfileMetadata(
       ? record.maxRuntimeNotices
       : 2,
     fallbackProviderOrder: fallbackProviderOrder.length > 0 ? fallbackProviderOrder : [providerName],
+    ...(fallbackProviderTiers && Object.keys(fallbackProviderTiers).length > 0
+      ? { fallbackProviderTiers }
+      : {}),
     reason: typeof record.reason === 'string' && record.reason.trim()
       ? record.reason.trim()
       : 'request-scoped execution profile',

@@ -5,6 +5,7 @@ import {
   chatWithAlternateProvider,
   chatWithFallback,
   chatWithRoutingMetadata,
+  isRetryableExternalProviderError,
   resolvePreferredProviderOrder,
 } from './provider-fallback.js';
 
@@ -165,5 +166,109 @@ describe('provider fallback runtime', () => {
       messages,
       undefined,
     );
+  });
+
+  it('recognizes retryable external provider errors', () => {
+    expect(isRetryableExternalProviderError(new Error('HTTP 503 service unavailable'))).toBe(true);
+    expect(isRetryableExternalProviderError(new Error('429 rate limit exceeded'))).toBe(true);
+    expect(isRetryableExternalProviderError(new Error('invalid api key'))).toBe(false);
+  });
+
+  it('keeps selected external provider-order retries inside the selected tier', async () => {
+    const fallbackChain = {
+      chatWithProviderOrder: vi.fn(async () => ({
+        providerName: 'nvidia-general',
+        usedFallback: true,
+        skipped: ['ollama-cloud-coding'],
+        response: response('same-tier fallback'),
+      })),
+      chatWithFallback: vi.fn(),
+      chatWithFallbackAfterPrimary: vi.fn(),
+      chatWithFallbackAfterProvider: vi.fn(),
+    };
+
+    const result = await chatWithRoutingMetadata({
+      agentId: 'chat',
+      ctx: ctx('ollama_cloud'),
+      messages,
+      fallbackProviderOrder: ['ollama-cloud-coding', 'nvidia-general', 'openai', 'ollama'],
+      selectedExecutionProfile: {
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerTier: 'managed_cloud',
+        fallbackProviderTiers: {
+          'ollama-cloud-coding': 'managed_cloud',
+          'nvidia-general': 'managed_cloud',
+          openai: 'frontier',
+          ollama: 'local',
+        },
+      },
+      fallbackChain,
+      log: { warn: vi.fn() },
+    });
+
+    expect(fallbackChain.chatWithProviderOrder).toHaveBeenCalledWith(
+      ['ollama-cloud-coding', 'nvidia-general'],
+      messages,
+      undefined,
+    );
+    expect(result).toMatchObject({
+      providerName: 'nvidia-general',
+      providerLocality: 'external',
+      response: { content: 'same-tier fallback' },
+      usedFallback: true,
+      notice: 'Retried within the selected external model tier after the first provider was unavailable.',
+    });
+  });
+
+  it('constrains retryable external primary failures to same-tier fallback order', async () => {
+    const primaryChat = vi.fn(async () => {
+      throw new Error('HTTP 503 service unavailable');
+    });
+    const fallbackChain = {
+      chatWithProviderOrder: vi.fn(),
+      chatWithFallback: vi.fn(),
+      chatWithFallbackAfterPrimary: vi.fn(),
+      chatWithFallbackAfterProvider: vi.fn(async () => ({
+        providerName: 'nvidia-general',
+        usedFallback: true,
+        skipped: ['ollama-cloud-coding'],
+        response: response('same-tier fallback'),
+      })),
+    };
+
+    const result = await chatWithRoutingMetadata({
+      agentId: 'chat',
+      ctx: ctx('ollama_cloud', primaryChat),
+      messages,
+      fallbackProviderOrder: ['ollama_cloud', 'ollama-cloud-coding', 'nvidia-general', 'openai', 'ollama'],
+      selectedExecutionProfile: {
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerTier: 'managed_cloud',
+        fallbackProviderTiers: {
+          ollama_cloud: 'managed_cloud',
+          'ollama-cloud-coding': 'managed_cloud',
+          'nvidia-general': 'managed_cloud',
+          openai: 'frontier',
+          ollama: 'local',
+        },
+      },
+      fallbackChain,
+      log: { warn: vi.fn() },
+    });
+
+    expect(fallbackChain.chatWithFallbackAfterProvider).toHaveBeenCalledWith(
+      'ollama_cloud',
+      ['ollama_cloud', 'ollama-cloud-coding', 'nvidia-general'],
+      messages,
+      undefined,
+    );
+    expect(result).toMatchObject({
+      providerName: 'nvidia-general',
+      providerLocality: 'external',
+      usedFallback: true,
+      notice: 'Retried within the selected external model tier after a retryable provider error.',
+    });
   });
 });
