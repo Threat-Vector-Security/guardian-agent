@@ -5,7 +5,7 @@
 import { api } from '../api.js';
 import { activateContextHelp, enhanceSectionHelp, renderGuidancePanel } from '../components/context-help.js';
 import { createTabs } from '../components/tabs.js';
-import { canTestProviderConnection } from '../provider-editor-state.js';
+import { canTestProviderConnection, summarizeModelCapabilitySettings } from '../provider-editor-state.js';
 import { sortConfiguredProviders } from '../provider-order.js';
 import { applyInputTooltips } from '../tooltip.js';
 import {
@@ -1309,7 +1309,7 @@ function createProviderPanel(config, providers, panel) {
                   <label>Native Ollama Options (JSON)</label>
                   <textarea id="cfg-local-ollama-options" rows="7" placeholder='{"num_ctx": 32768, "num_thread": 8, "repeat_penalty": 1.1}' style="width:100%;"></textarea>
                 </div>
-                <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+                <div id="cfg-local-capability-note" style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
                   These values are passed through to the native Ollama SDK request. Use JSON for any supported runtime option you want to control beyond the common fields above.
                 </div>
               </details>
@@ -1357,7 +1357,7 @@ function createProviderPanel(config, providers, panel) {
                   <label>Native Ollama Options (JSON)</label>
                   <textarea id="cfg-mcloud-ollama-options" rows="7" placeholder='{"num_ctx": 32768, "repeat_penalty": 1.1}' style="width:100%;"></textarea>
                 </div>
-                <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+                <div id="cfg-mcloud-capability-note" style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
                   These values are only used for Ollama-family providers in the managed-cloud tier.
                 </div>
               </details>
@@ -1406,7 +1406,7 @@ function createProviderPanel(config, providers, panel) {
                   <label>Native Ollama Options (JSON)</label>
                   <textarea id="cfg-ext-ollama-options" rows="7" placeholder='{"num_ctx": 32768, "repeat_penalty": 1.1}' style="width:100%;"></textarea>
                 </div>
-                <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+                <div id="cfg-ext-capability-note" style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
                   Capability-aware controls are saved only when set. Ollama-only fields are hidden for hosted providers.
                 </div>
               </details>
@@ -1523,6 +1523,7 @@ function createProviderPanel(config, providers, panel) {
     const keepAliveEl = section.querySelector(`#${prefix}-keep-alive`);
     const thinkEl = section.querySelector(`#${prefix}-think`);
     const ollamaOptionsEl = section.querySelector(`#${prefix}-ollama-options`);
+    const capabilityNoteEl = section.querySelector(`#${prefix}-capability-note`);
     if (credentialRefCheckbox && credentialRefEl) {
       credentialRefCheckbox.addEventListener('change', () => {
         credentialRefEl.disabled = !credentialRefCheckbox.checked;
@@ -1672,8 +1673,14 @@ function createProviderPanel(config, providers, panel) {
       }
     }
 
+    function updateCapabilityNote(capabilities) {
+      if (!capabilityNoteEl) return;
+      capabilityNoteEl.textContent = summarizeModelCapabilitySettings(capabilities);
+    }
+
     function applyModelCapabilities(capabilities, providerType = typeEl?.value) {
       toggleAdvancedVisibility(providerType);
+      updateCapabilityNote(capabilities);
       if (!capabilities?.settings) {
         [
           reasoningEffortEl,
