@@ -9751,6 +9751,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(workerManager.handleMessage).toHaveBeenCalledOnce();
     expect(workerManager.handleMessage).toHaveBeenCalledWith(expect.objectContaining({
       delegation: expect.objectContaining({
+        runClass: 'in_invocation',
         orchestration: {
           role: 'coordinator',
           label: 'Guardian Coordinator',
@@ -9954,6 +9955,11 @@ describe('LLMChatAgent direct intent metadata', () => {
 
     expect(response.content).toBe('Delegated repo answer.');
     expect(workerManager.handleMessage).toHaveBeenCalledOnce();
+    expect(workerManager.handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      delegation: expect.objectContaining({
+        runClass: 'long_running',
+      }),
+    }));
     expect(localChat).not.toHaveBeenCalled();
   });
 
@@ -10092,6 +10098,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(workerManager.handleMessage).toHaveBeenCalledWith(expect.objectContaining({
       directReasoning: false,
       delegation: expect.objectContaining({
+        runClass: 'long_running',
         orchestration: {
           role: 'implementer',
           label: 'Workspace Implementer',

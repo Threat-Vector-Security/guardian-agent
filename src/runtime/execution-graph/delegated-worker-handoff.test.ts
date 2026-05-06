@@ -5,6 +5,7 @@ import {
   buildDelegatedInsufficientResultHandoff,
   formatFailedDelegatedMessage,
   normalizeDelegatedWorkerRunClass,
+  resolveDelegatedWorkerRunClass,
   resolveDelegatedWorkerLifecycle,
 } from './delegated-worker-handoff.js';
 import { buildDelegatedExecutionMetadata, buildDelegatedSyntheticEnvelope } from '../execution/metadata.js';
@@ -194,6 +195,28 @@ describe('delegated worker handoff graph policy', () => {
   it('normalizes unknown delegated run classes conservatively', () => {
     expect(normalizeDelegatedWorkerRunClass('automation_owned')).toBe('automation_owned');
     expect(normalizeDelegatedWorkerRunClass('unexpected')).toBe('short_lived');
+  });
+
+  it('resolves delegated run classes from producer context', () => {
+    expect(resolveDelegatedWorkerRunClass({
+      requestedRunClass: 'long_running',
+      originChannel: 'scheduled',
+    })).toBe('long_running');
+    expect(resolveDelegatedWorkerRunClass({
+      originChannel: 'scheduled',
+      orchestration: { role: 'coordinator', label: 'Guardian Coordinator' },
+    })).toBe('automation_owned');
+    expect(resolveDelegatedWorkerRunClass({
+      directReasoning: true,
+      orchestration: { role: 'coordinator', label: 'Guardian Coordinator' },
+    })).toBe('in_invocation');
+    expect(resolveDelegatedWorkerRunClass({
+      codeSessionId: 'code-session-1',
+      orchestration: { role: 'explorer', label: 'Workspace Explorer', lenses: ['coding-workspace'] },
+    })).toBe('long_running');
+    expect(resolveDelegatedWorkerRunClass({
+      orchestration: { role: 'explorer', label: 'Research Explorer', lenses: ['research'] },
+    })).toBe('short_lived');
   });
 });
 

@@ -98,6 +98,7 @@ Current delegation-related sources of truth also include:
   - delegated lineage metadata
   - effective delegated intent metadata for trace and retry decisions
   - bounded handoff summaries for brokered worker completions and failures
+  - producer-owned delegated run-class policy for explicit, automation-owned, direct-reasoning, coding-session, and orchestration-role contexts
   - live delegated-worker lifecycle updates that feed the shared run timeline and routing trace
   - server-owned delegated follow-up policy (`inline_response`, `held_for_approval`, `status_only`, operator-held review)
   - held-result replay, keep-held, and dismiss controls for operator-held delegated completions

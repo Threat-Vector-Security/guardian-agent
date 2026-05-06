@@ -41,7 +41,7 @@ Recommended reading order:
 | Memory system uplift | In progress | Retrieval/flush foundation and signal-aware ranking landed; broader recall quality still remains |
 | Context assembly uplift | In progress | Shared packer landed; further refinement remains |
 | Routing / trace observability | In progress | Strong operator visibility now exists, including Code workbench exact-event drill-down |
-| Background delegation uplift | In progress | Delegated lineage, bounded handoff summaries, follow-up policy, run classes, replay controls, timeline projection, and operator job visibility landed; broader producer adoption and long-running flows still remain |
+| Background delegation uplift | In progress | Delegated lineage, bounded handoff summaries, follow-up policy, producer-owned run classes, replay controls, timeline projection, and operator job visibility landed; long-running flows still remain |
 | Minimal embeddable kernel posture | Design only | Should keep shaping implementation choices |
 | Intelligence-in-depth alignment | Design only | Architectural guidance in place; runtime rollout still pending |
 
@@ -102,6 +102,7 @@ Recommended reading order:
 - clarification and workspace-switch delegated blockers can now downgrade to status-only operator messaging while approval blockers stay inline and approval-held
 - delegated follow-up state now projects into assistant-dispatch traces and the unified execution timeline through bounded handoff nodes instead of only raw delegated prose
 - delegated run classes now exist for `in_invocation`, `short_lived`, `long_running`, and `automation_owned` work, with `long_running` and `automation_owned` able to hold results for operator review
+- delegated worker producers now stamp run-class metadata from explicit policy, automation origin, direct-reasoning mode, coding-session context, and orchestration role before the worker manager records job/timeline state
 - Dashboard `Agent Runtime`, the web assistant API, and CLI `/assistant jobs followup <jobId> <replay|keep_held|dismiss>` now expose bounded operator controls for held delegated results
 
 ---
@@ -109,10 +110,10 @@ Recommended reading order:
 ## Current Focus
 
 Recommended current implementation focus:
-- producer adoption and timeline/query refinement for delegated run classes on top of the new lineage/handoff foundation
+- continuity-aware long-running delegated work and richer execution-graph event detail on top of the lineage/handoff foundation
 
 Why this is next:
-- the class model and operator controls now exist, so the next step is using those classes more broadly and making delegated lineage easier to isolate and reason about at scale
+- the class model, producer adoption, operator controls, and timeline filters now exist, so the next step is making long-running work resumable and easier to reason about at scale
 - background delegation is still the largest unfinished capability lane
 
 ---
@@ -122,13 +123,11 @@ Why this is next:
 ### Near-term
 
 - final continuity polish around any remaining surface drift or noisy resume cases
-- broader producer adoption for delegated run classes beyond the current brokered worker metadata path
 - richer execution-graph event detail surfaces beyond the current graph metadata and context filters
 
 ### Medium-term
 
 - background delegation runtime
-- delegated run class policies and runtime defaults
 - continuity-aware long-running delegated work
 
 ### Later cleanup

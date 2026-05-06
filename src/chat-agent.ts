@@ -245,6 +245,9 @@ import {
 } from './runtime/direct-reasoning-mode.js';
 import { readExecutionIdentityMetadata, type ExecutionIdentityMetadata } from './runtime/execution-identity.js';
 import {
+  resolveDelegatedWorkerRunClass,
+} from './runtime/execution-graph/delegated-worker-handoff.js';
+import {
   constrainCapabilitiesToOrchestrationRole,
   inferDelegatedOrchestrationDescriptor,
 } from './runtime/orchestration-role-contracts.js';
@@ -2187,6 +2190,12 @@ interface DegradedDirectIntentResponseInput {
           [...ctx.capabilities],
           delegatedOrchestration,
         );
+        const delegatedRunClass = resolveDelegatedWorkerRunClass({
+          originChannel: message.channel,
+          codeSessionId: resolvedCodeSession?.session.id,
+          orchestration: delegatedOrchestration,
+          directReasoning: handleDirectReasoning,
+        });
         const result = await workerManager.handleMessage({
           sessionId: `${conversationUserId}:${conversationChannel}`,
           agentId: this.id,
@@ -2215,6 +2224,7 @@ interface DegradedDirectIntentResponseInput {
             ...(continuitySummary?.activeExecutionRefs?.length ? { activeExecutionRefs: continuitySummary.activeExecutionRefs } : {}),
             ...(pendingAction?.id ? { pendingActionId: pendingAction.id } : {}),
             ...(resolvedCodeSession?.session.id ? { codeSessionId: resolvedCodeSession.session.id } : {}),
+            runClass: delegatedRunClass,
             ...(delegatedOrchestration ? { orchestration: delegatedOrchestration } : {}),
           },
         });

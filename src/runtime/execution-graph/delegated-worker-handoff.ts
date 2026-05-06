@@ -7,11 +7,22 @@ import type {
   DelegatedResultEnvelope,
   VerificationDecision,
 } from '../execution/types.js';
+import type { OrchestrationRoleDescriptor } from '../orchestration-role-descriptors.js';
 import { readWorkerExecutionMetadata } from '../worker-execution-metadata.js';
+
+const AUTOMATION_OWNED_CHANNELS = new Set(['automation', 'scheduled']);
 
 export interface DelegatedInsufficientResultHandoffInput {
   failureSummary: string;
   decision: Pick<VerificationDecision, 'requiredNextAction'>;
+}
+
+export interface DelegatedWorkerRunClassPolicyInput {
+  requestedRunClass?: unknown;
+  originChannel?: string;
+  codeSessionId?: string;
+  orchestration?: OrchestrationRoleDescriptor;
+  directReasoning?: boolean;
 }
 
 export function buildDelegatedInsufficientResultHandoff(
@@ -40,31 +51,31 @@ export function buildDelegatedHandoff(
     ?? (lifecycle === 'failed' ? 'Delegated worker failed.' : 'Delegated worker completed.');
   const approvalCount = readApprovalSummaryCount(metadata);
   const runClass = normalizeDelegatedWorkerRunClass(runClassInput);
-  let nextAction = verification?.requiredNextAction ?? 'Result returned inline to the original conversation.';
-  let reportingMode: DelegatedWorkerHandoff['reportingMode'] = 'inline_response';
-  let operatorState: DelegatedWorkerHandoff['operatorState'] | undefined;
+  const completedDefaults = resolveCompletedDelegatedFollowUpDefaults(runClass);
+  let nextAction = verification?.requiredNextAction ?? completedDefaults.nextAction;
+  let reportingMode: DelegatedWorkerHandoff['reportingMode'] = completedDefaults.reportingMode;
+  let operatorState: DelegatedWorkerHandoff['operatorState'] | undefined = completedDefaults.operatorState;
 
   if (unresolvedBlockerKind === 'approval') {
     nextAction = 'Resolve the pending approval(s) to continue the delegated run.';
     reportingMode = 'held_for_approval';
+    operatorState = undefined;
   } else if (unresolvedBlockerKind === 'clarification') {
     nextAction = 'Resolve the clarification to continue the delegated run.';
     reportingMode = 'status_only';
+    operatorState = undefined;
   } else if (unresolvedBlockerKind === 'workspace_switch') {
     nextAction = 'Switch to the requested coding workspace to continue the delegated run.';
     reportingMode = 'status_only';
+    operatorState = undefined;
   } else if (unresolvedBlockerKind === 'policy_blocked') {
     nextAction = verification?.requiredNextAction ?? 'Resolve the policy blocker before retrying.';
     reportingMode = 'status_only';
+    operatorState = undefined;
   } else if (lifecycle === 'failed') {
     nextAction = verification?.requiredNextAction ?? 'Inspect the delegated worker failure details before retrying.';
-  } else if (runClass === 'long_running' || runClass === 'automation_owned') {
-    // TODO(background-delegation-uplift): Broaden run-class adoption beyond this brokered worker path,
-    // define stronger per-class follow-up defaults, and extend this from bounded held-result handling
-    // into richer long-running/background delegation behavior with better timeline/query visibility.
-    nextAction = 'Replay or dismiss the held delegated result.';
-    reportingMode = 'held_for_operator';
-    operatorState = 'pending';
+    reportingMode = 'inline_response';
+    operatorState = undefined;
   }
 
   return {
@@ -153,9 +164,32 @@ export function resolveDelegatedWorkerLifecycle(
 }
 
 export function normalizeDelegatedWorkerRunClass(value: unknown): DelegatedWorkerRunClass {
-  if (value === 'in_invocation' || value === 'short_lived' || value === 'long_running' || value === 'automation_owned') {
-    return value;
+  return readDelegatedWorkerRunClass(value) ?? 'short_lived';
+}
+
+export function resolveDelegatedWorkerRunClass(
+  input: DelegatedWorkerRunClassPolicyInput,
+): DelegatedWorkerRunClass {
+  const requested = readDelegatedWorkerRunClass(input.requestedRunClass);
+  if (requested) return requested;
+
+  const originChannel = normalizeRunClassPolicyText(input.originChannel)?.toLowerCase();
+  if (originChannel && AUTOMATION_OWNED_CHANNELS.has(originChannel)) {
+    return 'automation_owned';
   }
+
+  if (input.directReasoning) {
+    return 'in_invocation';
+  }
+
+  if (normalizeRunClassPolicyText(input.codeSessionId) || hasDelegatedOrchestrationLens(input.orchestration, 'coding-workspace')) {
+    return 'long_running';
+  }
+
+  if (input.orchestration?.role === 'coordinator') {
+    return 'in_invocation';
+  }
+
   return 'short_lived';
 }
 
@@ -166,6 +200,47 @@ export function formatFailedDelegatedMessage(handoff: DelegatedWorkerHandoff): s
     handoff.nextAction,
   ].filter((value) => typeof value === 'string' && value.trim().length > 0);
   return [...new Set(parts)].join('\n');
+}
+
+function resolveCompletedDelegatedFollowUpDefaults(
+  runClass: DelegatedWorkerRunClass,
+): Pick<DelegatedWorkerHandoff, 'nextAction' | 'reportingMode' | 'operatorState'> {
+  if (runClass === 'long_running' || runClass === 'automation_owned') {
+    return {
+      nextAction: 'Replay or dismiss the held delegated result.',
+      reportingMode: 'held_for_operator',
+      operatorState: 'pending',
+    };
+  }
+  return {
+    nextAction: 'Result returned inline to the original conversation.',
+    reportingMode: 'inline_response',
+  };
+}
+
+function readDelegatedWorkerRunClass(value: unknown): DelegatedWorkerRunClass | undefined {
+  switch (value) {
+    case 'in_invocation':
+    case 'short_lived':
+    case 'long_running':
+    case 'automation_owned':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function hasDelegatedOrchestrationLens(
+  orchestration: OrchestrationRoleDescriptor | undefined,
+  lens: string,
+): boolean {
+  return (orchestration?.lenses ?? []).some((value) => normalizeRunClassPolicyText(value) === lens);
+}
+
+function normalizeRunClassPolicyText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function readApprovalSummaryCount(metadata: Record<string, unknown> | undefined): number {
