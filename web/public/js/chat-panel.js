@@ -14,7 +14,7 @@ import {
   markApprovalUiProcessing,
   markApprovalUiResolved,
 } from './approval-ui-state.js';
-import { resolveSafeWorkingLabel } from './chat-activity-copy.js';
+import { resolveSafeWorkingActivity } from './chat-activity-copy.js';
 import { buildApprovalContinuationSummaryPart, decideChatApproval } from './chat-approval.js';
 import { resolveChatDispatchAgentId } from './chat-dispatch-routing.js';
 import {
@@ -137,6 +137,17 @@ function updateActiveChatIndicatorLabel(label) {
   }
 }
 
+function updateActiveChatIndicatorActivity(activitySummary) {
+  if (!activeChatIndicator) return;
+  const label = String(activitySummary?.label || 'Working…');
+  activeChatIndicator.label = label;
+  activeChatIndicator.activitySummary = activitySummary;
+  if (activeChatIndicator.element?.isConnected) {
+    setThinkingLabel(activeChatIndicator.element, label);
+    renderLiveActivityEl(activeChatIndicator.element.querySelector('.chat-live-activity'), activitySummary);
+  }
+}
+
 function updateActiveChatIndicatorTimeline(run) {
   if (!activeChatIndicator || !run?.summary) return;
   if (activeChatIndicator.fallbackTimer) {
@@ -153,7 +164,7 @@ function startActiveChatFallbackTicker(startedAt = Date.now(), options = {}) {
   if (!activeChatIndicator) return;
   const applyLabel = () => {
     if (!activeChatIndicator || activeChatIndicator.timeline) return;
-    updateActiveChatIndicatorLabel(resolveSafeWorkingLabel(Date.now() - startedAt, options));
+    updateActiveChatIndicatorActivity(resolveSafeWorkingActivity(Date.now() - startedAt, options));
   };
   applyLabel();
   activeChatIndicator.fallbackTimer = setInterval(applyLabel, 1000);
@@ -167,6 +178,8 @@ function syncActiveChatIndicator(historyEl, agentId) {
   const nextEl = createThinkingEl(activeChatIndicator.label);
   if (activeChatIndicator.timeline) {
     updateThinkingEl(nextEl, activeChatIndicator.timeline);
+  } else if (activeChatIndicator.activitySummary) {
+    renderLiveActivityEl(nextEl.querySelector('.chat-live-activity'), activeChatIndicator.activitySummary);
   }
   historyEl.appendChild(nextEl);
   activeChatIndicator.element = nextEl;

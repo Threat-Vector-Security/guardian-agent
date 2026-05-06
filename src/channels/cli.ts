@@ -53,6 +53,18 @@ const CLI_PASTED_MESSAGE_DEBOUNCE_MS = 100;
 const CLI_PASTED_MESSAGE_CONTINUATION_GAP_MS = 25;
 const CLI_PROGRESS_DISPLAY_DEDUPE_WINDOW_MS = 10_000;
 const CLI_PROGRESS_DISPLAY_DEDUPE_MAX_KEYS = 50;
+const CLI_SAFE_PROGRESS_STAGES = [
+  { afterMs: 2_000, title: 'Checking route and context', detail: 'Choosing the right lane and loading relevant context.' },
+  { afterMs: 6_000, title: 'Working with the selected model', detail: 'Preparing the answer or tool plan.' },
+  { afterMs: 12_000, title: 'Still working', detail: 'Waiting on tools or provider.' },
+  { afterMs: 30_000, title: 'Still working', detail: 'This request is taking longer than usual.' },
+] as const;
+const CLI_SAFE_APPROVAL_PROGRESS_STAGES = [
+  { afterMs: 2_000, title: 'Checking continuation context', detail: 'Reconnecting the approval to the current request.' },
+  { afterMs: 6_000, title: 'Resuming approved work', detail: 'Continuing after the approved action.' },
+  { afterMs: 12_000, title: 'Still working', detail: 'Waiting on tools or provider.' },
+  { afterMs: 30_000, title: 'Still working', detail: 'This continuation is taking longer than usual.' },
+] as const;
 const APPROVAL_CONFIRM_PATTERN = /^(?:approve|approved|yes|y|ok|okay|sure|go ahead|confirm|proceed|accept)\b/i;
 const APPROVAL_DENY_PATTERN = /^(?:deny|denied|no|n|reject|decline|cancel)\b/i;
 
@@ -69,6 +81,8 @@ interface CliLiveProgressState {
   requestId?: string;
   codeSessionId?: string;
   lastSnapshotKey: string;
+  fallbackTimers: NodeJS.Timeout[];
+  sawTimeline: boolean;
 }
 
 interface CliLiveProgressSnapshot {
@@ -820,6 +834,7 @@ export class CLIChannel implements ChannelAdapter {
         ? this.beginLiveProgress({
             requestId: approval.requestId,
             codeSessionId: approval.codeSessionId,
+            mode: 'approval',
           })
         : null;
       try {
@@ -990,6 +1005,7 @@ export class CLIChannel implements ChannelAdapter {
   private beginLiveProgress(input: {
     requestId?: string;
     codeSessionId?: string;
+    mode?: 'request' | 'approval';
   }): CliLiveProgressState | null {
     const requestId = typeof input.requestId === 'string' && input.requestId.trim()
       ? input.requestId.trim()
@@ -1003,14 +1019,42 @@ export class CLIChannel implements ChannelAdapter {
       ...(requestId ? { requestId } : {}),
       ...(codeSessionId ? { codeSessionId } : {}),
       lastSnapshotKey: '',
+      fallbackTimers: [],
+      sawTimeline: false,
     };
     this.liveProgressStates.add(state);
+    this.scheduleSafeProgressFallbacks(state, input.mode === 'approval' ? 'approval' : 'request');
     return state;
   }
 
   private endLiveProgress(progressState: CliLiveProgressState | null): void {
     if (!progressState) return;
+    for (const timer of progressState.fallbackTimers) {
+      clearTimeout(timer);
+    }
+    progressState.fallbackTimers = [];
     this.liveProgressStates.delete(progressState);
+  }
+
+  private scheduleSafeProgressFallbacks(
+    progressState: CliLiveProgressState,
+    mode: 'request' | 'approval',
+  ): void {
+    const stages = mode === 'approval'
+      ? CLI_SAFE_APPROVAL_PROGRESS_STAGES
+      : CLI_SAFE_PROGRESS_STAGES;
+    for (const stage of stages) {
+      const timer = setTimeout(() => {
+        if (!this.liveProgressStates.has(progressState) || progressState.sawTimeline) return;
+        this.renderLiveProgressSnapshot({
+          key: `safe:${mode}:${stage.afterMs}`,
+          tone: stage.afterMs >= 12_000 ? 'warning' : 'running',
+          title: stage.title,
+          detail: stage.detail,
+        });
+      }, stage.afterMs);
+      progressState.fallbackTimers.push(timer);
+    }
   }
 
   private handleSubscribedProgressEvent(event: SSEEvent): void {
@@ -1018,6 +1062,7 @@ export class CLIChannel implements ChannelAdapter {
     for (const state of this.liveProgressStates) {
       const next = extractCliApprovalProgressSnapshot(event, state);
       if (!next) continue;
+      state.sawTimeline = true;
       if (next.key === state.lastSnapshotKey) continue;
       state.lastSnapshotKey = next.key;
       snapshot = snapshot ?? next;
@@ -1029,7 +1074,9 @@ export class CLIChannel implements ChannelAdapter {
 
   private handleStreamProgressEvent(event: SSEEvent, progressState: CliLiveProgressState): void {
     const snapshot = extractCliApprovalProgressSnapshot(event, progressState);
-    if (!snapshot || snapshot.key === progressState.lastSnapshotKey) return;
+    if (!snapshot) return;
+    progressState.sawTimeline = true;
+    if (snapshot.key === progressState.lastSnapshotKey) return;
     progressState.lastSnapshotKey = snapshot.key;
     this.renderLiveProgressSnapshot(snapshot);
   }

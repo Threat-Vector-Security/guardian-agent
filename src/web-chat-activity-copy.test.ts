@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { resolveSafeWorkingLabel } from '../web/public/js/chat-activity-copy.js';
+import {
+  resolveSafeWorkingActivity,
+  resolveSafeWorkingLabel,
+} from '../web/public/js/chat-activity-copy.js';
 
 describe('resolveSafeWorkingLabel', () => {
   it('returns safe operational labels for normal chat work', () => {
@@ -19,5 +22,22 @@ describe('resolveSafeWorkingLabel', () => {
   it('treats invalid elapsed values as fresh work', () => {
     expect(resolveSafeWorkingLabel(Number.NaN)).toBe('Reading the request…');
     expect(resolveSafeWorkingLabel(-500)).toBe('Reading the request…');
+  });
+
+  it('returns safe activity breadcrumbs without exposing hidden reasoning', () => {
+    expect(resolveSafeWorkingActivity(2_100)).toEqual({
+      label: 'Checking route and context…',
+      items: [{
+        title: 'Checking route and context…',
+        detail: 'Choosing the right lane and loading the relevant context.',
+      }],
+    });
+    expect(resolveSafeWorkingActivity(12_500, { mode: 'approval' })).toEqual({
+      label: 'Still working; waiting on tools or provider…',
+      items: [{
+        title: 'Still working; waiting on tools or provider…',
+        detail: 'Keeping the continuation open while external work finishes.',
+      }],
+    });
   });
 });

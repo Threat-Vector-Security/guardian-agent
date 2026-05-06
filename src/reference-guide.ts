@@ -459,6 +459,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use `/mode` to switch between auto, local, managed cloud, and frontier routing without changing agent definitions.',
                   'Guardian chat can also explain the CLI command surface in normal language. Ask things like "How do I attach a coding workspace from the CLI?" and it should answer from the built-in command guide, then point you to `/help <command>` for exact syntax.',
                   'Auto mode chooses the best available AI path for the request. If only one AI path is available, Guardian uses it automatically.',
+                  'Web chat and CLI show safe live activity such as routing, context checks, model work, tool waits, approvals, and finalization while a request is running. These are operational progress messages, not hidden reasoning transcripts.',
                   'Blocked work such as approvals, clarifications, and workspace switches can be resumed cleanly across the supported operator surfaces.',
                 ],
                 note: 'Approval prompts should normally be handled through the native buttons or inline prompt flow first. Fallback commands remain useful for remote or scripted sessions.',
