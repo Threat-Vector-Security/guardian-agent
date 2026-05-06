@@ -82,6 +82,7 @@ Recommended reading order:
 - Dashboard `Agent Runtime` and CLI `/assistant jobs` now show merged assistant and delegated-worker job state with bounded origin, outcome, and follow-up summaries
 - shared live run summaries now convert low-level timeline events into safe user-facing progress labels for web chat, CLI progress lines, and concise Telegram updates
 - CLI `/assistant jobs` now supports operator filters for held, approval, delegated, status, reporting-mode, and run-class views so held delegated work is easier to isolate
+- Dashboard `Agent Runtime` now has matching job filters for held, approval, delegated, status, reporting-mode, and run-class job views
 
 ### Documentation alignment
 
@@ -118,7 +119,7 @@ Why this is next:
 
 - final continuity polish around any remaining surface drift or noisy resume cases
 - broader producer adoption for delegated run classes beyond the current brokered worker metadata path
-- broader timeline/query affordances outside the CLI that make delegated lineage and held-result decisions easier to isolate at scale
+- deeper timeline/query affordances beyond the recent-job feed that make delegated lineage and held-result decisions easier to isolate at scale
 
 ### Medium-term
 

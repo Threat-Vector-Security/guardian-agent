@@ -441,6 +441,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Performance shows workstation pressure, reviewed cleanup previews, and profile-aware latency targets.',
                   'Security Overview now owns the short `Needs Attention` queue, and Security Log remains the full action-and-evidence surface for alert triage.',
                   'Use `Agent Runtime` when you want the recent job view for assistant work, background work, and held follow-up results.',
+                  'In the System page, use the Agent Runtime job filter to switch recent background jobs between all, held, approval, delegated, running, failed, long-running, automation-owned, and status-only views.',
                   'Held results can be replayed, kept held, or dismissed directly from `Agent Runtime`.',
                   'System includes `Runtime Execution`, the timeline for assistant dispatches, routine and scheduled-task runs, and coding-session execution that does not belong on Automations.',
                   'Use `Runtime Execution` when you need to reconstruct what Guardian did, where a run paused, or which step failed.',

@@ -30,6 +30,7 @@ const systemUiState = {
     continuityKey: '',
     activeExecutionRef: '',
   },
+  assistantJobFilter: 'all',
   assistantJobFollowUpResult: null,
 };
 
@@ -802,7 +803,10 @@ function createOperationalSurfacesSection({ securitySummary, automationSummary, 
 
 function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assistantState }) {
   const sessions = Array.isArray(assistantState?.orchestrator?.sessions) ? assistantState.orchestrator.sessions : [];
-  const jobs = Array.isArray(assistantState?.jobs?.jobs) ? assistantState.jobs.jobs.slice(0, 6) : [];
+  const allJobs = Array.isArray(assistantState?.jobs?.jobs) ? assistantState.jobs.jobs : [];
+  const assistantJobFilter = normalizeAssistantJobFilter(systemUiState.assistantJobFilter);
+  const filteredJobs = filterAssistantJobs(allJobs, assistantJobFilter);
+  const jobs = filteredJobs.slice(0, 6);
   const agentMap = new Map((agents || []).map((agent) => [agent.id, agent]));
   const activeSessions = sessions
     .filter((session) => session.status === 'running' || session.status === 'queued')
@@ -872,11 +876,23 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assist
           }).join('')}
       </tbody>
     </table>
-    <table style="margin-top:1rem;">
+    <div class="table-header" style="margin-top:1rem;border-top:1px solid var(--border-color)">
+      <div>
+        <h3 style="margin:0;font-size:1rem">Background Jobs</h3>
+        <div class="ops-task-sub">Showing ${jobs.length} of ${filteredJobs.length} matching jobs${filteredJobs.length === allJobs.length ? '' : ` from ${allJobs.length} tracked`}.</div>
+      </div>
+      <label class="cfg-field" style="margin:0;min-width:12rem">
+        <span>Filter</span>
+        <select id="system-assistant-job-filter">
+          ${renderAssistantJobFilterOptions(assistantJobFilter)}
+        </select>
+      </label>
+    </div>
+    <table>
       <thead><tr><th>Job</th><th>Status</th><th>Origin</th><th>Outcome</th><th>Started</th><th>Actions</th></tr></thead>
       <tbody>
         ${jobs.length === 0
-          ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No recent background or delegated jobs.</td></tr>'
+          ? `<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No background or delegated jobs match ${esc(formatAssistantJobFilterLabel(assistantJobFilter))}.</td></tr>`
           : jobs.map((job) => `
               <tr>
                 <td>${esc(job.type || '-')}</td>
@@ -1168,9 +1184,87 @@ function focusRequestedRuntimeRun(container) {
   }
 }
 
+const ASSISTANT_JOB_FILTERS = [
+  { value: 'all', label: 'All Jobs' },
+  { value: 'held', label: 'Held' },
+  { value: 'approval', label: 'Approval' },
+  { value: 'delegated', label: 'Delegated' },
+  { value: 'running', label: 'Running' },
+  { value: 'blocked', label: 'Blocked' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'long_running', label: 'Long Running' },
+  { value: 'automation_owned', label: 'Automation Owned' },
+  { value: 'status_only', label: 'Status Only' },
+];
+
+function normalizeAssistantJobFilter(value) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return ASSISTANT_JOB_FILTERS.some((filter) => filter.value === normalized) ? normalized : 'all';
+}
+
+function formatAssistantJobFilterLabel(value) {
+  const normalized = normalizeAssistantJobFilter(value);
+  return ASSISTANT_JOB_FILTERS.find((filter) => filter.value === normalized)?.label || 'All Jobs';
+}
+
+function renderAssistantJobFilterOptions(selected) {
+  const normalized = normalizeAssistantJobFilter(selected);
+  return ASSISTANT_JOB_FILTERS.map((filter) => `
+    <option value="${escAttr(filter.value)}" ${filter.value === normalized ? 'selected' : ''}>${esc(filter.label)}</option>
+  `).join('');
+}
+
 function readDelegationJobMetadata(job) {
   const delegation = job?.metadata?.delegation;
   return delegation && typeof delegation === 'object' ? delegation : null;
+}
+
+function readDelegationJobHandoff(job) {
+  const delegation = readDelegationJobMetadata(job);
+  const handoff = delegation?.handoff;
+  return handoff && typeof handoff === 'object' ? handoff : null;
+}
+
+function getAssistantJobReportingMode(job) {
+  return job?.display?.followUp?.reportingMode || readDelegationJobHandoff(job)?.reportingMode || '';
+}
+
+function getAssistantJobRunClass(job) {
+  return readDelegationJobHandoff(job)?.runClass || readDelegationJobMetadata(job)?.runClass || '';
+}
+
+function isDelegatedAssistantJob(job) {
+  return job?.type === 'delegated_worker' || readDelegationJobMetadata(job)?.kind === 'brokered_worker';
+}
+
+function isApprovalAssistantJob(job) {
+  const handoff = readDelegationJobHandoff(job);
+  return job?.display?.followUp?.blockerKind === 'approval'
+    || Number(job?.display?.followUp?.approvalCount || 0) > 0
+    || handoff?.unresolvedBlockerKind === 'approval'
+    || Number(handoff?.approvalCount || 0) > 0;
+}
+
+function isHeldAssistantJob(job) {
+  const reportingMode = getAssistantJobReportingMode(job);
+  return job?.display?.followUp?.needsOperatorAction === true
+    || reportingMode === 'held_for_approval'
+    || reportingMode === 'held_for_operator'
+    || isApprovalAssistantJob(job);
+}
+
+function filterAssistantJobs(jobs, filter) {
+  const normalized = normalizeAssistantJobFilter(filter);
+  if (normalized === 'all') return jobs;
+  return jobs.filter((job) => {
+    if (normalized === 'held') return isHeldAssistantJob(job);
+    if (normalized === 'approval') return isApprovalAssistantJob(job);
+    if (normalized === 'delegated') return isDelegatedAssistantJob(job);
+    if (normalized === 'running' || normalized === 'blocked' || normalized === 'failed') return job?.status === normalized;
+    if (normalized === 'long_running' || normalized === 'automation_owned') return getAssistantJobRunClass(job) === normalized;
+    if (normalized === 'status_only') return getAssistantJobReportingMode(job) === normalized;
+    return true;
+  });
 }
 
 function summarizeAssistantJobOrigin(job) {
@@ -1497,6 +1591,11 @@ function bindSystemEvents(container) {
         void renderSystemPreserveScroll(container);
       }
     });
+  });
+
+  container.querySelector('#system-assistant-job-filter')?.addEventListener('change', (event) => {
+    systemUiState.assistantJobFilter = normalizeAssistantJobFilter(event.target?.value);
+    void renderSystemPreserveScroll(container);
   });
 
   const runtimeExecutionForm = container.querySelector('#system-runtime-execution-filter-form');
