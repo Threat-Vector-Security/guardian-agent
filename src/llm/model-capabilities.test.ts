@@ -41,7 +41,12 @@ describe('inferModelCapabilities', () => {
       supported: true,
       values: ['low', 'medium', 'high'],
     });
+    expect(reasoning.settings.reasoningBudget).toMatchObject({
+      supported: true,
+      default: 1024,
+    });
     expect(ordinary.settings.reasoningEffort.supported).toBe(false);
+    expect(ordinary.settings.reasoningBudget.supported).toBe(false);
   });
 
   it('prefers live provider-supported parameters over model-family assumptions', () => {
@@ -57,6 +62,7 @@ describe('inferModelCapabilities', () => {
             'temperature',
             'top_p',
             'reasoning_effort',
+            'reasoning.max_tokens',
             'verbosity',
             'tool_choice',
           ],
@@ -72,6 +78,10 @@ describe('inferModelCapabilities', () => {
       supported: true,
       source: 'api',
       values: ['minimal', 'low', 'medium', 'high'],
+    });
+    expect(capabilities.settings.reasoningBudget).toMatchObject({
+      supported: true,
+      source: 'api',
     });
     expect(capabilities.settings.verbosity).toMatchObject({
       supported: true,

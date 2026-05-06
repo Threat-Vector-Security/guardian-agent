@@ -1700,7 +1700,7 @@ function createProviderPanel(config, providers, panel) {
       setCapabilityFieldVisibility(topPEl, capabilities.settings.topP);
       setCapabilityFieldVisibility(reasoningEffortEl, capabilities.settings.reasoningEffort);
       setCapabilityFieldVisibility(reasoningSummaryEl, capabilities.settings.reasoningSummary);
-      setCapabilityFieldVisibility(reasoningBudgetEl, capabilities.settings.reasoningSummary);
+      setCapabilityFieldVisibility(reasoningBudgetEl, capabilities.settings.reasoningBudget);
       setCapabilityFieldVisibility(verbosityEl, capabilities.settings.verbosity);
       setCapabilityFieldVisibility(parallelToolsEl, capabilities.settings.parallelToolCalls);
       setCapabilityFieldVisibility(toolChoiceEl, capabilities.settings.toolChoice);

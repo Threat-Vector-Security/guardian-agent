@@ -952,6 +952,7 @@ export interface DashboardModelCapabilities {
     topP: DashboardModelSettingCapability;
     reasoningEffort: DashboardModelSettingCapability;
     reasoningSummary: DashboardModelSettingCapability;
+    reasoningBudget: DashboardModelSettingCapability;
     verbosity: DashboardModelSettingCapability;
     parallelToolCalls: DashboardModelSettingCapability;
     toolChoice: DashboardModelSettingCapability;

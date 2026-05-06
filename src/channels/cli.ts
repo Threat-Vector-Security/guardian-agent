@@ -1764,6 +1764,7 @@ export class CLIChannel implements ChannelAdapter {
     const controls = [
       this.formatCapabilityControl('reasoning', capabilities.settings.reasoningEffort),
       this.formatCapabilityControl('summary', capabilities.settings.reasoningSummary),
+      this.formatCapabilityControl('budget', capabilities.settings.reasoningBudget),
       this.formatCapabilityControl('verbosity', capabilities.settings.verbosity),
     ];
     if (isOllamaProviderType(provider.type)) {

@@ -24,6 +24,7 @@ describe('provider editor state', () => {
       settings: {
         reasoningEffort: { supported: true, source: 'api' },
         reasoningSummary: { supported: false, source: 'api' },
+        reasoningBudget: { supported: true, source: 'api' },
         verbosity: { supported: false, source: 'fallback' },
         parallelToolCalls: { supported: false, source: 'fallback' },
         toolChoice: { supported: false, source: 'fallback' },
@@ -35,6 +36,7 @@ describe('provider editor state', () => {
     expect(summary).toContain('Model found in the live catalog');
     expect(summary).toContain('live model API metadata');
     expect(summary).toContain('Reasoning effort');
+    expect(summary).toContain('Reasoning budget');
     expect(summary).toContain('Think mode');
     expect(summary).toContain('Guardian retries with the safe baseline');
   });
@@ -45,6 +47,7 @@ describe('provider editor state', () => {
       settings: {
         reasoningEffort: { supported: true, source: 'model_heuristic' },
         reasoningSummary: { supported: true, source: 'model_heuristic' },
+        reasoningBudget: { supported: true, source: 'model_heuristic' },
         verbosity: { supported: true, source: 'model_heuristic' },
       },
     });

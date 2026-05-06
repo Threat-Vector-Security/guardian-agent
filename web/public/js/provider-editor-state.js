@@ -7,6 +7,7 @@ export function canTestProviderConnection(selectedProfile, providerName) {
 const CAPABILITY_SETTING_LABELS = {
   reasoningEffort: 'Reasoning effort',
   reasoningSummary: 'Reasoning summary',
+  reasoningBudget: 'Reasoning budget',
   verbosity: 'Verbosity',
   parallelToolCalls: 'Parallel tool calls',
   toolChoice: 'Tool choice',

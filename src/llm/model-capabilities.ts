@@ -22,6 +22,7 @@ export interface ModelCapabilities {
     topP: ModelSettingCapability;
     reasoningEffort: ModelSettingCapability;
     reasoningSummary: ModelSettingCapability;
+    reasoningBudget: ModelSettingCapability;
     verbosity: ModelSettingCapability;
     parallelToolCalls: ModelSettingCapability;
     toolChoice: ModelSettingCapability;
@@ -81,6 +82,7 @@ export function inferModelCapabilities(input: {
         : unsupported('fallback', 'No first-class top-p mapping is registered for this provider.'),
       reasoningEffort: inferReasoningEffort(providerType, model, liveModel, liveCapabilitySet, liveParameterSet),
       reasoningSummary: inferReasoningSummary(providerType, model, liveModel, liveCapabilitySet, liveParameterSet),
+      reasoningBudget: inferReasoningBudget(providerType, model, liveModel, liveCapabilitySet, liveParameterSet),
       verbosity: inferVerbosity(providerType, model, liveParameterSet),
       parallelToolCalls: isOpenAi || isOpenAiCompatible
         ? inferRequestParameter(liveParameterSet, {
@@ -263,6 +265,35 @@ function inferReasoningSummary(
     );
   }
   return supported(reasoning.source, 'auto', undefined, ['auto', 'concise', 'detailed', 'none']);
+}
+
+function inferReasoningBudget(
+  providerType: string,
+  model: string,
+  liveModel?: ModelInfo,
+  liveCapabilities?: Set<string>,
+  liveParameters?: Set<string>,
+): ModelSettingCapability {
+  if (hasAny(liveParameters, [
+    'reasoning.max_tokens',
+    'reasoning_max_tokens',
+    'reasoning_budget_tokens',
+    'reasoning.budget_tokens',
+  ])) {
+    return supported('api');
+  }
+  const reasoningSummary = inferReasoningSummary(providerType, model, liveModel, liveCapabilities, liveParameters);
+  if (!reasoningSummary.supported) {
+    return unsupported(
+      reasoningSummary.source,
+      'No separate reasoning budget control is exposed for this provider/model path.',
+    );
+  }
+  return supported(
+    reasoningSummary.source,
+    1024,
+    'Guardian sends this as an optional reasoning budget only when the provider path supports OpenAI-compatible reasoning options.',
+  );
 }
 
 function inferVerbosity(
