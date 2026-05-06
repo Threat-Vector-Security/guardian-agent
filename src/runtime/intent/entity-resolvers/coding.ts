@@ -439,6 +439,9 @@ function isCodingDocumentPlanningAnswerRequest(normalized: string): boolean {
 }
 
 function isExplicitCodingReadOnlyRequest(normalized: string): boolean {
+  if (/\b(?:do\s+not|don't|dont|without|no)\s+(?:edit|editing|modify|modifying|change|changes|write|writes|update|updates)\b[^.!?\n]{0,80}\b(?:outside|beyond)\b/i.test(normalized)) {
+    return false;
+  }
   return /\b(?:do\s+not|don't|dont|without|no)\s+(?:edit|editing|modify|modifying|change|changes|write|writes|update|updates)\b/i.test(normalized)
     || /\bread[\s-]*only\b/i.test(normalized);
 }

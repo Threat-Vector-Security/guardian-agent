@@ -97,7 +97,13 @@ export async function runLlmLoop(
   let forcedSkillShapeRetryCount = 0;
   let forcedToolExecutionRetryUsed = false;
   let forcedDiscoveryContinuationRetryCount = 0;
+  let forcedPlannedTaskContinuationRetryCount = 0;
   let lastToolRoundResults: Array<{
+    toolName: string;
+    args: Record<string, unknown>;
+    result: Record<string, unknown>;
+  }> = [];
+  const cumulativeToolRoundResults: Array<{
     toolName: string;
     args: Record<string, unknown>;
     result: Record<string, unknown>;
@@ -396,6 +402,35 @@ export async function runLlmLoop(
       }
     }
 
+    while (
+      forcedPlannedTaskContinuationRetryCount < 3
+      && (!response.toolCalls || response.toolCalls.length === 0)
+      && shouldRetryPlannedTaskContinuation({
+        cumulativeResults: cumulativeToolRoundResults,
+        lastResults: lastToolRoundResults,
+        plannedTask: options?.plannedTask,
+      })
+    ) {
+      forcedPlannedTaskContinuationRetryCount += 1;
+      response = await chatFn(
+        [
+          ...plannedTaskMessages,
+          { role: 'assistant', content: response.content ?? '' },
+          { role: 'user', content: buildPlannedTaskContinuationCorrectionPrompt(options?.plannedTask, llmToolDefs) },
+        ],
+        { tools: llmToolDefs },
+      );
+      response = recoverStructuredToolCalls(response);
+      finalContent = response.content ?? '';
+      stopReason = mapChatResponseStopReason(response);
+      if (response.toolCalls?.length) {
+        response = {
+          ...response,
+          toolCalls: coalescePackageInstallToolCalls(normalizeToolCallsForExecution(response.toolCalls, llmToolDefs)),
+        };
+      }
+    }
+
     if (!response.toolCalls || response.toolCalls.length === 0) {
       break;
     }
@@ -530,6 +565,7 @@ export async function runLlmLoop(
       });
       return acc;
     }, []);
+    cumulativeToolRoundResults.push(...lastToolRoundResults);
 
     let roundHasPending = false;
     for (const settled of toolResults) {
@@ -893,6 +929,23 @@ function shouldRetryDiscoveryContinuation(
   ));
 }
 
+function shouldRetryPlannedTaskContinuation(input: {
+  cumulativeResults: Array<{ toolName: string; result: Record<string, unknown> }>;
+  lastResults: Array<{ toolName: string; result: Record<string, unknown> }>;
+  plannedTask?: PlannedTask;
+}): boolean {
+  if (!input.plannedTask?.steps.some((step) => step.required !== false && step.kind === 'write')) return false;
+  if (input.cumulativeResults.some(({ toolName, result }) => isSuccessfulPlannedWriteMutationToolResult(toolName, result, input.plannedTask))) {
+    return false;
+  }
+  return input.lastResults.some(({ toolName, result }) => (
+    isSuccessfulToolResult(result) && (
+      isReadOnlyEvidenceTool(toolName)
+      || isPreparatoryMutationEvidenceTool(toolName, input.plannedTask)
+    )
+  ));
+}
+
 function shouldRetryPolicyBlockedToolRoundCorrection(
   results: Array<{ toolName: string; result: Record<string, unknown> }>,
   toolDefs: import('../llm/types.js').ToolDefinition[],
@@ -902,6 +955,53 @@ function shouldRetryPolicyBlockedToolRoundCorrection(
   if (results.some(({ result }) => isPendingApprovalToolResult(result))) return false;
   if (results.some(({ result }) => isSuccessfulToolResult(result))) return false;
   return results.some(({ result }) => isFixablePolicyBlockedToolResult(result));
+}
+
+function isReadOnlyEvidenceTool(toolName: string): boolean {
+  return toolName === 'find_tools'
+    || toolName === 'fs_list'
+    || toolName === 'fs_read'
+    || toolName === 'fs_search'
+    || toolName === 'code_symbol_search'
+    || toolName.endsWith('_read')
+    || toolName.endsWith('_list')
+    || toolName.endsWith('_search');
+}
+
+function isSuccessfulMutationToolResult(toolName: string, result: Record<string, unknown>): boolean {
+  if (!isSuccessfulToolResult(result)) return false;
+  return toolName === 'fs_write'
+    || toolName === 'fs_delete'
+    || toolName === 'fs_move'
+    || toolName === 'fs_copy'
+    || toolName === 'code_create'
+    || toolName === 'code_edit'
+    || toolName === 'code_patch';
+}
+
+function isSuccessfulPlannedWriteMutationToolResult(
+  toolName: string,
+  result: Record<string, unknown>,
+  plannedTask: PlannedTask | undefined,
+): boolean {
+  if (toolName === 'fs_mkdir') {
+    return plannedTaskHasDirectoryWriteObjective(plannedTask);
+  }
+  return isSuccessfulMutationToolResult(toolName, result);
+}
+
+function isPreparatoryMutationEvidenceTool(toolName: string, plannedTask: PlannedTask | undefined): boolean {
+  return toolName === 'fs_mkdir' && !plannedTaskHasDirectoryWriteObjective(plannedTask);
+}
+
+function plannedTaskHasDirectoryWriteObjective(plannedTask: PlannedTask | undefined): boolean {
+  const writeStepSummaries = plannedTask?.steps
+    .filter((step) => step.required !== false && step.kind === 'write')
+    .map((step) => step.summary.toLowerCase())
+    ?? [];
+  return writeStepSummaries.length > 0
+    && writeStepSummaries.every((summary) => /\b(?:directory|folder|mkdir)\b/.test(summary))
+    && !writeStepSummaries.some((summary) => /\b(?:file|edit|patch|content|type|helper|data|src\/|\.ts|\.tsx|\.js|\.jsx|\.json|\.md)\b/.test(summary));
 }
 
 function isPendingApprovalToolResult(result: Record<string, unknown>): boolean {
@@ -950,6 +1050,34 @@ function buildDiscoveryContinuationCorrectionPrompt(
     'Do not stop after find_tools, and do not ask the user whether to proceed when the original request already told you to do the work.',
     'Only pause if a real tool result returns pending_approval or another real blocker.',
   ].join(' ');
+}
+
+function buildPlannedTaskContinuationCorrectionPrompt(
+  plannedTask: PlannedTask | undefined,
+  toolDefs: import('../llm/types.js').ToolDefinition[] = [],
+): string {
+  const writeSteps = plannedTask?.steps
+    .filter((step) => step.required !== false && step.kind === 'write')
+    .map((step) => `- ${step.stepId}: ${step.summary}`)
+    ?? [];
+  const mutationTools = toolDefs
+    .map((tool) => tool.name)
+    .filter((name) => name && (
+      name === 'fs_write'
+      || name === 'code_create'
+      || name === 'code_edit'
+      || name === 'code_patch'
+    ))
+    .slice(0, 10);
+  return [
+    'System correction: the previous tool call gathered read-only context, but the planned write step is still unsatisfied.',
+    'Do not stop with a bare tool-completed status or a progress update.',
+    'Continue now by calling a file-writing or code creation/editing tool for the required write step.',
+    'Creating a directory alone is only preparatory unless the required write step is specifically a directory task.',
+    ...(writeSteps.length > 0 ? ['Required write steps:', ...writeSteps] : []),
+    ...(mutationTools.length > 0 ? [`Available mutation tools include: ${mutationTools.join(', ')}.`] : []),
+    'Only pause if a real mutation tool returns pending_approval or another real blocker.',
+  ].join('\n');
 }
 
 function buildPolicyUpdateCorrectionPrompt(): string {

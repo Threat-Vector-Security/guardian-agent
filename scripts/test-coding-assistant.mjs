@@ -434,10 +434,10 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, tempInstall
         return;
       }
 
-      if (latestUser.includes('answerValue') || latestUser.includes('scopedMessage')) {
-        const searchQuery = latestUser.includes('scopedMessage') ? 'scopedMessage' : 'answerValue';
-        const activeWorkspaceRoot = latestUser.includes('scopedMessage') ? scopedWorkspaceRoot : workspaceRoot;
-        const responsePath = latestUser.includes('scopedMessage') ? 'src/scoped.ts' : 'src/example.ts';
+      if (latestGatewayRequest.includes('answerValue') || latestGatewayRequest.includes('scopedMessage')) {
+        const searchQuery = latestGatewayRequest.includes('scopedMessage') ? 'scopedMessage' : 'answerValue';
+        const activeWorkspaceRoot = latestGatewayRequest.includes('scopedMessage') ? scopedWorkspaceRoot : workspaceRoot;
+        const responsePath = latestGatewayRequest.includes('scopedMessage') ? 'src/scoped.ts' : 'src/example.ts';
         if (toolMessages.length === 0) {
           sendResponse({
             model: 'coding-harness-model',
@@ -479,7 +479,7 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, tempInstall
         return;
       }
 
-      if (/delegated worker completion contract|run timeline rendering/i.test(latestUser)) {
+      if (/delegated worker completion contract|run timeline rendering/i.test(latestGatewayRequest)) {
         if (toolMessages.length === 0) {
           sendResponse({
             model: 'coding-harness-model',
@@ -1439,9 +1439,9 @@ guardian:
     assert.ok(
       Array.isArray(tempInstallSessionSnapshot?.session?.workState?.recentJobs)
       && tempInstallSessionSnapshot.session.workState.recentJobs.some((job) => job.toolName === 'code_create')
-      && tempInstallSessionSnapshot.session.workState.recentJobs.some((job) => job.toolName === 'code_edit')
+      && tempInstallSessionSnapshot.session.workState.recentJobs.some((job) => job.toolName === 'code_edit' || job.toolName === 'fs_write')
       && tempInstallSessionSnapshot.session.workState.recentJobs.some((job) => job.toolName === 'code_symbol_search'),
-      `Expected temp install code-session runtime state to record coding jobs: ${JSON.stringify(tempInstallSessionSnapshot)}`,
+      `Expected temp install code-session runtime state to record create, edit/write, and search jobs: ${JSON.stringify(tempInstallSessionSnapshot)}`,
     );
 
     const tempInstallDiff = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {

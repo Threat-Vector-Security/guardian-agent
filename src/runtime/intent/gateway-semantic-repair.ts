@@ -170,7 +170,11 @@ export function repairStructuredIntentGatewayRoute(
   if (route === 'unknown' && explicitAutomationOutput) {
     return 'automation_output_task';
   }
-  if (route === 'unknown' && isExplicitCodingSessionControlRequest(rawSourceContent)) {
+  if (
+    (route === 'unknown' || route === 'general_assistant' || route === 'coding_task')
+    && isExplicitCodingSessionControlRequest(rawSourceContent)
+    && !explicitCodingTaskRequest
+  ) {
     return 'coding_session_control';
   }
   const sourceContent = normalizeIntentGatewayRepairText(repairContext?.sourceContent);

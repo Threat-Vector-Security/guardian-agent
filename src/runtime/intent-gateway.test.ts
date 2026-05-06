@@ -4112,6 +4112,31 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.sessionTarget).toBe('Temp install test');
   });
 
+  it('repairs coding-task classifier output for explicit coding-session switches', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Switch this chat to the coding workspace for Temp install test.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Inspect or prepare the requested coding workspace.',
+          sessionTarget: 'Temp install test',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.entities.sessionTarget).toBe('Temp install test');
+  });
+
   it('repairs unavailable classifier output for explicit coding-session switches', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -4173,6 +4198,39 @@ describe('IntentGateway', () => {
 
     expect(result.decision.route).toBe('coding_task');
     expect(result.decision.route).not.toBe('coding_session_control');
+  });
+
+  it('keeps bounded workspace mutation requests mutating when they forbid edits outside the workspace', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: [
+          'Build the first slice of a tiny inventory app in this temp install workspace.',
+          'Use the coding tools to create src/app-state.ts with an InventoryItem type, starterInventory data, and a summarizeInventory helper.',
+          'Keep the implementation small and do not edit any files outside this workspace.',
+        ].join(' '),
+        channel: 'code-session',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'update',
+          summary: 'Continue work in the active coding workspace.',
+          executionClass: 'repo_grounded',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          preferredAnswerPath: 'chat_synthesis',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.operation).not.toBe('inspect');
+    expect(result.decision.plannedSteps?.some((step) => step.kind === 'write')).toBe(true);
   });
 
   it('repairs explicit remote sandbox execution requests that were misclassified as coding_session_control', async () => {

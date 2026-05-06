@@ -413,6 +413,157 @@ describe('runLlmLoop', () => {
     expect(result.finalContent).toContain('wrote tmp/repo-summary.md');
   });
 
+  it('continues planned write tasks when the model stops after read-only evidence', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Create src/app-state.ts for a tiny inventory app.' }];
+    const plannedTask: PlannedTask = {
+      planId: 'plan-inventory',
+      allowAdditionalSteps: true,
+      steps: [
+        {
+          stepId: 'step_read',
+          kind: 'read',
+          summary: 'Inspect the workspace.',
+          expectedToolCategories: ['fs_list'],
+          required: true,
+        },
+        {
+          stepId: 'step_write',
+          kind: 'write',
+          summary: 'Create src/app-state.ts.',
+          expectedToolCategories: ['fs_write'],
+          required: true,
+          dependsOn: ['step_read'],
+        },
+        {
+          stepId: 'step_answer',
+          kind: 'answer',
+          summary: 'Summarize the created file.',
+          required: true,
+          dependsOn: ['step_write'],
+        },
+      ],
+    };
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'fs_list', arguments: JSON.stringify({ path: 'src', step_id: 'step_read' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: "Tool 'fs_list' completed.",
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-2', name: 'fs_mkdir', arguments: JSON.stringify({ path: 'src', step_id: 'step_write' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: "Tool 'fs_mkdir' completed.",
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-3', name: 'fs_write', arguments: JSON.stringify({ path: 'src/app-state.ts', content: 'export type InventoryItem = { sku: string; };', step_id: 'step_write' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Done. Created src/app-state.ts.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const chatCalls: Array<{ messages: ChatMessage[]; options?: ChatOptions }> = [];
+    const calledTools: string[] = [];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [
+          {
+            name: 'fs_list',
+            description: 'List files.',
+            parameters: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+              },
+              required: ['path'],
+            },
+          },
+          {
+            name: 'fs_mkdir',
+            description: 'Create a directory.',
+            parameters: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+              },
+              required: ['path'],
+            },
+          },
+          {
+            name: 'fs_write',
+            description: 'Write a file.',
+            parameters: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+                content: { type: 'string' },
+              },
+              required: ['path', 'content'],
+            },
+          },
+        ];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        return {
+          success: true,
+          output: { message: `Completed ${request.toolName}.` },
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (msgs: ChatMessage[], opts?: ChatOptions) => {
+        chatCalls.push({ messages: msgs, options: opts });
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      5,
+      32_000,
+      undefined,
+      {
+        plannedTask,
+      },
+    );
+
+    expect(calledTools).toEqual(['fs_list', 'fs_mkdir', 'fs_write']);
+    expect(chatCalls).toHaveLength(6);
+    expect(chatCalls[2]?.messages.at(-1)).toMatchObject({
+      role: 'user',
+      content: expect.stringContaining('planned write step is still unsatisfied'),
+    });
+    expect(chatCalls[4]?.messages.at(-1)).toMatchObject({
+      role: 'user',
+      content: expect.stringContaining('Creating a directory alone is only preparatory'),
+    });
+    expect(result.finalContent).toContain('Created src/app-state.ts');
+  });
+
   it('does not accept tool-free answer-first replies when the turn requires repo evidence', async () => {
     const messages: ChatMessage[] = [{ role: 'user', content: 'Inspect src/chat-agent.ts and write tmp/repo-summary.md with a short summary.' }];
     const responses: ChatResponse[] = [
