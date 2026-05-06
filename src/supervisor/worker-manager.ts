@@ -1392,7 +1392,7 @@ export class WorkerManager {
           : null
       );
       let answerSynthesisFallback = buildAnswerSynthesisFallback();
-      if (insufficiency) {
+      if (insufficiency && !answerSynthesisFallback) {
         const retryInvocation = await runDelegatedWorkerRetryInvocation({
           requestId,
           taskRunId: delegatedTaskRunId,

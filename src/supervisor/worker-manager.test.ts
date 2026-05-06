@@ -941,7 +941,7 @@ describe('WorkerManager', () => {
     })).toBe(false);
   });
 
-  it('retries answer-only delegated insufficiency on the same profile after evidence is gathered', async () => {
+  it('synthesizes answer-only delegated insufficiency on the same profile after evidence is gathered', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
     const decision = {
@@ -1126,9 +1126,7 @@ describe('WorkerManager', () => {
     });
 
     expect(dispatchProfiles).toEqual(['openrouter-tools', 'openrouter-tools']);
-    expect(retrySections).toHaveLength(1);
-    expect(retrySections[0]).toContain('answer-synthesis retry');
-    expect(retrySections[0]).toContain('Found approval-review and routing-watch automations');
+    expect(retrySections).toHaveLength(0);
     expect(result.content).toBe(finalAnswer);
 
     manager.shutdown();
@@ -1326,8 +1324,8 @@ describe('WorkerManager', () => {
       },
     });
 
-    expect(dispatchModes).toEqual(['delegated', 'delegated', 'synthesis']);
-    expect(dispatchProfiles).toEqual(['openrouter-tools', 'openrouter-tools', 'openrouter-tools']);
+    expect(dispatchModes).toEqual(['delegated', 'synthesis']);
+    expect(dispatchProfiles).toEqual(['openrouter-tools', 'openrouter-tools']);
     expect(result.content).toBe(finalAnswer);
     expect(result.metadata?.delegatedGroundedAnswerSynthesis).toMatchObject({
       available: true,

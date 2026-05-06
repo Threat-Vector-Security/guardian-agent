@@ -878,6 +878,10 @@ function synthesizeIntentGatewayPlannedSteps(input: {
     ];
   }
 
+  if (input.route === 'coding_task' && shouldSynthesizeRepoMutationPlan(input)) {
+    return buildRepoMutationPlannedSteps(input);
+  }
+
   const sequentialClauses = splitSequentialRequestClauses(sourceContent);
   if (sequentialClauses.length >= 2) {
     return sequentialClauses.map((summary, index) => {
@@ -890,10 +894,6 @@ function synthesizeIntentGatewayPlannedSteps(input: {
         ...buildSynthesizedExpectedToolCategories(kind, summary),
       };
     });
-  }
-
-  if (shouldSynthesizeRepoMutationPlan(input)) {
-    return buildRepoMutationPlannedSteps(input);
   }
 
   if (
@@ -967,7 +967,7 @@ function buildRepoMutationPlannedSteps(input: {
     : input.operation === 'create'
       ? 'Create the requested target file or workspace artifact.'
       : 'Apply the requested update to the target workspace file or artifact.';
-  return [
+  const steps: IntentGatewayPlannedStep[] = [
     {
       kind: isExplicitRepoInspectionRequest(input.sourceContent) ? 'search' : 'read',
       summary: evidenceSummary,
@@ -988,13 +988,33 @@ function buildRepoMutationPlannedSteps(input: {
       dependsOn: ['step_2'],
       expectedToolCategories: ['fs_read', 'fs_list'],
     },
-    {
-      kind: 'answer',
-      summary: 'Report the completed workspace change and the verification result.',
+  ];
+  const answerDependsOn = ['step_2', 'step_3'];
+  if (requiresLocalRuntimeVerification(input.sourceContent)) {
+    steps.push({
+      kind: 'tool_call',
+      summary: 'Run the app or verification command locally, fix setup or runtime errors, and capture the local URL or runtime result.',
       required: true,
       dependsOn: ['step_2', 'step_3'],
-    },
-  ];
+      expectedToolCategories: ['runtime_evidence'],
+    });
+    answerDependsOn.push('step_4');
+  }
+  steps.push({
+    kind: 'answer',
+    summary: 'Report the completed workspace change and the verification result.',
+    required: true,
+    dependsOn: answerDependsOn,
+  });
+  return steps;
+}
+
+function requiresLocalRuntimeVerification(sourceContent: string | undefined): boolean {
+  const normalized = sourceContent?.trim().toLowerCase() ?? '';
+  if (!normalized) {
+    return false;
+  }
+  return /\b(?:run(?:nable)?|start|serve|launch|open|click|clickable|playback|locally|local\s+url|localhost|setup|runtime|fix\s+(?:any\s+)?(?:setup|runtime)|dev\s+server|npm\s+run|npm\s+start|pnpm\s+dev|yarn\s+dev)\b/.test(normalized);
 }
 
 function shouldSuppressSecurityEvidencePlan(input: {

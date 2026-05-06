@@ -237,6 +237,56 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.plannedSteps?.[1]?.expectedToolCategories).toEqual(['write']);
   });
 
+  it('adds runtime evidence to coding app creation requests that ask to run locally', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'coding_task',
+      confidence: 'low',
+      operation: 'create',
+      summary: 'Build a simple music app from scratch.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Inspect the repo.',
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Create the app files.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Report the result.',
+          required: true,
+          dependsOn: ['step_2'],
+        },
+      ],
+    }, {
+      sourceContent: 'Build a simple music app from scratch in this repo. Create whatever files are needed, make it runnable locally, include realistic sample songs/artists/playlists, add basic browsing and playback controls, start the app, fix any setup or runtime errors, and finish by telling me the local URL and what you verified.',
+    }, {
+      classifierSource: 'classifier.primary',
+    });
+
+    expect(decision.operation).toBe('create');
+    expect(decision.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'write', 'read', 'tool_call', 'answer']);
+    expect(decision.plannedSteps?.[3]).toMatchObject({
+      expectedToolCategories: ['runtime_evidence'],
+      required: true,
+      dependsOn: ['step_2', 'step_3'],
+    });
+    expect(decision.plannedSteps?.[4]?.dependsOn).toContain('step_4');
+  });
+
   it('repairs general-assistant filesystem writes with explicit paths into filesystem tasks', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'general_assistant',
