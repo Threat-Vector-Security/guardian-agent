@@ -57,6 +57,16 @@ type RecordIntentRoutingTrace = (
   },
 ) => void;
 
+function summarizeRequiredPlannedStepCategories(gateway: IntentGatewayRecord | null | undefined): string[] {
+  return Array.from(new Set(
+    (gateway?.decision.plannedSteps ?? [])
+      .filter((step) => step.required !== false)
+      .flatMap((step) => Array.isArray(step.expectedToolCategories) ? step.expectedToolCategories : [])
+      .map((category) => String(category || '').trim())
+      .filter(Boolean),
+  ));
+}
+
 export function shouldSkipDirectWebSearch(input: {
   gateway?: IntentGatewayRecord | null;
   activeSkills: readonly Pick<ResolvedSkill, 'id'>[];
@@ -113,9 +123,18 @@ export async function runDirectRouteOrchestration<TResponse>(input: {
       routeSource: input.gateway?.decision.provenance?.route,
       operation: input.gateway?.decision.operation,
       operationSource: input.gateway?.decision.provenance?.operation,
+      resolution: input.gateway?.decision.resolution,
+      confidence: input.gateway?.decision.confidence,
+      executionClass: input.gateway?.decision.executionClass,
+      preferredAnswerPath: input.gateway?.decision.preferredAnswerPath,
+      preferredTier: input.gateway?.decision.preferredTier,
+      requiresRepoGrounding: input.gateway?.decision.requiresRepoGrounding,
+      requiresToolSynthesis: input.gateway?.decision.requiresToolSynthesis,
       codingBackend: input.gateway?.decision.entities.codingBackend,
       simpleVsComplex: input.gateway?.decision.simpleVsComplex,
       entitySources: input.gateway?.decision.provenance?.entities,
+      requiredPlannedStepCount: (input.gateway?.decision.plannedSteps ?? []).filter((step) => step.required !== false).length,
+      requiredPlannedStepCategories: summarizeRequiredPlannedStepCategories(input.gateway),
       candidates: directIntentRouting.candidates,
       skipDirectWebSearch,
       codeSessionResolved: !!input.resolvedCodeSession,

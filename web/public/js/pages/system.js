@@ -1368,6 +1368,18 @@ function formatRoutingTraceDetail(entry) {
         )
       : '',
     typeof details.route === 'string' ? `route ${details.route}` : '',
+    typeof details.operation === 'string' ? `op ${details.operation}` : '',
+    typeof details.executionClass === 'string' ? `class ${details.executionClass}` : '',
+    typeof details.preferredAnswerPath === 'string' ? `answer ${details.preferredAnswerPath}` : '',
+    Array.isArray(details.candidates) && details.candidates.length > 0
+      ? `candidates ${details.candidates.slice(0, 4).join(' > ')}`
+      : '',
+    typeof details.requiredPlannedStepCount === 'number'
+      ? `steps ${details.requiredPlannedStepCount}`
+      : '',
+    Array.isArray(details.requiredPlannedStepCategories) && details.requiredPlannedStepCategories.length > 0
+      ? `tools ${details.requiredPlannedStepCategories.slice(0, 4).join(', ')}`
+      : '',
     typeof details.tier === 'string' ? `tier ${details.tier}` : '',
     formatRoutingTraceLatencyDetail(details),
     typeof details.executionId === 'string' ? `execution ${details.executionId}` : '',

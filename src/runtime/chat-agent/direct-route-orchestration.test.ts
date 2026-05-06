@@ -34,6 +34,19 @@ function gateway(route = 'search_task'): IntentGatewayRecord {
       requiresToolSynthesis: true,
       expectedContextPressure: 'medium',
       preferredAnswerPath: 'direct',
+      plannedSteps: [
+        {
+          kind: 'tool',
+          label: 'Search web',
+          expectedToolCategories: ['web_search'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          label: 'Summarize',
+          required: true,
+        },
+      ],
       entities: {},
     },
   };
@@ -65,6 +78,15 @@ describe('direct route orchestration', () => {
       expect.objectContaining({
         details: expect.objectContaining({
           candidates: [],
+          resolution: 'ready',
+          confidence: 'high',
+          executionClass: 'direct_tool',
+          preferredAnswerPath: 'direct',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: true,
+          requiredPlannedStepCount: 2,
+          requiredPlannedStepCategories: ['web_search'],
           skipDirectWebSearch: true,
           codeSessionResolved: true,
           codeSessionId: 'code-1',
