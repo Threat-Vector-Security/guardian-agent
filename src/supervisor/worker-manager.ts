@@ -72,7 +72,7 @@ import {
   buildDelegatedHandoff,
   buildDelegatedInsufficientResultHandoff,
   formatFailedDelegatedMessage,
-  normalizeDelegatedWorkerRunClass,
+  resolveDelegatedWorkerRunClass,
   resolveDelegatedWorkerLifecycle,
 } from '../runtime/execution-graph/delegated-worker-handoff.js';
 import {
@@ -1645,15 +1645,16 @@ export class WorkerManager {
         content: result.content,
         metadata: verifiedMetadata,
       };
+      const handoffRunClass = resolveDelegationRunClass(effectiveInput, delegatedTarget);
       const handoff = insufficiency
         ? buildDelegatedInsufficientResultHandoff(
           insufficiency,
-          effectiveInput.delegation?.runClass,
+          handoffRunClass,
         )
         : buildDelegatedHandoff(
           result.content,
           verifiedMetadata,
-          effectiveInput.delegation?.runClass,
+          handoffRunClass,
           verifiedResult.decision,
         );
       const lifecycle = insufficiency
@@ -3778,6 +3779,38 @@ function buildDelegatedAuditDetails(
   };
 }
 
+function resolveDelegationRunClass(
+  input: WorkerMessageRequest,
+  target?: ResolvedDelegatedTargetMetadata,
+): DelegatedWorkerRunClass {
+  if (input.delegation?.runClass !== undefined) {
+    return resolveDelegatedWorkerRunClass({ requestedRunClass: input.delegation.runClass });
+  }
+  const originChannel = input.delegation?.originChannel ?? input.message.channel;
+  const normalizedOriginChannel = normalizeDelegatedIdentityValue(originChannel)?.toLowerCase();
+  if (normalizedOriginChannel === 'automation' || normalizedOriginChannel === 'scheduled') {
+    return 'automation_owned';
+  }
+  if (target?.orchestration?.role === 'coordinator') {
+    return 'in_invocation';
+  }
+  if (!hasBackgroundDelegationSignal(input)) {
+    return 'short_lived';
+  }
+  return resolveDelegatedWorkerRunClass({
+    originChannel,
+    codeSessionId: input.delegation?.codeSessionId,
+    orchestration: target?.orchestration,
+  });
+}
+
+function hasBackgroundDelegationSignal(input: WorkerMessageRequest): boolean {
+  return (input.delegation?.activeExecutionRefs ?? []).some((value) => {
+    const normalized = normalizeDelegatedIdentityValue(value)?.toLowerCase();
+    return normalized?.startsWith('delegated:') || normalized?.startsWith('background:');
+  });
+}
+
 function buildDelegationJobMetadata(
   input: WorkerMessageRequest,
   options: {
@@ -3798,7 +3831,7 @@ function buildDelegationJobMetadata(
     ...(options.target?.orchestration ? { orchestration: options.target.orchestration } : {}),
     workerSessionId: input.sessionId,
     originChannel: input.delegation?.originChannel ?? input.message.channel,
-    runClass: normalizeDelegatedWorkerRunClass(input.delegation?.runClass),
+    runClass: resolveDelegationRunClass(input, options.target),
     ...(delegatedExecution.executionId ? { executionId: delegatedExecution.executionId } : {}),
     ...(delegatedExecution.rootExecutionId ? { rootExecutionId: delegatedExecution.rootExecutionId } : {}),
     ...(input.delegation?.originSurfaceId ? { originSurfaceId: input.delegation.originSurfaceId } : {}),

@@ -146,6 +146,7 @@ import {
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
 import { RunTimelineStore } from './runtime/run-timeline.js';
 import { ExecutionGraphStore } from './runtime/execution-graph/graph-store.js';
+import { resolveDelegatedWorkerRunClass } from './runtime/execution-graph/delegated-worker-handoff.js';
 import { normalizeAutomationOutputHandling, promoteAutomationFindings } from './runtime/automation-output.js';
 import { AutomationOutputStore } from './runtime/automation-output-store.js';
 import { AutomationOutputPersistenceService } from './runtime/automation-output-persistence.js';
@@ -4911,12 +4912,18 @@ async function main(): Promise<void> {
     const userId = pendingAction?.scope.userId || request.userId;
     const agentId = request.agentId || pendingAction?.scope.agentId || 'default';
     const originSurfaceId = pendingAction?.scope.surfaceId || request.surfaceId;
+    const codeSessionId = pendingAction?.codeSessionId ?? request.codeContext?.sessionId;
+    const runClass = resolveDelegatedWorkerRunClass({
+      originChannel: channel,
+      codeSessionId,
+    });
     const payload = {
       toolName,
       approvalId,
       args,
       resultStatus,
       resultMessage,
+      runClass,
       ...(result.error ? { errorMessage: result.error } : {}),
     };
 
@@ -4932,7 +4939,7 @@ async function main(): Promise<void> {
         ...(originSurfaceId ? { originSurfaceId } : {}),
         ...(pendingAction?.executionId ? { executionId: pendingAction.executionId } : {}),
         ...(pendingAction?.rootExecutionId ? { rootExecutionId: pendingAction.rootExecutionId } : {}),
-        ...(pendingAction?.codeSessionId ? { codeSessionId: pendingAction.codeSessionId } : {}),
+        ...(codeSessionId ? { codeSessionId } : {}),
         ...(pendingAction?.id ? { pendingActionId: pendingAction.id } : {}),
         eventId,
         eventType: 'tool_call_completed',
@@ -4948,7 +4955,7 @@ async function main(): Promise<void> {
       parentExecutionId: pendingAction?.executionId ?? requestId,
       taskExecutionId: request.requestId?.trim(),
       rootExecutionId: pendingAction?.rootExecutionId ?? pendingAction?.executionId ?? requestId,
-      codeSessionId: pendingAction?.codeSessionId ?? request.codeContext?.sessionId,
+      codeSessionId,
       agentId,
       channel,
       events: [{

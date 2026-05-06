@@ -182,6 +182,8 @@ The first runtime-foundation slice is now landed:
 - delegated follow-up state now projects into assistant-dispatch traces and timeline items through bounded `Delegated follow-up` handoff nodes
 - clarification and workspace-switch delegated blockers can now downgrade to status-only operator messaging while approval blockers stay inline and approval-held
 - delegated run classes now exist for `in_invocation`, `short_lived`, `long_running`, and `automation_owned`
+- delegated run-class selection and follow-up defaults are now centralized so ordinary code-session replies stay inline while explicit/background delegated runs can be held for operator review
+- approved delegated tool completions now stamp run-class metadata into routing trace and timeline payloads, improving class-based inspection outside the brokered worker completion path
 - held delegated results can now stay operator-held with bounded replay, keep-held, and dismiss controls exposed through Dashboard, web API, and CLI
 
 This means the plan has moved beyond design-only status.
@@ -195,20 +197,18 @@ This means the plan has moved beyond design-only status.
 - delegated status is visible in assistant job views, dispatch traces, and the unified execution timeline
 - longer-running delegated classes can now hold results for operator review instead of always forcing immediate inline reporting
 - operators can replay, keep held, or dismiss those held delegated results through bounded controls
+- Runtime Execution and assistant job views can filter delegated work by run class, reporting mode, and unresolved blocker kind
 
 ## Still To Do For Future Uplift
 
-- use delegated run classes more broadly outside the current brokered worker metadata path
-- define stronger defaults for which delegated classes should auto-report, stay held, or remain status-only
-- improve query and filtering affordances so delegated lineage and held-result decisions are easier to inspect at scale
 - extend the class model into richer long-running/background delegation behavior rather than only bounded completion handling
 - add more explicit operator controls for deferred follow-up and replay decisions as the runtime grows
 
 The next implementation slice should focus on:
 
-- broader producer adoption for delegated run classes beyond the current brokered worker path
-- delegation-class defaults that decide when follow-up can auto-report versus stay held
-- timeline/query affordances that make delegated lineage easier to isolate at scale
+- continuity-aware long-running/background execution beyond bounded completion handling
+- richer deferred follow-up controls as background runtime ownership grows
+- additional harness coverage for replay/defer behavior once long-running execution is active
 
 ---
 

@@ -5,6 +5,7 @@ import {
   buildDelegatedInsufficientResultHandoff,
   formatFailedDelegatedMessage,
   normalizeDelegatedWorkerRunClass,
+  resolveDelegatedWorkerFollowUpPolicy,
   resolveDelegatedWorkerRunClass,
   resolveDelegatedWorkerLifecycle,
 } from './delegated-worker-handoff.js';
@@ -217,6 +218,42 @@ describe('delegated worker handoff graph policy', () => {
     expect(resolveDelegatedWorkerRunClass({
       orchestration: { role: 'explorer', label: 'Research Explorer', lenses: ['research'] },
     })).toBe('short_lived');
+  });
+
+  it('resolves delegated follow-up policy from lifecycle, blockers, and run class', () => {
+    expect(resolveDelegatedWorkerFollowUpPolicy({
+      runClass: 'short_lived',
+      lifecycle: 'blocked',
+      blockerKind: 'approval',
+    })).toMatchObject({
+      reportingMode: 'held_for_approval',
+      nextAction: 'Resolve the pending approval(s) to continue the delegated run.',
+    });
+    expect(resolveDelegatedWorkerFollowUpPolicy({
+      runClass: 'long_running',
+      lifecycle: 'completed',
+    })).toMatchObject({
+      reportingMode: 'held_for_operator',
+      operatorState: 'pending',
+      nextAction: 'Replay or dismiss the held delegated result.',
+    });
+    expect(resolveDelegatedWorkerFollowUpPolicy({
+      runClass: 'automation_owned',
+      lifecycle: 'failed',
+      requiredNextAction: 'Inspect the failed sync output.',
+    })).toMatchObject({
+      reportingMode: 'inline_response',
+      nextAction: 'Inspect the failed sync output.',
+    });
+    expect(resolveDelegatedWorkerFollowUpPolicy({
+      runClass: 'long_running',
+      lifecycle: 'blocked',
+      blockerKind: 'policy_blocked',
+      requiredNextAction: 'Choose an allowed workspace path.',
+    })).toMatchObject({
+      reportingMode: 'status_only',
+      nextAction: 'Choose an allowed workspace path.',
+    });
   });
 });
 

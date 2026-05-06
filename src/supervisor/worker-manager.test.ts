@@ -6234,7 +6234,7 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
-  it('holds long-running delegated results for operator replay and dismissal', async () => {
+  it('classifies code-session delegated results as long-running for operator replay and dismissal', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
     workerMessageHandler = () => ({
@@ -6306,7 +6306,6 @@ describe('WorkerManager', () => {
         continuityKey: 'continuity-held-operator',
         activeExecutionRefs: ['code_session:Guardian Agent', 'delegated:repo-digest'],
         codeSessionId: 'code-held-operator',
-        runClass: 'long_running',
       },
     });
 

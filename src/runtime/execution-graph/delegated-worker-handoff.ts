@@ -1,5 +1,6 @@
 import type {
   DelegatedWorkerHandoff,
+  DelegatedWorkerReportingMode,
   DelegatedWorkerRunClass,
 } from '../assistant-jobs.js';
 import { readDelegatedResultEnvelope } from '../execution/metadata.js';
@@ -23,6 +24,19 @@ export interface DelegatedWorkerRunClassPolicyInput {
   codeSessionId?: string;
   orchestration?: OrchestrationRoleDescriptor;
   directReasoning?: boolean;
+}
+
+export interface DelegatedWorkerFollowUpPolicyInput {
+  runClass: DelegatedWorkerRunClass;
+  lifecycle: 'completed' | 'blocked' | 'failed';
+  blockerKind?: string;
+  requiredNextAction?: string;
+}
+
+export interface DelegatedWorkerFollowUpPolicy {
+  nextAction: string;
+  reportingMode: DelegatedWorkerReportingMode;
+  operatorState?: DelegatedWorkerHandoff['operatorState'];
 }
 
 export function buildDelegatedInsufficientResultHandoff(
@@ -51,41 +65,21 @@ export function buildDelegatedHandoff(
     ?? (lifecycle === 'failed' ? 'Delegated worker failed.' : 'Delegated worker completed.');
   const approvalCount = readApprovalSummaryCount(metadata);
   const runClass = normalizeDelegatedWorkerRunClass(runClassInput);
-  const completedDefaults = resolveCompletedDelegatedFollowUpDefaults(runClass);
-  let nextAction = verification?.requiredNextAction ?? completedDefaults.nextAction;
-  let reportingMode: DelegatedWorkerHandoff['reportingMode'] = completedDefaults.reportingMode;
-  let operatorState: DelegatedWorkerHandoff['operatorState'] | undefined = completedDefaults.operatorState;
-
-  if (unresolvedBlockerKind === 'approval') {
-    nextAction = 'Resolve the pending approval(s) to continue the delegated run.';
-    reportingMode = 'held_for_approval';
-    operatorState = undefined;
-  } else if (unresolvedBlockerKind === 'clarification') {
-    nextAction = 'Resolve the clarification to continue the delegated run.';
-    reportingMode = 'status_only';
-    operatorState = undefined;
-  } else if (unresolvedBlockerKind === 'workspace_switch') {
-    nextAction = 'Switch to the requested coding workspace to continue the delegated run.';
-    reportingMode = 'status_only';
-    operatorState = undefined;
-  } else if (unresolvedBlockerKind === 'policy_blocked') {
-    nextAction = verification?.requiredNextAction ?? 'Resolve the policy blocker before retrying.';
-    reportingMode = 'status_only';
-    operatorState = undefined;
-  } else if (lifecycle === 'failed') {
-    nextAction = verification?.requiredNextAction ?? 'Inspect the delegated worker failure details before retrying.';
-    reportingMode = 'inline_response';
-    operatorState = undefined;
-  }
+  const followUpPolicy = resolveDelegatedWorkerFollowUpPolicy({
+    runClass,
+    lifecycle,
+    blockerKind: unresolvedBlockerKind,
+    requiredNextAction: verification?.requiredNextAction,
+  });
 
   return {
     summary,
     ...(unresolvedBlockerKind ? { unresolvedBlockerKind } : {}),
     ...(approvalCount > 0 ? { approvalCount } : {}),
     runClass,
-    nextAction,
-    reportingMode,
-    ...(operatorState ? { operatorState } : {}),
+    nextAction: followUpPolicy.nextAction,
+    reportingMode: followUpPolicy.reportingMode,
+    ...(followUpPolicy.operatorState ? { operatorState: followUpPolicy.operatorState } : {}),
     ...(verification?.qualityNotes && verification.qualityNotes.length > 0
       ? { qualityNotes: verification.qualityNotes }
       : {}),
@@ -193,6 +187,58 @@ export function resolveDelegatedWorkerRunClass(
   return 'short_lived';
 }
 
+export function resolveDelegatedWorkerFollowUpPolicy(
+  input: DelegatedWorkerFollowUpPolicyInput,
+): DelegatedWorkerFollowUpPolicy {
+  if (input.blockerKind === 'approval') {
+    return {
+      nextAction: 'Resolve the pending approval(s) to continue the delegated run.',
+      reportingMode: 'held_for_approval',
+    };
+  }
+
+  if (input.blockerKind === 'clarification') {
+    return {
+      nextAction: 'Resolve the clarification to continue the delegated run.',
+      reportingMode: 'status_only',
+    };
+  }
+
+  if (input.blockerKind === 'workspace_switch') {
+    return {
+      nextAction: 'Switch to the requested coding workspace to continue the delegated run.',
+      reportingMode: 'status_only',
+    };
+  }
+
+  if (input.blockerKind === 'policy_blocked') {
+    return {
+      nextAction: input.requiredNextAction ?? 'Resolve the policy blocker before retrying.',
+      reportingMode: 'status_only',
+    };
+  }
+
+  if (input.lifecycle === 'failed') {
+    return {
+      nextAction: input.requiredNextAction ?? 'Inspect the delegated worker failure details before retrying.',
+      reportingMode: 'inline_response',
+    };
+  }
+
+  if (input.runClass === 'long_running' || input.runClass === 'automation_owned') {
+    return {
+      nextAction: input.requiredNextAction ?? 'Replay or dismiss the held delegated result.',
+      reportingMode: 'held_for_operator',
+      operatorState: 'pending',
+    };
+  }
+
+  return {
+    nextAction: input.requiredNextAction ?? 'Result returned inline to the original conversation.',
+    reportingMode: 'inline_response',
+  };
+}
+
 export function formatFailedDelegatedMessage(handoff: DelegatedWorkerHandoff): string {
   const parts = [
     'Delegated work failed.',
@@ -200,22 +246,6 @@ export function formatFailedDelegatedMessage(handoff: DelegatedWorkerHandoff): s
     handoff.nextAction,
   ].filter((value) => typeof value === 'string' && value.trim().length > 0);
   return [...new Set(parts)].join('\n');
-}
-
-function resolveCompletedDelegatedFollowUpDefaults(
-  runClass: DelegatedWorkerRunClass,
-): Pick<DelegatedWorkerHandoff, 'nextAction' | 'reportingMode' | 'operatorState'> {
-  if (runClass === 'long_running' || runClass === 'automation_owned') {
-    return {
-      nextAction: 'Replay or dismiss the held delegated result.',
-      reportingMode: 'held_for_operator',
-      operatorState: 'pending',
-    };
-  }
-  return {
-    nextAction: 'Result returned inline to the original conversation.',
-    reportingMode: 'inline_response',
-  };
 }
 
 function readDelegatedWorkerRunClass(value: unknown): DelegatedWorkerRunClass | undefined {

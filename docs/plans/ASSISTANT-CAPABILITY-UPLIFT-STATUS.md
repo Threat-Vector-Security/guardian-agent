@@ -99,11 +99,11 @@ Recommended reading order:
 - delegated-worker jobs now carry a bounded handoff object with summary, unresolved blocker kind, approval count, next action, and reporting mode
 - assistant-state job views now merge primary assistant jobs with delegated-worker jobs into one operator-facing feed and derive bounded display summaries for origin, outcome, and follow-up state
 - delegated-worker lifecycle breadcrumbs are recorded in audit as `delegated_worker_started`, `delegated_worker_completed`, and `delegated_worker_failed`
-- delegated completion now follows an explicit server-owned follow-up policy: `inline_response`, `held_for_approval`, and `status_only`
+- delegated completion now follows an explicit server-owned follow-up policy: `inline_response`, `held_for_approval`, `held_for_operator`, and `status_only`
 - clarification and workspace-switch delegated blockers can now downgrade to status-only operator messaging while approval blockers stay inline and approval-held
 - delegated follow-up state now projects into assistant-dispatch traces and the unified execution timeline through bounded handoff nodes instead of only raw delegated prose
 - delegated run classes now exist for `in_invocation`, `short_lived`, `long_running`, and `automation_owned` work, with `long_running` and `automation_owned` able to hold results for operator review
-- delegated worker producers now stamp run-class metadata from explicit policy, automation origin, direct-reasoning mode, coding-session context, and orchestration role before the worker manager records job/timeline state
+- delegated worker producers now stamp run-class metadata from explicit policy, automation origin, direct-reasoning mode, background delegation signals, and approved delegated tool completions before job, trace, and timeline state is recorded
 - Dashboard `Agent Runtime`, the web assistant API, and CLI `/assistant jobs followup <jobId> <replay|keep_held|dismiss>` now expose bounded operator controls for held delegated results
 - held delegated result actions now preserve execution lineage, surface id, continuity key, active execution refs, code-session id, and run class through replay, keep-held, and dismiss updates
 - held delegated result replay, keep-held, and dismiss actions now emit shared run-timeline breadcrumbs on the correlated parent and delegated task runs, carrying continuity and execution lineage when available
