@@ -197,7 +197,7 @@ Core harness scripts include:
 | **`scripts/test-cloud-config.mjs`** | Cloud profile/config harness: config redaction, cloud tool discovery, planner profile selection, and simulated WHM/cloud execution (Node.js) | focused cloud config assertions |
 | **`scripts/test-skills-routing-harness.mjs`** | Skills routing harness: resolver selection, active-skill context, and skill-backed tool routing through the web channel (Node.js with `tsx`) | focused skills-routing assertions |
 | **`scripts/test-automation-authoring-compiler.mjs`** | Conversational automation compiler harness: native task/workflow compilation, dedupe, and no-script drift (Node.js) | ~12 |
-| **`scripts/test-coding-assistant.mjs`** | Coding-session transport + repo-grounding harness using canonical chat dispatch plus session attachments/overrides, including approval scoping, memory-scope isolation, and optional real Ollama smoke lane (Node.js) | focused Code-session assertions |
+| **`scripts/test-coding-assistant.mjs`** | Coding-session transport + repo-grounding harness using canonical chat dispatch plus session attachments/overrides, including workspace focus, continuation recovery, approval scoping, memory-scope isolation, and optional real Ollama smoke lane (Node.js) | focused Code-session assertions |
 | **`scripts/test-code-ui-smoke.mjs`** | Browser smoke for the `#/code` workspace: explorer refresh, Guardian-chat session focus, activity/trust UX, and code-session persistence (Node.js + Playwright) | focused Code UI assertions |
 | **`scripts/test-second-brain-smoke.mjs`** | Dist-backed Second Brain service smoke: tasks, notes, contacts, library links, events, and briefing behavior (Node.js) | focused Second Brain service assertions |
 | **`scripts/test-second-brain-routines.mjs`** | Dist-backed Second Brain routines smoke: seeded routines, horizon scanning, scheduled-task integration, and sync behavior (Node.js) | focused Second Brain routine assertions |
@@ -330,6 +330,7 @@ When you run the Node-based harnesses from Windows PowerShell instead of WSL:
 - run `npm run build` before the brokered `dist/` harnesses such as `scripts/test-brokered-isolation.mjs` and `scripts/test-brokered-approvals.mjs`
 - native-protection assertions are platform-aware: Windows-hosted runs should report `windows_defender`, while Unix/WSL-hosted fake-AV lanes typically report `clamav`
 - the synthetic `.clam-detect` marker used by some coding/security harnesses is only meant to trip the Unix fake-ClamAV lane; Windows Defender lanes should validate that the native scan completed, not that the marker was treated as a real Defender detection
+- for a host-only Windows Defender workspace scan, run `.\scripts\test-windows-defender-workspace-scan.ps1 -WorkspacePath <path>` from Windows PowerShell and verify the native custom scan completes for the resolved host path
 - if a temp harness directory cannot be deleted immediately on Windows because SQLite or log handles are still draining, rerun with `HARNESS_KEEP_TMP=1` and inspect the preserved logs before cleaning up manually
 
 This Codex desktop session is using Windows PowerShell, so those Windows-hosted notes apply directly here.
@@ -351,6 +352,8 @@ The **preferred method** for automated testing and bug reproduction is to write 
 For planner-path bugs such as tool discovery regressions, "tool is unavailable" chatter, or approval preamble wording, drive the scenario through `POST /api/message`. Direct `POST /api/tools/run` tests validate the approval transport, but they bypass the LLM's tool-selection and response-copy path.
 
 For coding-session regressions, create a backend Code session first, attach the relevant surface, and drive conversation through the normal `POST /api/message` or `POST /api/message/stream` path for that surface. Keep approvals on `POST /api/code/sessions/:id/approvals/:approvalId`, and keep session-state assertions on `GET /api/code/sessions/:id`. Also keep explicit `/api/message` coverage for ad hoc `workspaceRoot`-only coding context and fail-closed handling when a caller supplies an unresolved `metadata.codeContext.sessionId`.
+
+The current `scripts/test-coding-assistant.mjs` lane also covers natural-language coding workspace current/list/switch flows, active workspace preservation across unrelated detours, `code_create` scoping to the active workspace, same-round `package_install` coalescing, and continuation recovery after tool-limit stops. Use it before adding narrower one-off coding-workspace harnesses.
 
 For graph-owned orchestration, delegated verification/retry, multi-domain tool synthesis, or cross-domain approval resume changes, run:
 
@@ -622,6 +625,8 @@ Useful environment variables:
 |----------|---------|-------------|
 | `HARNESS_PORT` | `3000` | Web channel port to use |
 | `HARNESS_TOKEN` | auto-generated | Bearer auth token |
+| `HARNESS_KEEP_TMP` | `0` | When `1`, preserve supported harness temp directories and logs for local inspection |
+| `HARNESS_CHROME_BIN` | auto-detect | Optional browser executable path for Playwright-based UI smoke harnesses |
 | `HARNESS_USE_REAL_OLLAMA` | `0` | When `1`, use a real reachable Ollama endpoint instead of the embedded fake provider |
 | `HARNESS_AGENT_ISOLATION` | `0` | When `1`, run the harness with brokered worker isolation enabled so automation compiler routing is exercised in the worker path |
 | `HARNESS_OLLAMA_BASE_URL` | auto-detect | Base URL for a reachable Ollama instance, for example `http://192.168.x.x:11434` or `https://ollama.com/api` for Ollama Cloud |
