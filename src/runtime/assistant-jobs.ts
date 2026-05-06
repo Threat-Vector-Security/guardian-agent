@@ -75,9 +75,14 @@ export interface DelegatedWorkerMetadata {
   agentName?: string;
   orchestration?: OrchestrationRoleDescriptor;
   executionId?: string;
+  parentExecutionId?: string;
   rootExecutionId?: string;
   originChannel?: string;
+  originSurfaceId?: string;
+  requestId?: string;
   continuityKey?: string;
+  activeExecutionRefs?: string[];
+  pendingActionId?: string;
   codeSessionId?: string;
   runClass?: DelegatedWorkerRunClass;
   handoff?: DelegatedWorkerHandoff;
@@ -389,9 +394,16 @@ export function readDelegatedWorkerMetadata(metadata: Record<string, unknown> | 
     ...(typeof delegated.agentName === 'string' ? { agentName: delegated.agentName } : {}),
     ...(orchestration ? { orchestration } : {}),
     ...(typeof delegated.executionId === 'string' ? { executionId: delegated.executionId } : {}),
+    ...(typeof delegated.parentExecutionId === 'string' ? { parentExecutionId: delegated.parentExecutionId } : {}),
     ...(typeof delegated.rootExecutionId === 'string' ? { rootExecutionId: delegated.rootExecutionId } : {}),
     ...(typeof delegated.originChannel === 'string' ? { originChannel: delegated.originChannel } : {}),
+    ...(typeof delegated.originSurfaceId === 'string' ? { originSurfaceId: delegated.originSurfaceId } : {}),
+    ...(typeof delegated.requestId === 'string' ? { requestId: delegated.requestId } : {}),
     ...(typeof delegated.continuityKey === 'string' ? { continuityKey: delegated.continuityKey } : {}),
+    ...(readStringArray(delegated.activeExecutionRefs).length > 0
+      ? { activeExecutionRefs: readStringArray(delegated.activeExecutionRefs) }
+      : {}),
+    ...(typeof delegated.pendingActionId === 'string' ? { pendingActionId: delegated.pendingActionId } : {}),
     ...(typeof delegated.codeSessionId === 'string' ? { codeSessionId: delegated.codeSessionId } : {}),
     ...((delegated.runClass === 'in_invocation'
       || delegated.runClass === 'short_lived'
@@ -402,6 +414,13 @@ export function readDelegatedWorkerMetadata(metadata: Record<string, unknown> | 
     ...(handoff ? { handoff } : {}),
     ...(executionGraph ? { executionGraph } : {}),
   };
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map((entry) => typeof entry === 'string' ? entry.trim() : '')
+    .filter((entry) => entry.length > 0))];
 }
 
 function readDelegatedWorkerExecutionGraphMetadata(value: unknown): DelegatedWorkerExecutionGraphMetadata | undefined {

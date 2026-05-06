@@ -339,6 +339,11 @@ export class WorkerManager {
     agentId: string;
     userId: string;
     channel: string;
+    originSurfaceId?: string;
+    continuityKey?: string;
+    activeExecutionRefs?: string[];
+    codeSessionId?: string;
+    runClass?: DelegatedWorkerRunClass;
   }>();
   private readonly tokenManager: CapabilityTokenManager;
   private readonly tools: ToolExecutor;
@@ -1715,6 +1720,11 @@ export class WorkerManager {
           agentId: input.agentId,
           userId: input.userId,
           channel: input.message.channel,
+          ...(input.delegation?.originSurfaceId ? { originSurfaceId: input.delegation.originSurfaceId } : {}),
+          ...(input.delegation?.continuityKey ? { continuityKey: input.delegation.continuityKey } : {}),
+          ...(input.delegation?.activeExecutionRefs?.length ? { activeExecutionRefs: [...input.delegation.activeExecutionRefs] } : {}),
+          ...(input.delegation?.codeSessionId ? { codeSessionId: input.delegation.codeSessionId } : {}),
+          ...(handoff.runClass ? { runClass: handoff.runClass } : {}),
         });
       } else {
         this.delegatedFollowUpPayloads.delete(delegatedJob.id);
@@ -2191,6 +2201,13 @@ export class WorkerManager {
       details: {
         content: replayedContent,
         redacted: !scan.clean,
+        ...(payload.continuityKey ? { continuityKey: payload.continuityKey } : {}),
+        ...(payload.activeExecutionRefs?.length ? { activeExecutionRefs: [...payload.activeExecutionRefs] } : {}),
+        ...(payload.codeSessionId ? { codeSessionId: payload.codeSessionId } : {}),
+        ...(payload.runClass ? { runClass: payload.runClass } : {}),
+        ...(payload.originSurfaceId ? { originSurfaceId: payload.originSurfaceId } : {}),
+        ...(delegated.executionId ? { executionId: delegated.executionId } : {}),
+        ...(delegated.rootExecutionId ? { rootExecutionId: delegated.rootExecutionId } : {}),
       },
     });
     return result;
@@ -2290,8 +2307,15 @@ export class WorkerManager {
             : {}),
           kind: 'brokered_worker',
           lifecycle: delegated.lifecycle ?? 'completed',
+          ...(delegated.executionId ? { executionId: delegated.executionId } : {}),
+          ...(delegated.parentExecutionId ? { parentExecutionId: delegated.parentExecutionId } : {}),
+          ...(delegated.rootExecutionId ? { rootExecutionId: delegated.rootExecutionId } : {}),
           ...(delegated.originChannel ? { originChannel: delegated.originChannel } : {}),
+          ...(delegated.originSurfaceId ? { originSurfaceId: delegated.originSurfaceId } : {}),
+          ...(delegated.requestId ? { requestId: delegated.requestId } : {}),
           ...(delegated.continuityKey ? { continuityKey: delegated.continuityKey } : {}),
+          ...(delegated.activeExecutionRefs?.length ? { activeExecutionRefs: [...delegated.activeExecutionRefs] } : {}),
+          ...(delegated.pendingActionId ? { pendingActionId: delegated.pendingActionId } : {}),
           ...(delegated.codeSessionId ? { codeSessionId: delegated.codeSessionId } : {}),
           ...(delegated.runClass ? { runClass: delegated.runClass } : {}),
           handoff,

@@ -6286,7 +6286,13 @@ describe('WorkerManager', () => {
       runtimeNotices: [],
       delegation: {
         requestId: 'm-held-operator',
+        executionId: 'exec-held-operator',
+        rootExecutionId: 'root-held-operator',
         originChannel: 'web',
+        originSurfaceId: 'web-guardian-chat',
+        continuityKey: 'continuity-held-operator',
+        activeExecutionRefs: ['code_session:Guardian Agent', 'delegated:repo-digest'],
+        codeSessionId: 'code-held-operator',
         runClass: 'long_running',
       },
     });
@@ -6305,6 +6311,12 @@ describe('WorkerManager', () => {
     expect(jobId).toBeTruthy();
     expect(state.jobs[0]?.metadata).toMatchObject({
       delegation: {
+        executionId: 'exec-held-operator',
+        rootExecutionId: 'root-held-operator',
+        originSurfaceId: 'web-guardian-chat',
+        continuityKey: 'continuity-held-operator',
+        activeExecutionRefs: ['code_session:Guardian Agent', 'delegated:repo-digest'],
+        codeSessionId: 'code-held-operator',
         runClass: 'long_running',
         handoff: {
           reportingMode: 'held_for_operator',
@@ -6319,12 +6331,25 @@ describe('WorkerManager', () => {
       details: {
         content: 'Digest complete.\n- README reviewed\n- package.json reviewed',
         redacted: false,
+        continuityKey: 'continuity-held-operator',
+        activeExecutionRefs: ['code_session:Guardian Agent', 'delegated:repo-digest'],
+        codeSessionId: 'code-held-operator',
+        runClass: 'long_running',
+        originSurfaceId: 'web-guardian-chat',
+        executionId: 'exec-held-operator',
+        rootExecutionId: 'root-held-operator',
       },
     });
 
     const afterReplay = manager.getJobState(5);
     expect(afterReplay.jobs[0]?.metadata).toMatchObject({
       delegation: {
+        executionId: 'exec-held-operator',
+        rootExecutionId: 'root-held-operator',
+        originSurfaceId: 'web-guardian-chat',
+        continuityKey: 'continuity-held-operator',
+        activeExecutionRefs: ['code_session:Guardian Agent', 'delegated:repo-digest'],
+        codeSessionId: 'code-held-operator',
         handoff: {
           operatorState: 'replayed',
         },

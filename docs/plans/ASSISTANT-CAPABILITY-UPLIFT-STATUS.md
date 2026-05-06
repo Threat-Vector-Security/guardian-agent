@@ -105,6 +105,7 @@ Recommended reading order:
 - delegated run classes now exist for `in_invocation`, `short_lived`, `long_running`, and `automation_owned` work, with `long_running` and `automation_owned` able to hold results for operator review
 - delegated worker producers now stamp run-class metadata from explicit policy, automation origin, direct-reasoning mode, coding-session context, and orchestration role before the worker manager records job/timeline state
 - Dashboard `Agent Runtime`, the web assistant API, and CLI `/assistant jobs followup <jobId> <replay|keep_held|dismiss>` now expose bounded operator controls for held delegated results
+- held delegated result actions now preserve execution lineage, surface id, continuity key, active execution refs, code-session id, and run class through replay, keep-held, and dismiss updates
 
 ---
 
