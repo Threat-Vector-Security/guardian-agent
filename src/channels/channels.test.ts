@@ -1403,8 +1403,9 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.stop();
   });
 
-  it('/reset should reset the attached CLI coding session before regular chat memory', async () => {
-    const seen: Array<{ sessionId: string; channel: string; userId: string }> = [];
+  it('/reset should reset the full current CLI conversation when a coding session is attached', async () => {
+    const codeResetSeen: Array<{ sessionId: string; channel: string; userId: string }> = [];
+    const chatResetSeen: Array<{ agentId: string; channel: string; userId: string }> = [];
     const codeSessions = {
       currentSessionId: 'code-2',
       referencedSessionIds: [],
@@ -1422,22 +1423,35 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const { input, output, cli } = makeCli({
       onCodeSessionsList: () => codeSessions,
       onCodeSessionResetConversation: (args) => {
-        seen.push({
+        codeResetSeen.push({
           sessionId: args.sessionId,
           channel: args.channel,
           userId: args.userId,
         });
-        return { success: true, message: 'Conversation reset for coding session.' };
+        return { success: true, message: 'Workspace context reset.' };
+      },
+      onConversationReset: async (args) => {
+        chatResetSeen.push({
+          agentId: args.agentId,
+          channel: args.channel,
+          userId: args.userId,
+        });
+        return { success: true, message: `Conversation reset for '${args.agentId}'.` };
       },
     });
     await cli.start(async () => ({ content: 'ok' }));
 
     await sendCommand(input, '/reset');
     const text = readOutput(output);
-    expect(text).toContain('Conversation reset for coding session');
-    expect(text).toContain('Scope: coding session Music App');
-    expect(seen).toEqual([{
+    expect(text).toContain('Conversation reset');
+    expect(text).not.toContain('coding session');
+    expect(codeResetSeen).toEqual([{
       sessionId: 'code-2',
+      channel: 'cli',
+      userId: 'owner',
+    }]);
+    expect(chatResetSeen).toEqual([{
+      agentId: 'agent-1',
       channel: 'cli',
       userId: 'owner',
     }]);

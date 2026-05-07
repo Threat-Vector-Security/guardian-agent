@@ -1548,7 +1548,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('\n');
     this.write(this.bold('Models & General\n'));
     this.write('  /models [provider]                     List available models\n');
-    this.write('  /reset [agentId]                       Reset current coding-session or agent conversation memory\n');
+    this.write('  /reset [agentId]                       Reset current conversation memory\n');
     this.write('  /factory-reset data|config|all         ' + this.red('Factory reset (data/config/all)') + '\n');
     this.write('  /session [list|use|new] ...            Session controls\n');
     this.write('  /quick <action> <details>              Run quick action workflow\n');
@@ -4459,22 +4459,39 @@ export class CLIChannel implements ChannelAdapter {
 
   private async handleReset(args: string[]): Promise<void> {
     if (args.length === 0) {
+      const results: Array<{ success: boolean; message: string }> = [];
       const codeSessions = this.listCliCodeSessions();
       if (codeSessions?.currentSessionId && this.dashboard?.onCodeSessionResetConversation) {
-        const current = codeSessions.sessions.find((session) => session.id === codeSessions.currentSessionId);
-        const result = this.dashboard.onCodeSessionResetConversation({
+        results.push(this.dashboard.onCodeSessionResetConversation({
           sessionId: codeSessions.currentSessionId,
           userId: this.defaultUserId,
           channel: 'cli',
-        });
-        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n`);
-        if (current) {
-          this.write(`  Scope: coding session ${this.cyan(current.title)}\n`);
-          this.write(`  Use ${this.cyan(`/reset ${this.activeAgentId ?? this.defaultAgentId ?? 'default'}`)} to reset regular chat memory instead.\n`);
+        }));
+      }
+
+      if (this.dashboard?.onConversationReset) {
+        const agentId = this.activeAgentId ?? this.defaultAgentId ?? 'default';
+        results.push(await this.dashboard.onConversationReset({
+          agentId,
+          userId: this.defaultUserId,
+          channel: 'cli',
+        }));
+      }
+
+      if (results.length > 0) {
+        const failed = results.filter((result) => !result.success);
+        if (failed.length > 0) {
+          this.write(`\n${this.red('FAIL')}: ${failed.map((result) => result.message).join(' ')}\n\n`);
+          return;
         }
-        this.write('\n');
+        this.write(`\n${this.green('OK')}: Conversation reset.\n\n`);
         return;
       }
+    }
+
+    if (args.length === 0) {
+      this.write('\nConversation reset is not available.\n\n');
+      return;
     }
 
     if (!this.dashboard?.onConversationReset) {
