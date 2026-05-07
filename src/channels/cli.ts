@@ -1548,7 +1548,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('\n');
     this.write(this.bold('Models & General\n'));
     this.write('  /models [provider]                     List available models\n');
-    this.write('  /reset [agentId]                       Reset conversation memory\n');
+    this.write('  /reset [agentId]                       Reset current coding-session or agent conversation memory\n');
     this.write('  /factory-reset data|config|all         ' + this.red('Factory reset (data/config/all)') + '\n');
     this.write('  /session [list|use|new] ...            Session controls\n');
     this.write('  /quick <action> <details>              Run quick action workflow\n');
@@ -4458,6 +4458,25 @@ export class CLIChannel implements ChannelAdapter {
   // ─── /reset ──────────────────────────────────────────────────
 
   private async handleReset(args: string[]): Promise<void> {
+    if (args.length === 0) {
+      const codeSessions = this.listCliCodeSessions();
+      if (codeSessions?.currentSessionId && this.dashboard?.onCodeSessionResetConversation) {
+        const current = codeSessions.sessions.find((session) => session.id === codeSessions.currentSessionId);
+        const result = this.dashboard.onCodeSessionResetConversation({
+          sessionId: codeSessions.currentSessionId,
+          userId: this.defaultUserId,
+          channel: 'cli',
+        });
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n`);
+        if (current) {
+          this.write(`  Scope: coding session ${this.cyan(current.title)}\n`);
+          this.write(`  Use ${this.cyan(`/reset ${this.activeAgentId ?? this.defaultAgentId ?? 'default'}`)} to reset regular chat memory instead.\n`);
+        }
+        this.write('\n');
+        return;
+      }
+    }
+
     if (!this.dashboard?.onConversationReset) {
       this.write('\nConversation reset is not available.\n\n');
       return;

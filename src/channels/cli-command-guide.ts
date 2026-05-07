@@ -454,11 +454,13 @@ export const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
   {
     aliases: ['reset'],
     title: '/reset',
-    summary: 'Clear conversation state for an agent and start fresh without removing the agent itself.',
+    summary: 'Clear conversation state and start fresh without removing the agent or coding session itself.',
     usage: [
       '/reset [agentId]',
     ],
     notes: [
+      'When the CLI is attached to a coding session, /reset clears that coding session conversation.',
+      'Pass an agentId to reset regular chat memory instead, for example /reset default.',
       'Use /session new if you want a fresh stored session in the session system.',
     ],
   },

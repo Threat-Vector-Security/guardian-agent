@@ -1403,6 +1403,95 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.stop();
   });
 
+  it('/reset should reset the attached CLI coding session before regular chat memory', async () => {
+    const seen: Array<{ sessionId: string; channel: string; userId: string }> = [];
+    const codeSessions = {
+      currentSessionId: 'code-2',
+      referencedSessionIds: [],
+      targetSessionId: null,
+      sessions: [
+        {
+          id: 'code-2',
+          title: 'Music App',
+          workspaceRoot: '/work/music-app',
+          resolvedRoot: '/work/music-app',
+          workState: { workspaceTrust: { state: 'trusted' } },
+        },
+      ],
+    } as unknown as ReturnType<NonNullable<DashboardCallbacks['onCodeSessionsList']>>;
+    const { input, output, cli } = makeCli({
+      onCodeSessionsList: () => codeSessions,
+      onCodeSessionResetConversation: (args) => {
+        seen.push({
+          sessionId: args.sessionId,
+          channel: args.channel,
+          userId: args.userId,
+        });
+        return { success: true, message: 'Conversation reset for coding session.' };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/reset');
+    const text = readOutput(output);
+    expect(text).toContain('Conversation reset for coding session');
+    expect(text).toContain('Scope: coding session Music App');
+    expect(seen).toEqual([{
+      sessionId: 'code-2',
+      channel: 'cli',
+      userId: 'owner',
+    }]);
+
+    await cli.stop();
+  });
+
+  it('/reset <agentId> should reset regular CLI chat memory even when a coding session is attached', async () => {
+    const codeResetSeen: string[] = [];
+    const chatResetSeen: Array<{ agentId: string; channel: string; userId: string }> = [];
+    const codeSessions = {
+      currentSessionId: 'code-2',
+      referencedSessionIds: [],
+      targetSessionId: null,
+      sessions: [
+        {
+          id: 'code-2',
+          title: 'Music App',
+          workspaceRoot: '/work/music-app',
+          resolvedRoot: '/work/music-app',
+          workState: { workspaceTrust: { state: 'trusted' } },
+        },
+      ],
+    } as unknown as ReturnType<NonNullable<DashboardCallbacks['onCodeSessionsList']>>;
+    const { input, output, cli } = makeCli({
+      onCodeSessionsList: () => codeSessions,
+      onCodeSessionResetConversation: (args) => {
+        codeResetSeen.push(args.sessionId);
+        return { success: true, message: 'Conversation reset for coding session.' };
+      },
+      onConversationReset: async (args) => {
+        chatResetSeen.push({
+          agentId: args.agentId,
+          channel: args.channel,
+          userId: args.userId,
+        });
+        return { success: true, message: `Conversation reset for '${args.agentId}'.` };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/reset agent-1');
+    const text = readOutput(output);
+    expect(text).toContain("Conversation reset for 'agent-1'");
+    expect(codeResetSeen).toEqual([]);
+    expect(chatResetSeen).toEqual([{
+      agentId: 'agent-1',
+      channel: 'cli',
+      userId: 'owner',
+    }]);
+
+    await cli.stop();
+  });
+
   it('/code attach should resolve a unique session match and forward CLI surface context', async () => {
     const seen: Array<{ sessionId: string; surfaceId: string; channel: string; userId: string }> = [];
     const codeSessions = {
