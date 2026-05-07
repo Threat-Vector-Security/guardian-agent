@@ -61,6 +61,7 @@ export function buildDelegatedHandoff(
   const unresolvedBlockerKind = resolveDelegatedBlockedKind(metadata, verification);
   const lifecycle = resolveDelegatedWorkerLifecycle(metadata, unresolvedBlockerKind, verification);
   const summary = buildDelegatedFailureSummary(content, metadata, verification)
+    ?? buildDelegatedSuccessSummary(content, metadata, verification)
     ?? truncateDelegatedHandoffText(content, 220)
     ?? (lifecycle === 'failed' ? 'Delegated worker failed.' : 'Delegated worker completed.');
   const approvalCount = readApprovalSummaryCount(metadata);
@@ -347,6 +348,81 @@ function buildDelegatedFailureSummary(
   }
   const summary = truncateDelegatedHandoffText(content, 220);
   return summary || 'Delegated worker failed.';
+}
+
+function buildDelegatedSuccessSummary(
+  content: string,
+  metadata: Record<string, unknown> | undefined,
+  verification?: VerificationDecision,
+): string | undefined {
+  if (verification?.decision !== 'satisfied') {
+    return undefined;
+  }
+  const delegatedEnvelope = readDelegatedResultEnvelope(metadata);
+  if (!delegatedEnvelope || delegatedEnvelope.runStatus !== 'completed') {
+    return undefined;
+  }
+  const contentSummary = truncateDelegatedHandoffText(content, 220);
+  if (contentSummary && !looksLikeIncompleteDelegatedCompletionFragment(contentSummary)) {
+    return undefined;
+  }
+  const changedRefs = collectSuccessfulWorkspaceMutationRefs(delegatedEnvelope);
+  if (changedRefs.length > 0) {
+    const visible = changedRefs.slice(0, 6);
+    const suffix = changedRefs.length > visible.length ? ` and ${changedRefs.length - visible.length} more` : '';
+    return `Delegated worker completed verified workspace changes: ${visible.join(', ')}${suffix}.`;
+  }
+  const successfulTools = uniqueSortedToolNames(delegatedEnvelope.evidenceReceipts
+    .filter((receipt) => receipt.status === 'succeeded' && receipt.sourceType === 'tool_call')
+    .map((receipt) => receipt.toolName));
+  if (successfulTools.length > 0) {
+    return `Delegated worker completed with verified tool evidence from ${formatToolNameList(successfulTools)}.`;
+  }
+  return 'Delegated worker completed and satisfied the required planned steps.';
+}
+
+function looksLikeIncompleteDelegatedCompletionFragment(content: string): boolean {
+  const normalized = content.trim();
+  if (!normalized) return true;
+  if (/:$/.test(normalized)) return true;
+  return /^(?:now|next|then|let me|i(?:'|’)ll|i will|i need to)\b/i.test(normalized)
+    || /\b(?:for simplicity|before i finish|now i)\b/i.test(normalized);
+}
+
+function collectSuccessfulWorkspaceMutationRefs(envelope: DelegatedResultEnvelope): string[] {
+  const successfulWriteReceiptIds = new Set(envelope.evidenceReceipts
+    .filter((receipt) => (
+      receipt.status === 'succeeded'
+      && receipt.sourceType === 'tool_call'
+      && isWorkspaceMutationToolName(receipt.toolName)
+    ))
+    .map((receipt) => receipt.receiptId));
+  const refs = [
+    ...envelope.evidenceReceipts
+      .filter((receipt) => successfulWriteReceiptIds.has(receipt.receiptId))
+      .flatMap((receipt) => receipt.refs),
+    ...envelope.claims
+      .filter((claim) => (
+        (claim.kind === 'filesystem_mutation'
+          || claim.kind === 'implementation_file'
+          || claim.kind === 'file_reference')
+        && claim.evidenceReceiptIds.some((receiptId) => successfulWriteReceiptIds.has(receiptId))
+      ))
+      .map((claim) => claim.value || claim.subject),
+  ];
+  return [...new Set(refs
+    .map((ref) => typeof ref === 'string' ? ref.trim() : '')
+    .filter((ref) => ref.length > 0 && !ref.startsWith('tool:')))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function isWorkspaceMutationToolName(toolName: string | undefined): boolean {
+  const normalized = toolName?.trim();
+  return normalized === 'fs_write'
+    || normalized === 'fs_mkdir'
+    || normalized === 'fs_move'
+    || normalized === 'fs_delete'
+    || normalized === 'apply_patch';
 }
 
 function formatStatusOnlyDelegatedMessage(

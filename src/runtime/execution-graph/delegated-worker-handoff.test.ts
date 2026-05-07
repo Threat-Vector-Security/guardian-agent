@@ -163,6 +163,56 @@ describe('delegated worker handoff graph policy', () => {
     expect(result.metadata?.delegatedHandoff).toEqual(handoff);
   });
 
+  it('summarizes held completed repo work from verified write evidence when worker text is fragmentary', () => {
+    const verification: VerificationDecision = {
+      decision: 'satisfied',
+      reasons: ['Delegated worker satisfied every required planned step.'],
+      retryable: false,
+    };
+    const taskContract = delegatedTaskContract();
+    const metadata = buildDelegatedExecutionMetadata(buildDelegatedSyntheticEnvelope({
+      taskContract,
+      runStatus: 'completed',
+      stopReason: 'end_turn',
+      operatorSummary: 'Now the main HTML file with all CSS and JS inline for simplicity:',
+      evidenceReceipts: [{
+        receiptId: 'receipt-write-index',
+        sourceType: 'tool_call',
+        toolName: 'fs_write',
+        status: 'succeeded',
+        refs: ['index.html'],
+        summary: 'Wrote index.html.',
+        startedAt: 1,
+        endedAt: 2,
+      }, {
+        receiptId: 'receipt-write-package',
+        sourceType: 'tool_call',
+        toolName: 'fs_write',
+        status: 'succeeded',
+        refs: ['package.json'],
+        summary: 'Wrote package.json.',
+        startedAt: 3,
+        endedAt: 4,
+      }],
+    }));
+
+    const handoff = buildDelegatedHandoff(
+      'Now the main HTML file with all CSS and JS inline for simplicity:',
+      metadata,
+      'long_running',
+      verification,
+    );
+    const result = applyDelegatedFollowUpPolicy(
+      { content: 'Now the main HTML file with all CSS and JS inline for simplicity:', metadata },
+      handoff,
+      verification,
+    );
+
+    expect(handoff.summary).toBe('Delegated worker completed verified workspace changes: index.html, package.json.');
+    expect(result.content).toContain('Delegated worker completed verified workspace changes: index.html, package.json.');
+    expect(result.content).not.toContain('Now the main HTML file');
+  });
+
   it('uses delegated result envelopes when summarizing incomplete graph terminals', () => {
     const taskContract = delegatedTaskContract();
     const metadata = buildDelegatedExecutionMetadata(buildDelegatedSyntheticEnvelope({
