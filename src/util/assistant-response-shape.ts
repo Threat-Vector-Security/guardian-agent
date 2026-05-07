@@ -76,6 +76,7 @@ export function looksLikeOngoingWorkResponse(content: string | undefined): boole
     /^(?:i['’]ll|i will(?!\s+not)|let me)\b/i,
     /^(?:we['’]ll|we will(?!\s+not)|let['’]s)\s+(?:search|fetch|browse|look|find|inspect|review|check|synthesize|analy[sz]e)\b/i,
     /^(?:will perform|will call|will use|will run)\b/i,
+    /^(?:now|next|then|first|finally)\b(?=[\s\S]{0,220}:$)(?=[\s\S]*\b(?:file|html|css|javascript|js|code|component|server|route|data|tests?|implementation|markup|styles?)\b)[\s\S]*:$/i,
     presentTenseActionStartPattern,
     /\b(?:now|next|first|then)\s+(?:i['’]ll|i will(?!\s+not)|let me)\b/i,
     /\b(?:let me|i['’]ll|i will(?!\s+not))\s+(?:inspect|check|review|verify|look|find|search|narrow|apply|restart|resume|write|create|read|use|try|run|continue|proceed|retry|delete|remove|append|save|deliver|provide|return)\b/i,

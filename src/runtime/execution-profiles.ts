@@ -124,6 +124,7 @@ const READ_ONLY_EVIDENCE_STEP_CATEGORIES = new Set([
   'second_brain_routine_list',
   'second_brain_routine_catalog',
 ]);
+const RUNTIME_VERIFIED_WORKSPACE_REQUEST_PATTERN = /\b(?:runnable\s+locally|run(?:ning)?\s+locally|make\s+it\s+runnable|start(?:ed|ing)?\s+(?:the\s+)?(?:app|application|site|server|dev\s+server)|serve\s+(?:the\s+)?(?:app|application|site)|launch\s+(?:the\s+)?(?:app|application|site)|local\s+url|localhost|127\.0\.0\.1|click\s+around|setup\s+errors?|runtime\s+errors?|fix\s+(?:any\s+)?(?:setup|runtime)\b)/i;
 
 function normalizeModelSelectionPolicy(
   config: GuardianAgentConfig,
@@ -508,6 +509,9 @@ function shouldPreferFrontier(
     decision.requiresRepoGrounding
     && policy.preferFrontierForRepoGrounded
   ) {
+    if (isRuntimeVerifiedWorkspaceMutation(decision)) {
+      return true;
+    }
     if (decision.preferredAnswerPath === 'chat_synthesis') {
       return true;
     }
@@ -578,6 +582,9 @@ function shouldPreferManagedCloudCodingRole(
   if (!explicitCodeSessionRoute && decision.entities.codingRemoteExecRequested !== true) {
     return false;
   }
+  if (shouldPreferFrontier(decision, policy)) {
+    return false;
+  }
   return decision.route === 'coding_task'
     && getManagedCloudRoutingRole({
       decision,
@@ -585,6 +592,27 @@ function shouldPreferManagedCloudCodingRole(
         ? decision.preferredAnswerPath
         : 'tool_loop',
     }) === 'coding';
+}
+
+function isRuntimeVerifiedWorkspaceMutation(decision: IntentGatewayDecision): boolean {
+  if (decision.route !== 'coding_task' && decision.route !== 'filesystem_task') {
+    return false;
+  }
+  if (!isExplicitWorkspaceMutationOperation(decision.operation)) {
+    return false;
+  }
+  const plannedSteps = decision.plannedSteps ?? [];
+  if (plannedSteps.some((step) => step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true)) {
+    return true;
+  }
+  const text = [
+    decision.summary,
+    decision.resolvedContent,
+    ...plannedSteps.map((step) => step.summary),
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ');
+  return RUNTIME_VERIFIED_WORKSPACE_REQUEST_PATTERN.test(text);
 }
 
 function chooseExternalTier(input: {

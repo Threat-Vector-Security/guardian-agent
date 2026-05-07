@@ -262,6 +262,16 @@ describe('delegated worker handoff graph policy', () => {
       orchestration: { role: 'coordinator', label: 'Guardian Coordinator' },
     })).toBe('in_invocation');
     expect(resolveDelegatedWorkerRunClass({
+      originChannel: 'web',
+      codeSessionId: 'code-session-1',
+      orchestration: { role: 'implementer', label: 'Workspace Implementer', lenses: ['coding-workspace'] },
+    })).toBe('in_invocation');
+    expect(resolveDelegatedWorkerRunClass({
+      originChannel: 'cli',
+      codeSessionId: 'code-session-1',
+      orchestration: { role: 'implementer', label: 'Workspace Implementer', lenses: ['coding-workspace'] },
+    })).toBe('in_invocation');
+    expect(resolveDelegatedWorkerRunClass({
       codeSessionId: 'code-session-1',
       orchestration: { role: 'explorer', label: 'Workspace Explorer', lenses: ['coding-workspace'] },
     })).toBe('long_running');

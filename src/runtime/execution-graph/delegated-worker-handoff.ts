@@ -12,6 +12,7 @@ import type { OrchestrationRoleDescriptor } from '../orchestration-role-descript
 import { readWorkerExecutionMetadata } from '../worker-execution-metadata.js';
 
 const AUTOMATION_OWNED_CHANNELS = new Set(['automation', 'scheduled']);
+const INTERACTIVE_INVOCATION_CHANNELS = new Set(['web', 'cli', 'telegram']);
 
 export interface DelegatedInsufficientResultHandoffInput {
   failureSummary: string;
@@ -177,7 +178,13 @@ export function resolveDelegatedWorkerRunClass(
     return 'in_invocation';
   }
 
-  if (normalizeRunClassPolicyText(input.codeSessionId) || hasDelegatedOrchestrationLens(input.orchestration, 'coding-workspace')) {
+  const hasCodingWorkspaceContext = normalizeRunClassPolicyText(input.codeSessionId)
+    || hasDelegatedOrchestrationLens(input.orchestration, 'coding-workspace');
+  if (originChannel && INTERACTIVE_INVOCATION_CHANNELS.has(originChannel) && hasCodingWorkspaceContext) {
+    return 'in_invocation';
+  }
+
+  if (hasCodingWorkspaceContext) {
     return 'long_running';
   }
 

@@ -556,6 +556,60 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('rejects fragmentary implementation lead-ins as non-terminal app build answers', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Build a simple music app from scratch, make it runnable locally, start the app, fix runtime errors, and report the local URL.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'write', summary: 'Create the app files.', expectedToolCategories: ['fs_write'], required: true },
+        { kind: 'read', summary: 'Read back changed files.', expectedToolCategories: ['fs_read'], required: true, dependsOn: ['step_1'] },
+        { kind: 'tool_call', summary: 'Start the app locally and capture the local URL.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1', 'step_2'] },
+        { kind: 'answer', summary: 'Report the local URL and verification.', required: true, dependsOn: ['step_1', 'step_2', 'step_3'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = 'Now the main HTML file with all CSS and JS inline for simplicity:';
+    const answerStepIds = taskContract.plan.steps
+      .filter((step) => step.kind === 'answer')
+      .map((step) => step.stepId);
+    const stepReceipts: StepReceipt[] = taskContract.plan.steps.map((step, index) => ({
+      stepId: step.stepId,
+      status: 'satisfied',
+      evidenceReceiptIds: [`receipt-${index + 1}`],
+      summary: step.kind === 'answer' ? finalAnswer : step.summary,
+      startedAt: index + 1,
+      endedAt: index + 1,
+    }));
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        stepReceipts,
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: answerStepIds,
+    });
+  });
+
   it('rejects mixed-domain answers that conclude no repo matches for implementation-location requests without repo file evidence', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'general_assistant',

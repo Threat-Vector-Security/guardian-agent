@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawn as spawnPty, type IPty } from 'node-pty';
 import type { PrincipalRole } from '../tools/types.js';
@@ -87,6 +88,14 @@ function addEnvIfSafe(target: Record<string, string>, source: NodeJS.ProcessEnv 
   }
 }
 
+function resolveWindowsCodeTerminalHome(workspaceRoot: string): string {
+  const digest = createHash('sha256')
+    .update(resolve(workspaceRoot).toLowerCase())
+    .digest('hex')
+    .slice(0, 16);
+  return resolve(tmpdir(), 'guardianagent-code-terminal-home', digest);
+}
+
 export function buildCodeTerminalEnv(
   workspaceRoot: string,
   launchEnv: Record<string, string | undefined> = {},
@@ -101,9 +110,14 @@ export function buildCodeTerminalEnv(
   }
 
   const cacheRoot = resolve(workspaceRoot, '.guardianagent', 'cache');
-  env.HOME = workspaceRoot;
+  const shellHome = platform === 'win32'
+    ? resolveWindowsCodeTerminalHome(workspaceRoot)
+    : workspaceRoot;
+  env.HOME = shellHome;
   if (platform === 'win32') {
-    env.USERPROFILE = workspaceRoot;
+    env.USERPROFILE = shellHome;
+    env.APPDATA = resolve(shellHome, 'AppData', 'Roaming');
+    env.LOCALAPPDATA = resolve(shellHome, 'AppData', 'Local');
   }
   env.npm_config_cache = resolve(cacheRoot, 'npm');
   env.NPM_CONFIG_CACHE = resolve(cacheRoot, 'npm');

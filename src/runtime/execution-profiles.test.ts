@@ -473,7 +473,7 @@ describe('execution profiles', () => {
     expect(profile?.reason).toContain("managed-cloud role 'coding' selected provider 'ollama-cloud-coding'");
   });
 
-  it('uses the managed-cloud coding profile for coding workspace mutations in balanced auto mode', () => {
+  it('uses the managed-cloud coding profile for bounded coding workspace mutations in balanced auto mode', () => {
     const profile = selectExecutionProfile({
       config: createConfig(),
       routeDecision: {
@@ -482,8 +482,8 @@ describe('execution profiles', () => {
       },
       gatewayDecision: createGatewayDecision({
         operation: 'update',
-        preferredAnswerPath: 'chat_synthesis',
-        expectedContextPressure: 'high',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
         plannedSteps: [
           { kind: 'read', summary: 'Read the existing app.', required: true },
           { kind: 'write', summary: 'Update the app.', required: true },
@@ -501,6 +501,35 @@ describe('execution profiles', () => {
     });
     expect(profile?.reason).toContain('managed cloud coding role binding selected for coding workspace workload');
     expect(profile?.reason).toContain("managed-cloud role 'coding' selected provider 'ollama-cloud-coding'");
+  });
+
+  it('prefers frontier for runtime-verified greenfield app creation in an attached coding session', () => {
+    const profile = selectExecutionProfile({
+      config: createConfig(),
+      routeDecision: {
+        tier: 'external',
+        reason: 'explicit attached coding session with gateway-first auto routing',
+      },
+      gatewayDecision: createGatewayDecision({
+        operation: 'create',
+        summary: 'Build a simple music app from scratch, make it runnable locally, start the app, fix runtime errors, and report the local URL.',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'high',
+        plannedSteps: [
+          { kind: 'write', summary: 'Create the app files.', required: true },
+          { kind: 'tool_call', summary: 'Start the app locally and capture the local URL.', expectedToolCategories: ['runtime_evidence'], required: true },
+          { kind: 'answer', summary: 'Report the local URL and verification.', required: true },
+        ],
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+      id: 'frontier_deep',
+    });
+    expect(profile?.reason).toContain('frontier preferred for heavier repo/synthesis workload');
   });
 
   it('uses the managed-cloud direct profile for direct-assistant personal work even when the gateway prefers tool_loop', () => {
@@ -1137,7 +1166,7 @@ describe('execution profiles', () => {
     });
   });
 
-  it('keeps delegated coding workspace mutations on the managed-cloud coding profile', () => {
+  it('keeps bounded delegated coding workspace mutations on the managed-cloud coding profile', () => {
     const config = createConfig();
     const profile = selectDelegatedExecutionProfile({
       config,
@@ -1170,6 +1199,41 @@ describe('execution profiles', () => {
       selectionSource: 'delegated_role',
     });
     expect(profile?.reason).toContain('managed cloud coding role binding selected for coding workspace workload');
+  });
+
+  it('prefers frontier for delegated runtime-verified greenfield app creation', () => {
+    const config = createConfig();
+    const profile = selectDelegatedExecutionProfile({
+      config,
+      parentProfile: null,
+      gatewayDecision: createGatewayDecision({
+        route: 'coding_task',
+        operation: 'create',
+        summary: 'Build a simple music app from scratch, make it runnable locally, start the app, fix runtime errors, and report the local URL.',
+        executionClass: 'repo_grounded',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          { kind: 'write', summary: 'Create the app files.', required: true },
+          { kind: 'tool_call', summary: 'Start the app locally and capture the local URL.', expectedToolCategories: ['runtime_evidence'], required: true },
+          { kind: 'answer', summary: 'Report the local URL and verification.', required: true },
+        ],
+      }),
+      orchestration: {
+        role: 'implementer',
+        label: 'Workspace Implementer',
+        lenses: ['coding-workspace'],
+      },
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+      selectionSource: 'delegated_role',
+    });
   });
 
   it('orders alternate frontier providers before degrading an escalated frontier profile', () => {

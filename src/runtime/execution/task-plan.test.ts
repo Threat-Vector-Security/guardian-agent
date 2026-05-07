@@ -375,6 +375,100 @@ describe('task plan receipt accounting', () => {
     expect(computeWorkerRunStatus(plannedTask, stepReceipts, [], 'end_turn')).toBe('completed');
   });
 
+  it('requires runtime evidence for runnable local app creation requests', () => {
+    const plannedTask = buildPlannedTask(undefined, {
+      kind: 'repo_mutation',
+      route: 'coding_task',
+      operation: 'create',
+      summary: 'Build a simple music app from scratch, make it runnable locally, start the app, fix runtime errors, and report the local URL.',
+    });
+
+    expect(plannedTask.steps.map((step) => step.kind)).toEqual([
+      'search',
+      'write',
+      'read',
+      'tool_call',
+      'answer',
+    ]);
+    expect(plannedTask.steps[3]).toMatchObject({
+      stepId: 'step_4',
+      expectedToolCategories: ['runtime_evidence'],
+      required: true,
+      dependsOn: ['step_2', 'step_3'],
+    });
+    expect(plannedTask.steps[4]).toMatchObject({
+      stepId: 'step_5',
+      dependsOn: ['step_2', 'step_3', 'step_4'],
+    });
+
+    const writeReceipt: EvidenceReceipt = {
+      receiptId: 'receipt-write',
+      sourceType: 'tool_call',
+      toolName: 'fs_write',
+      status: 'succeeded',
+      refs: ['package.json', 'src/App.tsx'],
+      summary: 'Created the app files.',
+      startedAt: 1,
+      endedAt: 2,
+    };
+    const readReceipt: EvidenceReceipt = {
+      receiptId: 'receipt-read',
+      sourceType: 'tool_call',
+      toolName: 'fs_read',
+      status: 'succeeded',
+      refs: ['package.json'],
+      summary: 'Read package.json.',
+      startedAt: 3,
+      endedAt: 4,
+    };
+    const runtimeReceipt: EvidenceReceipt = {
+      receiptId: 'receipt-runtime',
+      sourceType: 'tool_call',
+      toolName: 'shell_safe',
+      status: 'succeeded',
+      refs: ['http://localhost:5173/'],
+      summary: 'Started the dev server and verified http://localhost:5173/.',
+      startedAt: 5,
+      endedAt: 6,
+    };
+    const answerReceipt: EvidenceReceipt = {
+      receiptId: 'answer:1',
+      sourceType: 'model_answer',
+      status: 'succeeded',
+      refs: [],
+      summary: 'Built and verified the app at http://localhost:5173/.',
+      startedAt: 7,
+      endedAt: 7,
+    };
+    const matchedStepIds = new Map([
+      ['receipt-write', 'step_2'],
+      ['receipt-read', 'step_3'],
+      ['receipt-runtime', matchPlannedStepForTool({
+        plannedTask,
+        toolName: 'shell_safe',
+        args: { command: 'npm run dev' },
+      })],
+    ].filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+
+    expect(matchedStepIds.get('receipt-runtime')).toBe('step_4');
+
+    const stepReceipts = buildStepReceipts({
+      plannedTask,
+      evidenceReceipts: [writeReceipt, readReceipt, runtimeReceipt, answerReceipt],
+      toolReceiptStepIds: matchedStepIds,
+      finalAnswerReceiptId: answerReceipt.receiptId,
+    });
+
+    expect(stepReceipts).toMatchObject([
+      { stepId: 'step_1', status: 'skipped' },
+      { stepId: 'step_2', status: 'satisfied', evidenceReceiptIds: ['receipt-write'] },
+      { stepId: 'step_3', status: 'satisfied', evidenceReceiptIds: ['receipt-read'] },
+      { stepId: 'step_4', status: 'satisfied', evidenceReceiptIds: ['receipt-runtime'] },
+      { stepId: 'step_5', status: 'satisfied', evidenceReceiptIds: ['answer:1'] },
+    ]);
+    expect(computeWorkerRunStatus(plannedTask, stepReceipts, [], 'end_turn')).toBe('completed');
+  });
+
   it('maps memory evidence categories to memory search receipts', () => {
     const plannedTask: PlannedTask = {
       planId: 'plan:memory_task:search:2',

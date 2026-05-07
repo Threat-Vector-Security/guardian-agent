@@ -80,6 +80,7 @@ const GWS_STATUS_TOOL_CATEGORIES = new Set([
   'gws_status',
   'workspace_auth_status',
 ]);
+const RUNTIME_WORKSPACE_VERIFICATION_PATTERN = /\b(?:runnable\s+locally|run(?:ning)?\s+locally|make\s+it\s+runnable|start(?:ed|ing)?\s+(?:the\s+)?(?:app|application|site|server|dev\s+server)|serve\s+(?:the\s+)?(?:app|application|site)|launch\s+(?:the\s+)?(?:app|application|site)|local\s+url|localhost|127\.0\.0\.1|click\s+around|setup\s+errors?|runtime\s+errors?|fix\s+(?:any\s+)?(?:setup|runtime)\b)/i;
 
 export interface ToolStepMatchInput {
   hintStepId?: string;
@@ -153,8 +154,12 @@ export function buildPlannedTask(
     const answerBackedSteps = ensureRequiredAnswerStep(gatewaySteps, contract);
     const stabilizedSteps = stabilizeEvidenceBeforeMutationSteps(answerBackedSteps, contract);
     const dependencyRelaxedSteps = relaxPostMutationEvidenceSteps(stabilizedSteps, contract);
-    const steps = ensureExactFileReferenceReadStep(
-      applyContractAnswerSummary(dependencyRelaxedSteps, contract.summary, contract.answerConstraints),
+    const steps = ensureRuntimeEvidenceStepForWorkspaceMutation(
+      ensureExactFileReferenceReadStep(
+        applyContractAnswerSummary(dependencyRelaxedSteps, contract.summary, contract.answerConstraints),
+        contract,
+      ),
+      decision,
       contract,
     );
     return {
@@ -226,9 +231,14 @@ export function buildPlannedTask(
       },
     ];
     const repoMutationSteps = repoMutationStepSeeds.map((step) => applyDefaultExpectedToolCategories(step, contract));
+    const steps = ensureRuntimeEvidenceStepForWorkspaceMutation(
+      repoMutationSteps,
+      decision,
+      contract,
+    );
     return {
-      planId: buildPlanId(contract.route, contract.operation, repoMutationSteps.length),
-      steps: repoMutationSteps,
+      planId: buildPlanId(contract.route, contract.operation, steps.length),
+      steps,
       allowAdditionalSteps: true,
     };
   }
@@ -465,6 +475,76 @@ function shouldRequireFinalAnswerStep(kind: DelegatedTaskContractKind): boolean 
 
 function hasRuntimeEvidencePlaceholder(step: PlannedStep): boolean {
   return step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true;
+}
+
+function ensureRuntimeEvidenceStepForWorkspaceMutation(
+  steps: PlannedStep[],
+  decision: IntentGatewayDecision | null | undefined,
+  contract: {
+    kind: DelegatedTaskContractKind;
+    summary?: string;
+  },
+): PlannedStep[] {
+  if (!shouldRequireRuntimeEvidenceForWorkspaceMutation(steps, decision, contract)) {
+    return steps;
+  }
+
+  const answerIndex = steps.findIndex((step) => step.kind === 'answer');
+  const insertIndex = answerIndex >= 0 ? answerIndex : steps.length;
+  const priorRequiredStepIds = steps
+    .slice(0, insertIndex)
+    .filter((step) => step.required !== false)
+    .map((step) => step.stepId);
+  const runtimeStep: PlannedStep = {
+    stepId: '__runtime_evidence__',
+    kind: 'tool_call',
+    summary: 'Start or exercise the app locally and collect runtime evidence before answering.',
+    expectedToolCategories: ['runtime_evidence'],
+    required: true,
+    ...(priorRequiredStepIds.length > 0 ? { dependsOn: priorRequiredStepIds } : {}),
+  };
+  const nextSteps = [...steps];
+  nextSteps.splice(insertIndex, 0, runtimeStep);
+  if (answerIndex >= 0) {
+    const shiftedAnswerIndex = answerIndex + 1;
+    const answerStep = nextSteps[shiftedAnswerIndex];
+    if (answerStep) {
+      nextSteps[shiftedAnswerIndex] = {
+        ...answerStep,
+        dependsOn: [...new Set([...(answerStep.dependsOn ?? []), runtimeStep.stepId])],
+      };
+    }
+  }
+  return renumberPlannedSteps(nextSteps);
+}
+
+function shouldRequireRuntimeEvidenceForWorkspaceMutation(
+  steps: PlannedStep[],
+  decision: IntentGatewayDecision | null | undefined,
+  contract: {
+    kind: DelegatedTaskContractKind;
+    summary?: string;
+  },
+): boolean {
+  if (contract.kind !== 'repo_mutation' && contract.kind !== 'filesystem_mutation') {
+    return false;
+  }
+  if (steps.some(hasRuntimeEvidencePlaceholder)) {
+    return false;
+  }
+  if (!steps.some(isMutationStep) || !steps.some((step) => step.kind === 'answer')) {
+    return false;
+  }
+  const text = [
+    contract.summary,
+    decision?.summary,
+    decision?.resolvedContent,
+    ...(decision?.plannedSteps ?? []).map((step) => step.summary),
+    ...steps.map((step) => step.summary),
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ');
+  return RUNTIME_WORKSPACE_VERIFICATION_PATTERN.test(text);
 }
 
 function buildReadOnlyToolSynthesisFallbackPlan(

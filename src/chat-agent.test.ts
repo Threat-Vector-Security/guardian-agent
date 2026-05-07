@@ -9957,7 +9957,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(workerManager.handleMessage).toHaveBeenCalledOnce();
     expect(workerManager.handleMessage).toHaveBeenCalledWith(expect.objectContaining({
       delegation: expect.objectContaining({
-        runClass: 'long_running',
+        runClass: 'in_invocation',
       }),
     }));
     expect(localChat).not.toHaveBeenCalled();
@@ -10098,7 +10098,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(workerManager.handleMessage).toHaveBeenCalledWith(expect.objectContaining({
       directReasoning: false,
       delegation: expect.objectContaining({
-        runClass: 'long_running',
+        runClass: 'in_invocation',
         orchestration: {
           role: 'implementer',
           label: 'Workspace Implementer',

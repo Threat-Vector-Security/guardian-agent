@@ -52,4 +52,10 @@ describe('assistant-response-shape', () => {
       'We\'ll search for detailed analyses of Apollo 13, fetch key pages, then synthesize a deep-dive report.',
     )).toBe(true);
   });
+
+  it('treats fragmentary implementation lead-ins as ongoing work', () => {
+    expect(looksLikeOngoingWorkResponse(
+      'Now the main HTML file with all CSS and JS inline for simplicity:',
+    )).toBe(true);
+  });
 });
