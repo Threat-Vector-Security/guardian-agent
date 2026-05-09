@@ -4890,7 +4890,37 @@ describe('WorkerManager', () => {
       expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
         toolName: 'fs_write',
         args: expect.objectContaining({
+          content: expect.stringContaining('renderSongList("all-songs"'),
+        }),
+      }));
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'fs_write',
+        args: expect.objectContaining({
+          content: expect.stringContaining('byId("playlist-grid")'),
+        }),
+      }));
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'fs_write',
+        args: expect.objectContaining({
+          content: expect.stringContaining('byId("artist-grid")'),
+        }),
+      }));
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'fs_write',
+        args: expect.objectContaining({
+          content: expect.stringContaining('"player-song-title"'),
+        }),
+      }));
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'fs_write',
+        args: expect.objectContaining({
           content: expect.stringContaining('byId("play-btn")'),
+        }),
+      }));
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'fs_write',
+        args: expect.objectContaining({
+          content: expect.stringContaining('byId("btn-shuffle")'),
         }),
       }));
       expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
