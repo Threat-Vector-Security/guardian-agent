@@ -192,14 +192,6 @@ export function inferDelegatedOrchestrationDescriptor(
     || decision.preferredAnswerPath === 'tool_loop'
     || hasRequiredToolOrMutationPlannedStep(decision);
 
-  if (decision.route === 'personal_assistant_task') {
-    return buildRoleDescriptor(
-      'coordinator',
-      'Executive Assistant',
-      ['personal-assistant', 'second-brain'],
-    );
-  }
-
   if ((decision.route === 'security_task' || isSecurityAnalysis) && securityNeedsEvidence) {
     return buildRoleDescriptor('verifier', 'Security Verifier', ['security']);
   }
@@ -219,6 +211,14 @@ export function inferDelegatedOrchestrationDescriptor(
     return readLike && !structuredPlanRequiresWrite
       ? buildRoleDescriptor('explorer', 'Workspace Explorer', ['coding-workspace'])
       : buildRoleDescriptor('implementer', 'Workspace Implementer', ['coding-workspace']);
+  }
+
+  if (decision.route === 'personal_assistant_task') {
+    return buildRoleDescriptor(
+      'coordinator',
+      'Executive Assistant',
+      ['personal-assistant', 'second-brain'],
+    );
   }
 
   if (decision.route === 'complex_planning_task') {

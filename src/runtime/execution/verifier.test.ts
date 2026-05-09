@@ -291,6 +291,58 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('treats repo-grounded personal-assistant write plans as workspace mutations with runtime proof', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'personal_assistant_task',
+      confidence: 'high',
+      operation: 'update',
+      summary: 'Improve the currently attached MusicApp repo and verify the local app.',
+      resolvedContent: 'Continue in the currently attached MusicApp repo. Fix empty sections, update app.js, start or exercise the app locally, and report the local URL.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Inspect the current SoundWave files.',
+          expectedToolCategories: ['fs_read', 'fs_list'],
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Fix the mismatched app DOM wiring.',
+          expectedToolCategories: ['fs_write'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Report the completed repo change and verification result.',
+          required: true,
+          dependsOn: ['step_2'],
+        },
+      ],
+      entities: {},
+    });
+
+    expect(taskContract.kind).toBe('repo_mutation');
+    expect(taskContract.requiresEvidence).toBe(true);
+    expect(taskContract.allowsAnswerFirst).toBe(false);
+    expect(taskContract.plan.steps.map((step) => step.kind)).toEqual(['read', 'write', 'tool_call', 'answer']);
+    expect(taskContract.plan.steps[2]).toMatchObject({
+      kind: 'tool_call',
+      expectedToolCategories: ['runtime_evidence'],
+      required: true,
+    });
+    expect(taskContract.plan.steps[3]?.dependsOn).toContain('step_3');
+  });
+
   it('rejects completed envelopes whose final answer is only an in-progress promise', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'general_assistant',

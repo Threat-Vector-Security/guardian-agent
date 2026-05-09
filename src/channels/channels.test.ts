@@ -2240,6 +2240,68 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.stop();
   });
 
+  it('swallows duplicate inline approval input while the approved CLI continuation is running', async () => {
+    const decisions: Array<{ approvalId: string; decision: string }> = [];
+    const dispatches: Array<string> = [];
+    let releaseContinuation!: () => void;
+    let continuationStarted!: () => void;
+    const continuationStartedPromise = new Promise<void>((resolve) => {
+      continuationStarted = resolve;
+    });
+    const releaseContinuationPromise = new Promise<void>((resolve) => {
+      releaseContinuation = resolve;
+    });
+    const { input, output, cli } = makeCli({
+      onDispatch: async (_agentId, msg) => {
+        dispatches.push(msg.content);
+        if (msg.content === 'Build the app') {
+          return {
+            content: 'Waiting for approval to run codex.',
+            metadata: approvalPendingActionMetadata([
+              {
+                id: 'approval-codex-dup-1',
+                toolName: 'coding_backend_run',
+                argsPreview: '{"backend":"codex"}',
+              },
+            ]),
+          };
+        }
+        continuationStarted();
+        await releaseContinuationPromise;
+        return { content: 'Finished the approved coding task.' };
+      },
+      onToolsApprovalDecision: async ({ approvalId, decision }) => {
+        decisions.push({ approvalId, decision });
+        return { success: true, message: "Tool 'coding_backend_run' completed." };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/chat agent-1');
+    readOutput(output);
+    await sendCommand(input, 'Build the app');
+    await sendCommand(input, 'y');
+    await continuationStartedPromise;
+
+    input.write('y\n');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const duplicateOutput = readOutput(output);
+    expect(duplicateOutput).not.toContain('Still working on your previous message');
+
+    releaseContinuation();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const text = duplicateOutput + readOutput(output);
+    expect(decisions).toEqual([{ approvalId: 'approval-codex-dup-1', decision: 'approved' }]);
+    expect(dispatches).toEqual([
+      'Build the app',
+      '[User approved the pending tool action(s). Result: ✓ coding_backend_run: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
+    ]);
+    expect(text).toContain('Finished the approved coding task.');
+
+    await cli.stop();
+  });
+
   it('treats "Approved." as an inline CLI approval confirmation', async () => {
     const decisions: Array<{ approvalId: string; decision: string }> = [];
     const dispatches: Array<string> = [];

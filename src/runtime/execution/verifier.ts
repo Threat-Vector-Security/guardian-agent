@@ -1,7 +1,10 @@
 import type { SelectedExecutionProfile } from '../execution-profiles.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import { deriveAnswerConstraints } from '../intent/request-patterns.js';
-import { requiresSecurityEvidence } from '../intent/planned-steps.js';
+import {
+  hasRequiredWritePlannedStep,
+  requiresSecurityEvidence,
+} from '../intent/planned-steps.js';
 import { normalizeUserFacingIntentGatewaySummary } from '../intent/summary.js';
 import {
   buildPlannedTask,
@@ -538,6 +541,17 @@ function buildBaseDelegatedTaskContract(
     };
   }
   if (decision?.requiresRepoGrounding === true || decision?.executionClass === 'repo_grounded') {
+    if (isWorkspaceMutationOperation(decision.operation) || hasRequiredWritePlannedStep(decision)) {
+      return {
+        kind: 'repo_mutation' as const,
+        route: decision.route,
+        operation: decision.operation,
+        requiresEvidence: true,
+        allowsAnswerFirst: false,
+        requireExactFileReferences: false,
+        summary,
+      };
+    }
     const answerConstraints = deriveAnswerConstraints(decision?.resolvedContent);
     return {
       kind: 'repo_inspection' as const,

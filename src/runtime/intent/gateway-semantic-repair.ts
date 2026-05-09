@@ -188,13 +188,21 @@ export function repairStructuredIntentGatewayRoute(
   ) {
     return 'filesystem_task';
   }
-  if (mentionsAutomationControlTerms(sourceContent)) {
+  const explicitSecondBrainRoutine = isExplicitSecondBrainRoutineRequest(sourceContent, operation)
+    || pendingActionSuggestsRoutine(repairContext);
+  if (mentionsAutomationControlTerms(sourceContent) && !explicitSecondBrainRoutine) {
     return route;
   }
-  if (isExplicitSecondBrainRoutineRequest(sourceContent, operation)) {
+  const canRepairToPersonalAssistant = (
+    route === 'unknown'
+    || route === 'general_assistant'
+    || route === 'personal_assistant_task'
+    || (route === 'automation_control' && explicitSecondBrainRoutine)
+  ) && !explicitCodingTaskRequest;
+  if (canRepairToPersonalAssistant && explicitSecondBrainRoutine) {
     return 'personal_assistant_task';
   }
-  if (isExplicitSecondBrainEntityRequest(sourceContent, operation)) {
+  if (canRepairToPersonalAssistant && isExplicitSecondBrainEntityRequest(sourceContent, operation)) {
     return 'personal_assistant_task';
   }
   if (

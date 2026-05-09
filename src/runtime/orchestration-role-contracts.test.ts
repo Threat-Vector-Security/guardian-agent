@@ -179,6 +179,45 @@ describe('orchestration role contracts', () => {
     });
   });
 
+  it('keeps repo-grounded mutation work on the workspace specialist even if upstream route repair is noisy', () => {
+    const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
+      route: 'personal_assistant_task',
+      operation: 'update',
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Inspect the currently attached app workspace.',
+          expectedToolCategories: ['fs_read', 'fs_list'],
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Fix mismatched DOM wiring in the app files.',
+          expectedToolCategories: ['fs_write'],
+          required: true,
+        },
+        {
+          kind: 'tool_call',
+          summary: 'Exercise the app locally before answering.',
+          expectedToolCategories: ['runtime_check'],
+          required: true,
+        },
+      ],
+    }));
+
+    expect(descriptor).toEqual({
+      role: 'implementer',
+      label: 'Workspace Implementer',
+      lenses: ['coding-workspace'],
+    });
+  });
+
   it('keeps direct general-assistant turns out of delegated orchestration even when a code session is attached', () => {
     const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
       route: 'general_assistant',

@@ -187,7 +187,7 @@ function buildTaskWithWorkspaceInstructions(
   ].join('\n');
 }
 
-function extractProgressDetail(output: string, command: string): string | undefined {
+function extractProgressDetail(backendId: string, output: string, command: string): string | undefined {
   const normalizedCommand = command.trim();
   const lines = stripAnsi(output)
     .replace(/\r+/g, '\n')
@@ -199,18 +199,56 @@ function extractProgressDetail(output: string, command: string): string | undefi
     if (!line) continue;
     if (normalizedCommand && line === normalizedCommand) continue;
     if (line.toLowerCase() === 'exit') continue;
-    return truncateText(line, MAX_PROGRESS_DETAIL_CHARS);
+    const detail = summarizeBackendProgressLine(backendId, line);
+    if (detail) return detail;
   }
   return undefined;
 }
 
+function summarizeBackendProgressLine(backendId: string, line: string): string | undefined {
+  if (backendId !== 'codex') {
+    return truncateText(line, MAX_PROGRESS_DETAIL_CHARS);
+  }
+
+  const normalized = line.trim();
+  if (!normalized) return undefined;
+
+  if (/^exec$/i.test(normalized)) {
+    return 'Running a workspace command.';
+  }
+  if (/^codex$/i.test(normalized)) {
+    return 'Preparing the next workspace step.';
+  }
+  if (/^(succeeded|exited)\s+in\s+\d+(?:ms|s)\b/i.test(normalized)) {
+    return 'Workspace command finished.';
+  }
+  if (/^\/bin\/(?:bash|sh)\s+-lc\b/i.test(normalized) || /^powershell(?:\.exe)?\s+-/i.test(normalized)) {
+    return 'Running a workspace command.';
+  }
+  if (/^(?:sed|rg|grep|find|ls|git\s+(?:status|diff|show|log)|Get-Content|Get-ChildItem)\b/i.test(normalized)) {
+    return 'Inspecting workspace files.';
+  }
+  if (/^(?:node|npm|pnpm|yarn|python3?|npx|vite|curl)\b/i.test(normalized)) {
+    return 'Checking the app locally.';
+  }
+  if (/^(?:apply_patch|cat\s+>|tee\s+|printf\s+)/i.test(normalized)) {
+    return 'Updating workspace files.';
+  }
+  if (/^(?:tokens\s+used|thinking|codex\s+exec)\b/i.test(normalized)) {
+    return undefined;
+  }
+
+  return 'Working in the attached workspace.';
+}
+
 function summarizeCompletionDetail(
+  backendId: string,
   status: 'succeeded' | 'failed' | 'timed_out',
   output: string,
   command: string,
   exitCode?: number,
 ): string | undefined {
-  const detail = extractProgressDetail(output, command);
+  const detail = extractProgressDetail(backendId, output, command);
   if (detail) return detail;
   if (status === 'timed_out') {
     return 'The delegated coding assistant did not finish before the timeout.';
@@ -542,7 +580,7 @@ export class CodingBackendService {
     if (entry.lastProgressAt && now - entry.lastProgressAt < OUTPUT_PROGRESS_THROTTLE_MS) {
       return;
     }
-    const detail = extractProgressDetail(entry.outputBuffer, entry.command);
+    const detail = extractProgressDetail(entry.session.backendId, entry.outputBuffer, entry.command);
     if (!detail || detail === entry.lastProgressDetail) return;
     entry.lastProgressDetail = detail;
     entry.lastProgressAt = now;
@@ -702,7 +740,7 @@ export class CodingBackendService {
         log.info({ backendId: backend.id, sessionId, status, exitCode, durationMs }, 'Coding backend completed');
 
         this.emitProgress(entry, status === 'succeeded' ? 'completed' : status, session.completedAt, {
-          detail: summarizeCompletionDetail(status, entry.outputBuffer, entry.command, exitCode),
+          detail: summarizeCompletionDetail(backend.id, status, entry.outputBuffer, entry.command, exitCode),
           ...(typeof exitCode === 'number' ? { exitCode } : {}),
         });
 

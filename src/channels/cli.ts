@@ -143,6 +143,13 @@ interface InlineApprovalState {
   depth: number;
 }
 
+type InlineApprovalLineHandling = 'not-applicable' | 'processed' | 'duplicate';
+
+interface BufferedInlineApprovalAnswer {
+  answer: string;
+  sourceState?: InlineApprovalState;
+}
+
 interface PendingActionApprovalBlocker {
   kind: string;
   approvalSummaries?: PendingApprovalSummary[];
@@ -529,6 +536,8 @@ export class CLIChannel implements ChannelAdapter {
   private historyEnabled: boolean;
   private pendingPromptResolver: ((answer: string) => void) | null = null;
   private pendingInlineApprovalState: InlineApprovalState | null = null;
+  private pendingInlineApprovalDecisionInFlight = false;
+  private pendingInlineApprovalBufferedAnswer: BufferedInlineApprovalAnswer | null = null;
   private pendingPastedMessageLines: string[] = [];
   private pendingPastedMessageTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingPastedMessageLastQueuedAt = 0;
@@ -612,6 +621,14 @@ export class CLIChannel implements ChannelAdapter {
         return;
       }
 
+      const inlineApprovalHandling = await this.handleInlineApprovalLine(trimmed);
+      if (inlineApprovalHandling !== 'not-applicable') {
+        if (inlineApprovalHandling === 'processed') {
+          this.promptIfReady();
+        }
+        return;
+      }
+
       // Handle commands
       if (trimmed.startsWith('/')) {
         if (this.historyEnabled) {
@@ -629,6 +646,9 @@ export class CLIChannel implements ChannelAdapter {
 
       // Send message to agent
       if (this.assistantTurnInFlight) {
+        if (this.bufferInlineApprovalAnswer(trimmed)) {
+          return;
+        }
         this.writeBusyNotice();
         this.promptIfReady();
         return;
@@ -693,14 +713,32 @@ export class CLIChannel implements ChannelAdapter {
       return;
     }
     if (this.assistantTurnInFlight) {
-      this.writeBusyNotice();
-      this.promptIfReady();
+      void this.handleInlineApprovalLine(content)
+        .then((inlineApprovalHandling) => {
+          if (inlineApprovalHandling !== 'not-applicable') {
+            if (inlineApprovalHandling === 'processed') {
+              this.promptIfReady();
+            }
+            return;
+          }
+          if (this.bufferInlineApprovalAnswer(content)) {
+            return;
+          }
+          this.writeBusyNotice();
+          this.promptIfReady();
+        })
+        .catch((err) => {
+          log.warn({ err }, 'Failed to handle queued inline approval input');
+          this.writeBusyNotice();
+          this.promptIfReady();
+        });
       return;
     }
     this.assistantTurnInFlight = true;
     void this.handleUserMessage(content)
       .finally(() => {
         this.assistantTurnInFlight = false;
+        this.pendingInlineApprovalBufferedAnswer = null;
         this.promptIfReady();
       });
   }
@@ -746,11 +784,7 @@ export class CLIChannel implements ChannelAdapter {
   // ─── Message handling ────────────────────────────────────────
 
   private async handleUserMessage(text: string): Promise<void> {
-    if (this.pendingInlineApprovalState && (APPROVAL_CONFIRM_PATTERN.test(text.trim()) || APPROVAL_DENY_PATTERN.test(text.trim()))) {
-      const inlineState = this.pendingInlineApprovalState;
-      this.pendingInlineApprovalState = null;
-      this.pendingPromptResolver = null;
-      await this.processApprovalDecision(inlineState.approvals, text, inlineState.agentId, inlineState.depth);
+    if ((await this.handleInlineApprovalLine(text.trim())) !== 'not-applicable') {
       return;
     }
 
@@ -852,10 +886,88 @@ export class CLIChannel implements ChannelAdapter {
     this.write('\n');
 
     // Prompt for decision
-    this.pendingInlineApprovalState = { approvals, agentId, depth };
-    const answer = await this.question(`${this.yellow('Approve')} (y) / ${this.red('Deny')} (n): `);
-    this.pendingInlineApprovalState = null;
-    await this.processApprovalDecision(approvals, answer, agentId, depth);
+    const inlineState: InlineApprovalState = { approvals, agentId, depth };
+    this.pendingInlineApprovalState = inlineState;
+    const approvalPrompt = `${this.yellow('Approve')} (y) / ${this.red('Deny')} (n): `;
+    const bufferedAnswer = this.pendingInlineApprovalBufferedAnswer;
+    const queuedAnswer = bufferedAnswer ? null : this.consumeQueuedInlineApprovalAnswer();
+    const answer = bufferedAnswer
+      ? bufferedAnswer.answer
+      : queuedAnswer ?? await this.question(approvalPrompt);
+    if (bufferedAnswer || queuedAnswer) {
+      this.pendingInlineApprovalBufferedAnswer = null;
+      this.write(approvalPrompt);
+    }
+    await this.processInlineApprovalDecision(inlineState, answer);
+  }
+
+  private classifyApprovalDecision(answer: string): 'approved' | 'denied' | null {
+    const trimmedAnswer = answer.trim();
+    return APPROVAL_CONFIRM_PATTERN.test(trimmedAnswer)
+      ? 'approved'
+      : APPROVAL_DENY_PATTERN.test(trimmedAnswer)
+        ? 'denied'
+        : null;
+  }
+
+  private async handleInlineApprovalLine(text: string): Promise<InlineApprovalLineHandling> {
+    const decision = this.classifyApprovalDecision(text);
+    if (!this.pendingInlineApprovalState || !decision) {
+      return 'not-applicable';
+    }
+
+    if (this.pendingInlineApprovalDecisionInFlight) {
+      this.bufferInlineApprovalAnswer(text, this.pendingInlineApprovalState);
+      return 'duplicate';
+    }
+
+    const inlineState = this.pendingInlineApprovalState;
+    this.pendingPromptResolver = null;
+    await this.processInlineApprovalDecision(inlineState, text);
+    return 'processed';
+  }
+
+  private async processInlineApprovalDecision(
+    inlineState: InlineApprovalState,
+    answer: string,
+  ): Promise<void> {
+    this.pendingInlineApprovalDecisionInFlight = true;
+    try {
+      await this.processApprovalDecision(inlineState.approvals, answer, inlineState.agentId, inlineState.depth);
+    } finally {
+      if (this.pendingInlineApprovalBufferedAnswer?.sourceState === inlineState) {
+        this.pendingInlineApprovalBufferedAnswer = null;
+      }
+      if (this.pendingInlineApprovalState === inlineState) {
+        this.pendingInlineApprovalState = null;
+      }
+      this.pendingInlineApprovalDecisionInFlight = false;
+    }
+  }
+
+  private bufferInlineApprovalAnswer(text: string, sourceState?: InlineApprovalState | null): boolean {
+    if (!this.classifyApprovalDecision(text)) {
+      return false;
+    }
+    this.pendingInlineApprovalBufferedAnswer = {
+      answer: text,
+      ...(sourceState ? { sourceState } : {}),
+    };
+    return true;
+  }
+
+  private consumeQueuedInlineApprovalAnswer(): string | null {
+    if (this.pendingPastedMessageLines.length === 0) {
+      return null;
+    }
+    const content = this.pendingPastedMessageLines.join('\n').trim();
+    if (!content || !this.classifyApprovalDecision(content)) {
+      return null;
+    }
+    this.pendingPastedMessageLines = [];
+    this.pendingPastedMessageLastQueuedAt = 0;
+    this.clearPendingPastedMessageTimer();
+    return content;
   }
 
   private async processApprovalDecision(
@@ -864,12 +976,7 @@ export class CLIChannel implements ChannelAdapter {
     agentId?: string,
     depth = 0,
   ): Promise<void> {
-    const trimmedAnswer = answer.trim();
-    const decision = APPROVAL_CONFIRM_PATTERN.test(trimmedAnswer)
-      ? 'approved'
-      : APPROVAL_DENY_PATTERN.test(trimmedAnswer)
-        ? 'denied'
-        : null;
+    const decision = this.classifyApprovalDecision(answer);
     if (!decision) {
       await this.handleApprovalClarificationTurn(approvals, answer, agentId, depth);
       return;

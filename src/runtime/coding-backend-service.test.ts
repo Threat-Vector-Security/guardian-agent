@@ -195,6 +195,54 @@ describe('CodingBackendService', () => {
     expect(result.output).not.toContain('GuardianAgent is a security-first AI assistant platform.');
   });
 
+  it('summarizes Codex terminal transcript progress without exposing raw execution logs', async () => {
+    const codexService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'codex',
+            name: 'OpenAI Codex CLI',
+            enabled: true,
+            command: 'codex',
+            args: ['exec', '--skip-git-repo-check', '--sandbox', 'workspace-write', '{{assistant_response_args}}', '{{task}}'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'codex',
+      },
+      terminalControl: mock,
+    });
+    const progressDetails: string[] = [];
+    codexService.subscribeProgress((event) => {
+      if (event.kind === 'progress' || event.kind === 'completed') {
+        progressDetails.push(event.detail ?? '');
+      }
+    });
+
+    const runPromise = codexService.run({ task: 'Improve the app', codeSessionId: 's', workspaceRoot: '/w' });
+    await new Promise((r) => setTimeout(r, 10));
+    const terminalId = mock.openedTerminals[0].terminalId;
+    mock.simulateOutput(terminalId,
+      '/mnt/s/Development/MusicApp\n'
+      + 'exec\n'
+      + '/bin/bash -lc "sed -n \'1,260p\' index.html" in /mnt/s/Development/MusicApp\n'
+      + 'succeeded in 114ms:\n'
+      + '<!DOCTYPE html>\n',
+    );
+    mock.simulateExit(terminalId, 0);
+    await runPromise;
+
+    expect(progressDetails.length).toBeGreaterThan(0);
+    const joined = progressDetails.join('\n');
+    expect(joined).toMatch(/Working in the attached workspace|Running a workspace command|Workspace command finished/);
+    expect(joined).not.toContain('/bin/bash -lc');
+    expect(joined).not.toContain('sed -n');
+    expect(joined).not.toContain('<!DOCTYPE html>');
+    expect(joined).not.toContain('/mnt/s/Development/MusicApp');
+  });
+
   it('falls back to parsing the Codex marker block when the capture file is empty', async () => {
     const codexService = new CodingBackendService({
       config: {

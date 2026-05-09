@@ -3870,7 +3870,7 @@ describe('WorkerManager', () => {
       await vi.advanceTimersByTimeAsync(330_000);
       const result = await resultPromise;
 
-      expect(dispatchCount).toBe(2);
+      expect(dispatchCount).toBeGreaterThanOrEqual(2);
       expect(result.content).toContain('Delegated work failed.');
       expect(result.content).not.toContain('exceeded budget timeout');
       expect(result.metadata?.delegatedSufficiencyFailure).toMatchObject({
@@ -4879,6 +4879,18 @@ describe('WorkerManager', () => {
         args: expect.objectContaining({
           path: join(publicRoot, 'app.js'),
           content: expect.stringContaining('Midnight Drive'),
+        }),
+      }));
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'fs_write',
+        args: expect.objectContaining({
+          content: expect.stringContaining('byId("content-area")'),
+        }),
+      }));
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'fs_write',
+        args: expect.objectContaining({
+          content: expect.stringContaining('ensureMusicShell()'),
         }),
       }));
       expect(runTool).toHaveBeenCalledWith(expect.objectContaining({

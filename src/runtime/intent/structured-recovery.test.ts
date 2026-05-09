@@ -1740,6 +1740,64 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.provenance?.requiresRepoGrounding).toBe('derived.workload');
   });
 
+  it('keeps explicit attached workspace app work on coding_task even when app copy mentions local URLs and libraries', () => {
+    const sourceContent = 'Continue in the currently attached MusicApp repo. Inspect the existing SoundWave app first, then improve it into a more usable phase-two music app without replacing the whole project. Fix any mismatched DOM wiring or empty sections you find. Add populated Recently Played, All Songs, Playlists, Artists, playlist detail, artist detail, search filtering, and working playback controls. Start or exercise the app locally and finish by telling me the local URL and exactly what you verified.';
+    const decision = normalizeIntentGatewayDecision({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'update',
+      summary: 'Run the explicit coding workspace request against the attached code session.',
+      turnRelation: 'follow_up',
+      resolution: 'ready',
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
+      expectedContextPressure: 'medium',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Inspect the relevant workspace context before changing files.',
+          expectedToolCategories: ['read', 'repo_inspect'],
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Apply the requested workspace change.',
+          expectedToolCategories: ['write', 'repo_mutation'],
+          required: true,
+        },
+        {
+          kind: 'read',
+          summary: 'Read back the changed artifact or collect equivalent verification evidence.',
+          expectedToolCategories: ['read', 'repo_inspect'],
+          required: true,
+          dependsOn: ['step_2'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Report the completed change and verification evidence.',
+          required: true,
+          dependsOn: ['step_3'],
+        },
+      ],
+    }, {
+      sourceContent,
+      continuity: {
+        activeExecutionRefs: ['execution:test', 'code_session:music-app'],
+      },
+    }, {
+      classifierSource: 'derived.workload',
+    });
+
+    expect(decision.route).toBe('coding_task');
+    expect(decision.executionClass).toBe('repo_grounded');
+    expect(decision.requiresRepoGrounding).toBe(true);
+    expect(decision.entities.personalItemType).toBeUndefined();
+  });
+
   it('preserves connector status domains when synthesizing route-only fallback plans', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'complex_planning_task',
