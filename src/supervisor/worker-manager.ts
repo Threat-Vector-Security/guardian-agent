@@ -2472,7 +2472,12 @@ export class WorkerManager {
           ? { verifiedResult, insufficiency, jobSnapshots }
           : null
       );
+      const workerManager = this;
       let answerSynthesisFallback = buildAnswerSynthesisFallback();
+      if (!answerSynthesisFallback) {
+        await tryStaticAppCompletionRecovery();
+        await tryRuntimeEvidenceRecovery();
+      }
       if (insufficiency && !answerSynthesisFallback) {
         const retryCodeContext = hasMissingRuntimeEvidence(insufficiency)
           ? resolveCodeContextFromMessage(effectiveInput)
@@ -2605,17 +2610,17 @@ export class WorkerManager {
           answerSynthesisFallback = buildAnswerSynthesisFallback();
         }
       }
-      const tryRuntimeEvidenceRecovery = async (): Promise<boolean> => {
+      async function tryRuntimeEvidenceRecovery(): Promise<boolean> {
         if (!(insufficiency && hasMissingRuntimeEvidence(insufficiency))) {
           return false;
         }
         const codeContext = resolveCodeContextFromMessage(effectiveInput);
         const runtimeRecoveryTool = resolveRuntimeEvidenceRecoveryTool(codeContext);
-        const runTool = (this.tools as { runTool?: unknown }).runTool;
+        const runTool = (workerManager.tools as { runTool?: unknown }).runTool;
         if (!runtimeRecoveryTool || typeof runTool !== 'function') {
           return false;
         }
-        this.recordDelegatedWorkerTrace('delegated_worker_retrying', effectiveInput, delegatedTarget, {
+        workerManager.recordDelegatedWorkerTrace('delegated_worker_retrying', effectiveInput, delegatedTarget, {
           requestId,
           taskRunId: delegatedTaskRunId,
           lifecycle: 'running',
@@ -2623,7 +2628,7 @@ export class WorkerManager {
           taskContract: effectiveTaskContract,
           reason: runtimeRecoveryTool.detail,
         });
-        this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
+        workerManager.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
           id: `delegated-worker:${delegatedJob.id}:runtime-evidence`,
           kind: 'running',
           requestId,
@@ -2632,7 +2637,7 @@ export class WorkerManager {
           detail: runtimeRecoveryTool.detail,
         });
         try {
-          await this.tools.runTool({
+          await workerManager.tools.runTool({
             toolName: runtimeRecoveryTool.toolName,
             args: runtimeRecoveryTool.args,
             origin: 'assistant',
@@ -2659,7 +2664,7 @@ export class WorkerManager {
           jobSnapshots: runtimeRecoveryDrain.snapshots,
           attemptLabel: 'runtime_evidence_recovery',
           drainPendingJobs: drainDelegatedJobs,
-          trace: (event) => this.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
+          trace: (event) => workerManager.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
         });
         jobSnapshots = verificationCycle.jobSnapshots;
         verifiedResult = verificationCycle.verifiedResult;
@@ -2675,7 +2680,7 @@ export class WorkerManager {
           result = withDelegatedRuntimeRecoveryCompletionContent(
             result,
             completionContent,
-            this.observability.now?.() ?? Date.now(),
+            workerManager.observability.now?.() ?? Date.now(),
           );
           verificationCycle = await runDelegatedWorkerVerificationCycle({
             requestId,
@@ -2687,7 +2692,7 @@ export class WorkerManager {
             jobSnapshots,
             attemptLabel: 'runtime_evidence_completion_answer_recovery',
             drainPendingJobs: drainDelegatedJobs,
-            trace: (event) => this.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
+            trace: (event) => workerManager.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
           });
           jobSnapshots = verificationCycle.jobSnapshots;
           verifiedResult = verificationCycle.verifiedResult;
@@ -2696,18 +2701,18 @@ export class WorkerManager {
           answerSynthesisFallback = buildAnswerSynthesisFallback();
         }
         return true;
-      };
-      const tryStaticAppCompletionRecovery = async (): Promise<boolean> => {
+      }
+      async function tryStaticAppCompletionRecovery(): Promise<boolean> {
         if (!(insufficiency && hasMissingRuntimeEvidence(insufficiency))) {
           return false;
         }
         const codeContext = resolveCodeContextFromMessage(effectiveInput);
         const staticRecovery = resolveStaticAppCompletionRecovery(codeContext);
-        const runTool = (this.tools as { runTool?: unknown }).runTool;
+        const runTool = (workerManager.tools as { runTool?: unknown }).runTool;
         if (!staticRecovery || typeof runTool !== 'function') {
           return false;
         }
-        this.recordDelegatedWorkerTrace('delegated_worker_retrying', effectiveInput, delegatedTarget, {
+        workerManager.recordDelegatedWorkerTrace('delegated_worker_retrying', effectiveInput, delegatedTarget, {
           requestId,
           taskRunId: delegatedTaskRunId,
           lifecycle: 'running',
@@ -2715,7 +2720,7 @@ export class WorkerManager {
           taskContract: effectiveTaskContract,
           reason: staticRecovery.detail,
         });
-        this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
+        workerManager.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
           id: `delegated-worker:${delegatedJob.id}:static-app-asset-completion`,
           kind: 'running',
           requestId,
@@ -2724,7 +2729,7 @@ export class WorkerManager {
           detail: staticRecovery.detail,
         });
         for (const asset of staticRecovery.assets) {
-          await this.tools.runTool({
+          await workerManager.tools.runTool({
             toolName: 'fs_write',
             args: {
               path: asset.absolutePath,
@@ -2752,7 +2757,7 @@ export class WorkerManager {
           jobSnapshots: staticCompletionDrain.snapshots,
           attemptLabel: 'static_app_asset_completion_recovery',
           drainPendingJobs: drainDelegatedJobs,
-          trace: (event) => this.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
+          trace: (event) => workerManager.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
         });
         jobSnapshots = verificationCycle.jobSnapshots;
         verifiedResult = verificationCycle.verifiedResult;
@@ -2761,9 +2766,9 @@ export class WorkerManager {
         answerSynthesisFallback = buildAnswerSynthesisFallback();
         await tryRuntimeEvidenceRecovery();
         return true;
-      };
-      await tryRuntimeEvidenceRecovery();
+      }
       await tryStaticAppCompletionRecovery();
+      await tryRuntimeEvidenceRecovery();
       if (insufficiency && hasMissingRuntimeEvidence(insufficiency) && !answerSynthesisFallback) {
         const codeContext = resolveCodeContextFromMessage(effectiveInput);
         const staticCompletionSection = codeContext

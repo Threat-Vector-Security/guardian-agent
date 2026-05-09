@@ -4463,7 +4463,7 @@ describe('WorkerManager', () => {
     }
   });
 
-  it('uses supervisor static-app completion when delegated retries only reread missing assets', async () => {
+  it('uses supervisor static-app completion before delegated retry when missing assets are deterministic', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
     const workspaceRoot = resolve(mkdtempSync(join(tmpdir(), 'ga-static-second-retry-')));
@@ -4873,7 +4873,7 @@ describe('WorkerManager', () => {
         },
       });
 
-      expect(dispatchCount).toBe(2);
+      expect(dispatchCount).toBe(1);
       expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
         toolName: 'fs_write',
         args: expect.objectContaining({
