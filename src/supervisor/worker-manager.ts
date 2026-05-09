@@ -230,6 +230,70 @@ function hasMissingRuntimeEvidence(insufficiency: DelegatedResultSufficiencyFail
     }) === true;
 }
 
+function collectRuntimeProofStepIds(taskContract: DelegatedResultEnvelope['taskContract']): string[] {
+  const runtimeStepIds = taskContract.plan.steps
+    .filter((step) => step.required !== false)
+    .filter((step) => step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true)
+    .map((step) => step.stepId);
+  const answerStepIds = taskContract.plan.steps
+    .filter((step) => step.required !== false && step.kind === 'answer')
+    .map((step) => step.stepId);
+  return [...new Set([...runtimeStepIds, ...answerStepIds])];
+}
+
+function buildStaticAppRuntimeProofFailure(
+  taskContract: DelegatedResultEnvelope['taskContract'],
+  envelope: DelegatedResultEnvelope,
+  reason: string,
+): DelegatedResultSufficiencyFailure {
+  const unsatisfiedStepIds = collectRuntimeProofStepIds(taskContract);
+  const decision: VerificationDecision = {
+    decision: 'contradicted',
+    reasons: [reason],
+    retryable: true,
+    requiredNextAction: 'Fix the static app runtime or semantic wiring issue, then rerun the local app proof before answering.',
+    missingEvidenceKinds: ['runtime_evidence'],
+    ...(unsatisfiedStepIds.length > 0 ? { unsatisfiedStepIds } : {}),
+  };
+  return buildDelegatedRetryableFailure(decision, envelope) ?? {
+    decision,
+    failureSummary: reason,
+    retryReason: reason,
+    unsatisfiedSteps: taskContract.plan.steps
+      .filter((step) => unsatisfiedStepIds.includes(step.stepId))
+      .map((step) => ({
+        stepId: step.stepId,
+        kind: step.kind,
+        summary: step.summary,
+        expectedToolCategories: step.expectedToolCategories,
+        status: 'failed' as const,
+        reason,
+      })),
+    satisfiedSteps: [],
+  };
+}
+
+function describeToolRunFailure(value: unknown): string {
+  if (value instanceof Error) {
+    return value.message;
+  }
+  if (!value || typeof value !== 'object') {
+    return String(value || 'Static app runtime proof failed.');
+  }
+  const record = value as Record<string, unknown>;
+  const direct = [record.message, record.error]
+    .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+  const output = record.output && typeof record.output === 'object'
+    ? record.output as Record<string, unknown>
+    : null;
+  const nested = output
+    ? [output.stderr, output.stdout, output.message]
+        .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : [];
+  const text = [...direct, ...nested].join(' ').trim();
+  return text || 'Static app runtime proof failed.';
+}
+
 type RuntimeEvidenceRecoveryTool = {
   toolName: 'code_build' | 'code_test';
   args: Record<string, unknown>;
@@ -736,6 +800,14 @@ function isStaticAppRuntimeCheckSnapshot(snapshot: DelegatedJobSnapshot): boolea
     || (snapshot.resultPreview?.includes('.guardian-runtime-check-') ?? false);
 }
 
+function hasSuccessfulStaticAppRuntimeCheckEvidence(jobSnapshots: DelegatedJobSnapshot[]): boolean {
+  return jobSnapshots.some((snapshot) => (
+    snapshot.toolName === 'code_build'
+    && isSuccessfulDelegatedJobSnapshot(snapshot)
+    && isStaticAppRuntimeCheckSnapshot(snapshot)
+  ));
+}
+
 function isRuntimeEvidenceToolName(toolName: string): boolean {
   return toolName === 'code_build'
     || toolName === 'code_test'
@@ -849,6 +921,35 @@ const STATIC_APP_RUNTIME_CHECK_SCRIPT = [
   '  }',
   '}',
   '',
+  'function assertIfPresent(label, ids, jsSource, candidates, issues) {',
+  '  const present = candidates.filter((id) => ids.has(id));',
+  '  if (present.length && !present.some((id) => scriptTargetsId(jsSource, id))) {',
+  '    issues.push(`${label} exists in index.html but linked JavaScript does not target ${present.join(\', \')}`);',
+  '  }',
+  '}',
+  '',
+  'function assertAdvancedMusicBehavior(ids, jsSource, issues) {',
+  '  const advancedShell = ids.has(\'home-search-input\')',
+  '    || ids.has(\'home-search-results\')',
+  '    || ids.has(\'search-view\')',
+  '    || ids.has(\'songs-view\');',
+  '  if (!advancedShell) return;',
+  '  assertIfPresent(\'home search input\', ids, jsSource, [\'home-search-input\'], issues);',
+  '  assertIfPresent(\'home search results\', ids, jsSource, [\'home-search-results\'], issues);',
+  '  assertIfPresent(\'search results\', ids, jsSource, [\'search-results\'], issues);',
+  '  const hasRecentlyPlayedState = /\\brecentlyPlayed\\b|\\brecentHistory\\b|\\bplayHistory\\b/u.test(jsSource);',
+  '  const rendersStaticRecentlyPlayed = /recently-played[\\s\\S]{0,80}songs\\.slice\\(\\s*0\\s*,\\s*4\\s*\\)/u.test(jsSource);',
+  '  if (ids.has(\'recently-played\') && !hasRecentlyPlayedState && rendersStaticRecentlyPlayed) {',
+  '    issues.push(\'recently played is rendered from a fixed song slice instead of playback state\');',
+  '  }',
+  '  const normalizedJs = jsSource.replace(/\\s+/gu, \' \');',
+  '  const usesWordOnlyPlayPause = normalizedJs.includes(\'textContent = isPlaying ? "Pause" : "Play"\')',
+  '    || normalizedJs.includes("textContent = isPlaying ? \'Pause\' : \'Play\'");',
+  '  if (ids.has(\'btn-play\') && usesWordOnlyPlayPause) {',
+  '    issues.push(\'play control updates to word-only Play/Pause text instead of a polished visible player state\');',
+  '  }',
+  '}',
+  '',
   'function runStaticSemanticChecks(htmlSource, jsSource) {',
   '  const lower = htmlSource.toLowerCase();',
   '  const musicSignals = [\'song\', \'playlist\', \'artist\', \'player\', \'music\'].filter((signal) => lower.includes(signal)).length;',
@@ -864,6 +965,9 @@ const STATIC_APP_RUNTIME_CHECK_SCRIPT = [
   '  assertMusicTarget(\'next control\', ids, jsSource, [\'btn-next\', \'next-btn\'], issues);',
   '  assertMusicTarget(\'previous control\', ids, jsSource, [\'btn-prev\', \'prev-btn\'], issues);',
   '  assertMusicTarget(\'progress control\', ids, jsSource, [\'progress-bar\'], issues);',
+  '  assertIfPresent(\'playlist detail view\', ids, jsSource, [\'playlist-detail-view\', \'playlist-detail\'], issues);',
+  '  assertIfPresent(\'artist detail view\', ids, jsSource, [\'artist-detail-view\', \'artist-detail\'], issues);',
+  '  assertAdvancedMusicBehavior(ids, jsSource, issues);',
   '  if (issues.length) throw new Error(`Static app semantic check failed: ${issues.join(\'; \')}`);',
   '  return \'Music app semantic smoke passed: linked JavaScript targets visible song, playlist, artist, player, and playback-control elements.\';',
   '}',
@@ -2477,6 +2581,7 @@ export class WorkerManager {
       if (!answerSynthesisFallback) {
         await tryStaticAppCompletionRecovery();
         await tryRuntimeEvidenceRecovery();
+        await tryStaticAppRuntimeProof();
       }
       if (insufficiency && !answerSynthesisFallback) {
         const retryCodeContext = hasMissingRuntimeEvidence(insufficiency)
@@ -2608,7 +2713,122 @@ export class WorkerManager {
           insufficiency = verificationCycle.insufficiency;
           effectiveTaskContract = verificationCycle.taskContract;
           answerSynthesisFallback = buildAnswerSynthesisFallback();
+          if (!answerSynthesisFallback) {
+            await tryStaticAppRuntimeProof();
+          }
         }
+      }
+      async function tryStaticAppRuntimeProof(): Promise<boolean> {
+        if (insufficiency || answerSynthesisFallback || hasSuccessfulStaticAppRuntimeCheckEvidence(jobSnapshots)) {
+          return false;
+        }
+        const codeContext = resolveCodeContextFromMessage(effectiveInput);
+        const workspaceRoot = codeContext?.workspaceRoot ? resolve(codeContext.workspaceRoot) : '';
+        if (!workspaceRoot) {
+          return false;
+        }
+        const runtimeRecoveryTool = resolveStaticAppRuntimeRecoveryTool(workspaceRoot);
+        const runTool = (workerManager.tools as { runTool?: unknown }).runTool;
+        if (!runtimeRecoveryTool || typeof runTool !== 'function') {
+          return false;
+        }
+        workerManager.recordDelegatedWorkerTrace('delegated_worker_retrying', effectiveInput, delegatedTarget, {
+          requestId,
+          taskRunId: delegatedTaskRunId,
+          lifecycle: 'running',
+          ...(worker?.id ? { workerId: worker.id } : {}),
+          taskContract: effectiveTaskContract,
+          reason: runtimeRecoveryTool.detail,
+        });
+        workerManager.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
+          id: `delegated-worker:${delegatedJob.id}:static-app-runtime-proof`,
+          kind: 'running',
+          requestId,
+          taskRunId: delegatedTaskRunId,
+          ...(worker?.id ? { workerId: worker.id } : {}),
+          detail: runtimeRecoveryTool.detail,
+        });
+        let proofFailure: string | null = null;
+        try {
+          const toolResult = await workerManager.tools.runTool({
+            toolName: runtimeRecoveryTool.toolName,
+            args: runtimeRecoveryTool.args,
+            origin: 'assistant',
+            agentId: effectiveInput.agentId,
+            userId: effectiveInput.userId,
+            surfaceId: effectiveInput.message.surfaceId,
+            principalId: effectiveInput.message.principalId ?? effectiveInput.userId,
+            principalRole: (effectiveInput.message.principalRole as ToolExecutionRequest['principalRole']) ?? 'owner',
+            channel: effectiveInput.message.channel,
+            requestId,
+            codeContext,
+          });
+          if (!toolResult.success) {
+            proofFailure = describeToolRunFailure(toolResult);
+          }
+        } catch (error) {
+          proofFailure = describeToolRunFailure(error);
+        } finally {
+          runtimeRecoveryTool.cleanup?.();
+        }
+        const runtimeProofDrain = await drainDelegatedJobs();
+        jobSnapshots = runtimeProofDrain.snapshots;
+        if (proofFailure) {
+          insufficiency = buildStaticAppRuntimeProofFailure(
+            effectiveTaskContract,
+            verifiedResult.envelope,
+            proofFailure,
+          );
+          answerSynthesisFallback = buildAnswerSynthesisFallback();
+          return true;
+        }
+        verificationCycle = await runDelegatedWorkerVerificationCycle({
+          requestId,
+          taskRunId: delegatedTaskRunId,
+          metadata: result.metadata,
+          intentDecision: effectiveIntentDecision ?? undefined,
+          executionProfile: effectiveExecutionProfile,
+          taskContract: effectiveTaskContract,
+          jobSnapshots,
+          attemptLabel: 'static_app_runtime_proof',
+          drainPendingJobs: drainDelegatedJobs,
+          trace: (event) => workerManager.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
+        });
+        jobSnapshots = verificationCycle.jobSnapshots;
+        verifiedResult = verificationCycle.verifiedResult;
+        insufficiency = verificationCycle.insufficiency;
+        effectiveTaskContract = verificationCycle.taskContract;
+        answerSynthesisFallback = buildAnswerSynthesisFallback();
+        const completionContent = buildRuntimeRecoveryCompletionContent(
+          result.content,
+          codeContext,
+          jobSnapshots,
+        );
+        if (completionContent && !insufficiency) {
+          result = withDelegatedRuntimeRecoveryCompletionContent(
+            result,
+            completionContent,
+            workerManager.observability.now?.() ?? Date.now(),
+          );
+          verificationCycle = await runDelegatedWorkerVerificationCycle({
+            requestId,
+            taskRunId: delegatedTaskRunId,
+            metadata: result.metadata,
+            intentDecision: effectiveIntentDecision ?? undefined,
+            executionProfile: effectiveExecutionProfile,
+            taskContract: effectiveTaskContract,
+            jobSnapshots,
+            attemptLabel: 'static_app_runtime_proof_completion_answer',
+            drainPendingJobs: drainDelegatedJobs,
+            trace: (event) => workerManager.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
+          });
+          jobSnapshots = verificationCycle.jobSnapshots;
+          verifiedResult = verificationCycle.verifiedResult;
+          insufficiency = verificationCycle.insufficiency;
+          effectiveTaskContract = verificationCycle.taskContract;
+          answerSynthesisFallback = buildAnswerSynthesisFallback();
+        }
+        return true;
       }
       async function tryRuntimeEvidenceRecovery(): Promise<boolean> {
         if (!(insufficiency && hasMissingRuntimeEvidence(insufficiency))) {
@@ -2769,6 +2989,7 @@ export class WorkerManager {
       }
       await tryStaticAppCompletionRecovery();
       await tryRuntimeEvidenceRecovery();
+      await tryStaticAppRuntimeProof();
       if (insufficiency && hasMissingRuntimeEvidence(insufficiency) && !answerSynthesisFallback) {
         const codeContext = resolveCodeContextFromMessage(effectiveInput);
         const staticCompletionSection = codeContext
@@ -2902,6 +3123,7 @@ export class WorkerManager {
         }
       }
       await tryStaticAppCompletionRecovery();
+      await tryStaticAppRuntimeProof();
       if (insufficiency && answerSynthesisFallback) {
         const synthesisWorker = await ensureReadyDelegatedWorker();
         const synthesisDispatchBase = {

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -4949,6 +4950,397 @@ describe('WorkerManager', () => {
       expect(readDelegatedResultEnvelope(result.metadata)?.verification).toMatchObject({
         decision: 'satisfied',
       });
+    } finally {
+      manager?.shutdown();
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('requires supervisor static-app semantic proof even when a worker reports generic runtime evidence', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const workspaceRoot = resolve(mkdtempSync(join(tmpdir(), 'ga-static-semantic-proof-')));
+    const requestId = 'm-static-semantic-proof';
+    let manager: InstanceType<typeof WorkerManager> | undefined;
+    let dispatchCount = 0;
+    let runtimeProofAttempts = 0;
+    try {
+      const decision: IntentGatewayDecision = {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'update',
+        summary: 'Improve the existing static music app and verify visible playback behavior.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          { kind: 'read', summary: 'Inspect the current static app files.', expectedToolCategories: ['repo_evidence'], required: true },
+          { kind: 'write', summary: 'Improve the app behavior in place.', expectedToolCategories: ['repo_mutation'], required: true, dependsOn: ['step_1'] },
+          { kind: 'tool_call', summary: 'Exercise the app locally and verify visible behavior.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_2'] },
+          { kind: 'answer', summary: 'Report the local URL and verification result.', required: true, dependsOn: ['step_3'] },
+        ],
+        entities: {},
+      };
+      const taskContract = buildDelegatedTaskContract(decision);
+      const buildResponse = (
+        content: string,
+        receipts: DelegatedResultEnvelope['evidenceReceipts'],
+      ) => {
+        const answerReceipt = {
+          receiptId: `receipt-answer-${dispatchCount}`,
+          sourceType: 'model_answer' as const,
+          status: 'succeeded' as const,
+          refs: [] as string[],
+          summary: content,
+          startedAt: 100 + dispatchCount,
+          endedAt: 100 + dispatchCount,
+        };
+        const toolReceiptStepIds = new Map<string, string>();
+        for (const receipt of receipts) {
+          if (receipt.receiptId.includes('read')) toolReceiptStepIds.set(receipt.receiptId, 'step_1');
+          if (receipt.receiptId.includes('write')) toolReceiptStepIds.set(receipt.receiptId, 'step_2');
+          if (receipt.receiptId.includes('runtime')) toolReceiptStepIds.set(receipt.receiptId, 'step_3');
+        }
+        toolReceiptStepIds.set(answerReceipt.receiptId, 'step_4');
+        const evidenceReceipts = [...receipts, answerReceipt];
+        const stepReceipts = buildStepReceipts({
+          plannedTask: taskContract.plan,
+          evidenceReceipts,
+          toolReceiptStepIds,
+          finalAnswerReceiptId: answerReceipt.receiptId,
+          interruptions: [],
+        });
+        return {
+          content,
+          metadata: buildDelegatedExecutionMetadata({
+            taskContract,
+            runStatus: computeWorkerRunStatus(taskContract.plan, stepReceipts, [], 'end_turn'),
+            stopReason: 'end_turn',
+            stepReceipts,
+            operatorSummary: content,
+            finalUserAnswer: content,
+            claims: [],
+            evidenceReceipts,
+            interruptions: [],
+            artifacts: [],
+            events: [],
+          }),
+        };
+      };
+
+      workerMessageHandler = () => {
+        dispatchCount += 1;
+        if (dispatchCount === 1) {
+          writeFileSync(join(workspaceRoot, 'index.html'), [
+            '<!doctype html>',
+            '<html>',
+            '<head><link rel="stylesheet" href="styles.css"></head>',
+            '<body>',
+            '<main id="app">',
+            '<section id="home-view"><div id="recently-played"></div><input id="home-search-input"><div id="home-search-results"></div></section>',
+            '<section id="browse-view"><input id="search-input"><div id="song-list"></div></section>',
+            '<section id="playlists-view"><div id="playlist-list"></div></section>',
+            '<section id="playlist-detail-view"><div id="playlist-header"></div><div id="playlist-songs"></div></section>',
+            '<section id="artists-view"><div id="artist-list"></div></section>',
+            '<section id="artist-detail-view"><div id="artist-header"></div><div id="artist-songs"></div></section>',
+            '</main>',
+            '<footer id="player-bar"><div id="player-title"></div><div id="player-artist"></div><button id="btn-prev">Prev</button><button id="btn-play">Play</button><button id="btn-next">Next</button><div id="progress-bar"></div></footer>',
+            '<script src="app.js"></script>',
+            '</body>',
+            '</html>',
+            '',
+          ].join('\n'));
+          writeFileSync(join(workspaceRoot, 'styles.css'), 'body { font-family: sans-serif; }\n');
+          writeFileSync(join(workspaceRoot, 'app.js'), [
+            'const songs = [{ title: "Midnight Drive", artist: "Ari Lane" }];',
+            'function renderSongList(id, list) { document.getElementById(id).textContent = list.map((song) => song.title).join(", "); }',
+            'renderSongList("song-list", songs);',
+            'renderSongList("recently-played", songs.slice(0, 4));',
+            'document.getElementById("playlist-list").textContent = "Chill Vibes";',
+            'document.getElementById("artist-list").textContent = "Ari Lane";',
+            'document.getElementById("playlist-detail-view");',
+            'document.getElementById("artist-detail-view");',
+            'document.getElementById("player-title").textContent = songs[0].title;',
+            'document.getElementById("player-artist").textContent = songs[0].artist;',
+            'document.getElementById("btn-play").textContent = isPlaying ? "Pause" : "Play";',
+            'document.getElementById("btn-next");',
+            'document.getElementById("btn-prev");',
+            'document.getElementById("progress-bar");',
+            '',
+          ].join('\n'));
+          return buildResponse('Completed. Local URL: file:///index.html Verified: shell check passed.', [
+            {
+              receiptId: 'receipt-read-index',
+              sourceType: 'tool_call',
+              toolName: 'fs_read',
+              status: 'succeeded',
+              refs: [join(workspaceRoot, 'index.html')],
+              summary: 'Read index.html.',
+              startedAt: 1,
+              endedAt: 2,
+            },
+            {
+              receiptId: 'receipt-write-index',
+              sourceType: 'tool_call',
+              toolName: 'fs_write',
+              status: 'succeeded',
+              refs: [join(workspaceRoot, 'index.html'), join(workspaceRoot, 'styles.css')],
+              summary: 'Wrote updated shell files.',
+              startedAt: 3,
+              endedAt: 4,
+            },
+            {
+              receiptId: 'receipt-runtime-shell',
+              sourceType: 'tool_call',
+              toolName: 'shell_safe',
+              status: 'succeeded',
+              refs: [workspaceRoot],
+              summary: 'Ran a generic shell check.',
+              startedAt: 5,
+              endedAt: 6,
+            },
+          ]);
+        }
+
+        writeFileSync(join(workspaceRoot, 'app.js'), [
+          'const songs = [{ title: "Midnight Drive", artist: "Ari Lane" }, { title: "Harbor Lights", artist: "Nia Vale" }];',
+          'let currentIndex = 0;',
+          'let isPlaying = false;',
+          'let recentlyPlayed = [];',
+          'const byId = (id) => document.getElementById(id);',
+          'function renderSongList(id, list) { const node = byId(id); if (node) node.textContent = list.map((song) => song.title).join(", "); }',
+          'function renderRecentlyPlayed() { renderSongList("recently-played", recentlyPlayed.map((index) => songs[index])); }',
+          'function renderSearch(query = "") { const filtered = songs.filter((song) => song.title.toLowerCase().includes(query.toLowerCase()) || song.artist.toLowerCase().includes(query.toLowerCase())); renderSongList("home-search-results", filtered); renderSongList("song-list", filtered); }',
+          'function syncPlayer() { byId("player-title").textContent = songs[currentIndex].title; byId("player-artist").textContent = songs[currentIndex].artist; byId("btn-play").textContent = isPlaying ? "[pause]" : "[play]"; }',
+          'function playSong(index) { currentIndex = index; isPlaying = true; recentlyPlayed = [index, ...recentlyPlayed.filter((item) => item !== index)].slice(0, 6); renderRecentlyPlayed(); syncPlayer(); }',
+          'byId("home-search-input").addEventListener("input", (event) => renderSearch(event.target.value));',
+          'byId("search-input").addEventListener("input", (event) => renderSearch(event.target.value));',
+          'byId("playlist-list").textContent = "Chill Vibes";',
+          'byId("artist-list").textContent = "Ari Lane, Nia Vale";',
+          'byId("playlist-detail-view"); byId("playlist-header"); renderSongList("playlist-songs", songs);',
+          'byId("artist-detail-view"); byId("artist-header"); renderSongList("artist-songs", songs);',
+          'byId("btn-play").addEventListener("click", () => { isPlaying = !isPlaying; syncPlayer(); });',
+          'byId("btn-next").addEventListener("click", () => playSong((currentIndex + 1) % songs.length));',
+          'byId("btn-prev").addEventListener("click", () => playSong((currentIndex + songs.length - 1) % songs.length));',
+          'byId("progress-bar");',
+          'renderSearch(); playSong(0);',
+          '',
+        ].join('\n'));
+        return buildResponse('Completed. Local URL: file:///index.html Verified: semantic static app proof passed.', [
+          {
+            receiptId: 'receipt-read-retry',
+            sourceType: 'tool_call',
+            toolName: 'fs_read',
+            status: 'succeeded',
+            refs: [join(workspaceRoot, 'app.js')],
+            summary: 'Read app.js.',
+            startedAt: 10,
+            endedAt: 11,
+          },
+          {
+            receiptId: 'receipt-write-app',
+            sourceType: 'tool_call',
+            toolName: 'fs_write',
+            status: 'succeeded',
+            refs: [join(workspaceRoot, 'app.js')],
+            summary: 'Rewired app.js behavior.',
+            startedAt: 12,
+            endedAt: 13,
+          },
+          {
+            receiptId: 'receipt-runtime-retry',
+            sourceType: 'tool_call',
+            toolName: 'shell_safe',
+            status: 'succeeded',
+            refs: [workspaceRoot],
+            summary: 'Ran a generic shell check after retry.',
+            startedAt: 14,
+            endedAt: 15,
+          },
+        ]);
+      };
+
+      const jobs: Array<{
+        id: string;
+        toolName: string;
+        status: string;
+        requestId: string;
+        argsPreview?: string;
+        resultPreview?: string;
+        createdAt: number;
+        startedAt: number;
+        completedAt: number;
+      }> = [];
+      const runTool = vi.fn(async (request) => {
+        runtimeProofAttempts += 1;
+        const args = request.args as { cwd?: string; command?: string };
+        const command = args.command ?? '';
+        const scriptName = command.replace(/^node\s+/u, '');
+        let stdout = '';
+        let stderr = '';
+        let success = true;
+        try {
+          stdout = execFileSync(process.execPath, [scriptName], {
+            cwd: args.cwd,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+        } catch (error) {
+          success = false;
+          const execError = error as { stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
+          stdout = execError.stdout ? String(execError.stdout) : '';
+          stderr = execError.stderr ? String(execError.stderr) : execError.message ?? '';
+        }
+        jobs.push({
+          id: `job-static-semantic-proof-${runtimeProofAttempts}`,
+          toolName: 'code_build',
+          status: success ? 'succeeded' : 'failed',
+          requestId,
+          argsPreview: JSON.stringify(request.args),
+          resultPreview: JSON.stringify({
+            success,
+            output: { stdout, stderr },
+            verificationStatus: success ? 'verified' : 'failed',
+          }),
+          createdAt: 20 + runtimeProofAttempts,
+          startedAt: 20 + runtimeProofAttempts,
+          completedAt: 21 + runtimeProofAttempts,
+        });
+        return {
+          success,
+          status: success ? 'succeeded' : 'failed',
+          jobId: `job-static-semantic-proof-${runtimeProofAttempts}`,
+          message: success ? stdout : stderr,
+          output: { stdout, stderr },
+          verificationStatus: success ? 'verified' : 'failed',
+        };
+      });
+      const intentRoutingTrace = { record: vi.fn() };
+      manager = new WorkerManager(
+        {
+          listAlwaysLoadedDefinitions: () => [],
+          listJobs: vi.fn(() => jobs),
+          runTool,
+        } as never,
+        {
+          getFallbackProviderConfig: () => undefined,
+          getConfigSnapshot: () => createExecutionProfileTestConfig(),
+          auditLog: { record: vi.fn() },
+          registry: {
+            get: (agentId: string) => agentId === 'local'
+              ? {
+                  agent: { name: 'Guardian Agent' },
+                  definition: {
+                    orchestration: {
+                      role: 'implementer',
+                      label: 'Workspace Implementer',
+                      lenses: ['coding-workspace'],
+                    },
+                  },
+                }
+              : undefined,
+          },
+        } as never,
+        {
+          workerEntryPoint: 'src/worker/worker-entry.ts',
+          workerMaxMemoryMb: 2048,
+          workerIdleTimeoutMs: 300_000,
+          workerShutdownGracePeriodMs: 10,
+          capabilityTokenTtlMs: 600_000,
+          capabilityTokenMaxToolCalls: 0,
+        } as never,
+        undefined,
+        {
+          intentRoutingTrace,
+          now: () => 880_000 + runtimeProofAttempts,
+        },
+      );
+
+      const result = await manager.handleMessage({
+        sessionId: 'tester:web',
+        agentId: 'local',
+        userId: 'tester',
+        grantedCapabilities: [],
+        message: {
+          id: requestId,
+          userId: 'tester',
+          channel: 'web',
+          content: 'Continue the attached MusicApp repo, improve search, recently played, playlist and artist detail, and verify visible playback behavior.',
+          metadata: attachPreRoutedIntentGatewayMetadata({
+            codeContext: {
+              workspaceRoot,
+              sessionId: 'music-session',
+            },
+          }, {
+            mode: 'primary',
+            available: true,
+            model: 'test-model',
+            latencyMs: 1,
+            decision,
+          }),
+          timestamp: Date.now(),
+        },
+        systemPrompt: 'system',
+        history: [],
+        knowledgeBases: [],
+        activeSkills: [],
+        additionalSections: [],
+        toolContext: '',
+        runtimeNotices: [],
+        executionProfile: {
+          id: 'managed_cloud_tool',
+          providerName: 'ollama-cloud-coding',
+          providerType: 'ollama_cloud',
+          providerModel: 'glm-5.1',
+          providerLocality: 'external',
+          providerTier: 'managed_cloud',
+          requestedTier: 'external',
+          preferredAnswerPath: 'tool_loop',
+          expectedContextPressure: 'medium',
+          contextBudget: 32_000,
+          toolContextMode: 'tight',
+          maxAdditionalSections: 2,
+          maxRuntimeNotices: 2,
+          fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+          reason: 'delegated coding role selected managed-cloud coding profile',
+          routingMode: 'auto',
+          selectionSource: 'delegated_role',
+        },
+        delegation: {
+          requestId,
+          executionId: 'exec-static-semantic-proof',
+          rootExecutionId: 'exec-static-semantic-proof-root',
+          originChannel: 'web',
+          originSurfaceId: 'web-guardian-chat',
+          codeSessionId: 'music-session',
+          orchestration: {
+            role: 'implementer',
+            label: 'Workspace Implementer',
+            lenses: ['coding-workspace'],
+          },
+        },
+      });
+
+      expect(dispatchCount).toBeGreaterThan(1);
+      expect(jobs.map((job) => job.resultPreview ?? '').join('\n')).toContain('Static app runtime check passed');
+      expect(jobs.map((job) => job.status)).toContain('succeeded');
+      expect(jobs[0]?.status).toBe('failed');
+      expect(jobs[0]?.resultPreview).toContain('home-search-input');
+      expect(jobs[0]?.resultPreview).toContain('fixed song slice');
+      expect(result.content).not.toContain('Delegated work failed.');
+      expect(readDelegatedResultEnvelope(result.metadata)?.verification).toMatchObject({
+        decision: 'satisfied',
+      });
+      expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual(expect.arrayContaining([
+        'delegated_worker_retrying',
+        'delegated_worker_completed',
+      ]));
     } finally {
       manager?.shutdown();
       rmSync(workspaceRoot, { recursive: true, force: true });
