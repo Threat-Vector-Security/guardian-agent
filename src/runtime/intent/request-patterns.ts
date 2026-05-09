@@ -1,12 +1,13 @@
 import type { AnswerConstraints } from '../execution/types.js';
 import { normalizeIntentGatewayRepairText } from './text.js';
 
-const WORKSPACE_SCOPE_PATTERN = /\b(?:coding\s+workspace|coding\s+session|workspace|session)\b/;
+const WORKSPACE_SCOPE_PATTERN = /\b(?:coding\s+workspace|coding\s+session|workspace|session|repo(?:sitory)?|project|codebase)\b/;
 const REPO_MUTATION_PATTERN = /\b(?:create|add|make|build|draft|write|generate|touch|update|edit|change|modify|fix|patch|rewrite|append|delete|remove)\b/;
 const REPO_EXECUTION_PATTERN = /\b(?:run|test|build|lint|check|debug|investigate|inspect|review|search|find|grep)\b/;
 const CODING_BACKEND_PATTERN = /\b(?:codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b/;
 const CODE_REPO_TARGET_PATTERN = /\b(?:source|function|class|module|component|symbol|tests?|test suite|unit tests?|build|compile|lint|check|readme)\b/;
 const REPO_DOCUMENT_ARTIFACT_PATTERN = /\b(?:(?:technical\s+)?implementation\s+plan|business\s+plan|design\s+(?:doc|docs|document|plan)|architecture\s+(?:doc|docs|document|plan)|requirements?\s+(?:doc|docs|document)|spec(?:ification)?|roadmap|changelog|readme|operator\s+guide|runbook)\b/;
+const GREENFIELD_APP_BUILD_PATTERN = /\b(?:build|create|make|implement|generate|scaffold)\b[^.!?\n]{0,180}\b(?:app|application|site|website|web\s*app|player|dashboard|ui)\b|\b(?:app|application|site|website|web\s*app|player|dashboard|ui)\b[^.!?\n]{0,180}\b(?:from scratch|runnable locally|local url|playback controls|browsing)\b/;
 const CODING_BACKEND_SCOPE_TARGET_PATTERN = /\b(?:top-level directory|root directory|workspace root|project root|repo root|directory|folder)\b/;
 const SOURCE_TREE_PATH_PATTERN = /(?:^|\s)(?:src|docs|web|scripts|native|policies|skills)\//;
 const REPO_FILE_REFERENCE_PATTERN = /\b[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|rs|py|go|java|yml|yaml|txt|toml)\b/;
@@ -167,6 +168,7 @@ export function requestNeedsExactFileReferences(content: string | undefined): bo
 export function isExplicitWorkspaceScopedRepoWorkRequest(content: string | undefined): boolean {
   const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized || !WORKSPACE_SCOPE_PATTERN.test(normalized)) return false;
+  if (isExplicitWorkspaceAppBuildRequest(normalized)) return true;
 
   const hasConcreteRepoTarget = CODE_REPO_TARGET_PATTERN.test(normalized)
     || REPO_DOCUMENT_ARTIFACT_PATTERN.test(normalized)
@@ -177,6 +179,14 @@ export function isExplicitWorkspaceScopedRepoWorkRequest(content: string | undef
 
   return REPO_MUTATION_PATTERN.test(normalized)
     || (CODING_BACKEND_PATTERN.test(normalized) && REPO_EXECUTION_PATTERN.test(normalized));
+}
+
+export function isExplicitWorkspaceAppBuildRequest(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized || !WORKSPACE_SCOPE_PATTERN.test(normalized)) return false;
+  if (REPO_DOCUMENT_ARTIFACT_PATTERN.test(normalized)) return false;
+  return GREENFIELD_APP_BUILD_PATTERN.test(normalized)
+    && REPO_MUTATION_PATTERN.test(normalized);
 }
 
 export function isExplicitCodingSessionControlRequest(content: string | undefined): boolean {

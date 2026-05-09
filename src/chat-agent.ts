@@ -2192,7 +2192,9 @@ interface DegradedDirectIntentResponseInput {
         );
         const delegatedRunClass = resolveDelegatedWorkerRunClass({
           originChannel: message.channel,
+          originSurfaceId: message.surfaceId,
           codeSessionId: resolvedCodeSession?.session.id,
+          activeExecutionRefs: continuitySummary?.activeExecutionRefs,
           orchestration: delegatedOrchestration,
           directReasoning: handleDirectReasoning,
         });

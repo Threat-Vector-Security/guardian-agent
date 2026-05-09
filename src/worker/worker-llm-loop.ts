@@ -8,6 +8,7 @@ import { withTaintedContentSystemPrompt } from '../util/tainted-content.js';
 import { formatToolResultForLLM, toLLMToolDef } from '../chat-agent-helpers.js';
 import { coalescePackageInstallToolCalls } from '../runtime/package-install-tool-coalescing.js';
 import type { PlannedTask, WorkerStopReason } from '../runtime/execution/types.js';
+import { matchPlannedStepForTool } from '../runtime/execution/task-plan.js';
 import type {
   WorkerExecutionCompletionReason,
   WorkerExecutionResponseQuality,
@@ -74,6 +75,15 @@ export interface LlmLoopToolEvent {
   errorMessage?: string;
 }
 
+const RUNTIME_EVIDENCE_TOOL_NAMES = [
+  'coding_backend_run',
+  'code_build',
+  'code_test',
+  'code_remote_exec',
+  'shell_safe',
+  'browser_navigate',
+];
+
 // Extracted LLM loop, which can run either in-process or in an isolated worker
 export async function runLlmLoop(
   messages: ChatMessage[],
@@ -98,6 +108,7 @@ export async function runLlmLoop(
   let forcedToolExecutionRetryUsed = false;
   let forcedDiscoveryContinuationRetryCount = 0;
   let forcedPlannedTaskContinuationRetryCount = 0;
+  let forcedPlannedTaskContinuationSatisfiedKey = '';
   let lastToolRoundResults: Array<{
     toolName: string;
     args: Record<string, unknown>;
@@ -157,6 +168,12 @@ export async function runLlmLoop(
       for (const category of step.expectedToolCategories ?? []) {
         const normalized = category.trim();
         if (!normalized || !/^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/u.test(normalized)) {
+          continue;
+        }
+        if (normalized === 'runtime_evidence') {
+          for (const toolName of RUNTIME_EVIDENCE_TOOL_NAMES) {
+            exactToolNames.add(toolName);
+          }
           continue;
         }
         exactToolNames.add(normalized);
@@ -416,7 +433,7 @@ export async function runLlmLoop(
         [
           ...plannedTaskMessages,
           { role: 'assistant', content: response.content ?? '' },
-          { role: 'user', content: buildPlannedTaskContinuationCorrectionPrompt(options?.plannedTask, llmToolDefs) },
+          { role: 'user', content: buildPlannedTaskContinuationCorrectionPrompt(options?.plannedTask, llmToolDefs, cumulativeToolRoundResults) },
         ],
         { tools: llmToolDefs },
       );
@@ -566,6 +583,13 @@ export async function runLlmLoop(
       return acc;
     }, []);
     cumulativeToolRoundResults.push(...lastToolRoundResults);
+    const plannedTaskSatisfiedKey = options?.plannedTask
+      ? [...collectSatisfiedPlannedStepIds(options.plannedTask, cumulativeToolRoundResults)].sort().join('|')
+      : '';
+    if (plannedTaskSatisfiedKey !== forcedPlannedTaskContinuationSatisfiedKey) {
+      forcedPlannedTaskContinuationRetryCount = 0;
+      forcedPlannedTaskContinuationSatisfiedKey = plannedTaskSatisfiedKey;
+    }
 
     let roundHasPending = false;
     for (const settled of toolResults) {
@@ -934,16 +958,68 @@ function shouldRetryPlannedTaskContinuation(input: {
   lastResults: Array<{ toolName: string; result: Record<string, unknown> }>;
   plannedTask?: PlannedTask;
 }): boolean {
-  if (!input.plannedTask?.steps.some((step) => step.required !== false && step.kind === 'write')) return false;
-  if (input.cumulativeResults.some(({ toolName, result }) => isSuccessfulPlannedWriteMutationToolResult(toolName, result, input.plannedTask))) {
+  const unsatisfiedSteps = collectUnsatisfiedRequiredNonAnswerSteps(input.plannedTask, input.cumulativeResults);
+  if (unsatisfiedSteps.length === 0) {
     return false;
   }
   return input.lastResults.some(({ toolName, result }) => (
-    isSuccessfulToolResult(result) && (
-      isReadOnlyEvidenceTool(toolName)
-      || isPreparatoryMutationEvidenceTool(toolName, input.plannedTask)
+    (
+      isSuccessfulToolResult(result) && (
+        isReadOnlyEvidenceTool(toolName)
+        || isPreparatoryMutationEvidenceTool(toolName, input.plannedTask)
+        || isExecutionEvidenceTool(toolName)
+        || isSuccessfulMutationToolResult(toolName, result)
+      )
     )
+    || isFailedNonApprovalToolResult(result)
   ));
+}
+
+function collectUnsatisfiedRequiredNonAnswerSteps(
+  plannedTask: PlannedTask | undefined,
+  cumulativeResults: Array<{ toolName: string; result: Record<string, unknown> }>,
+) {
+  const requiredSteps = plannedTask?.steps.filter((step) => step.required !== false && step.kind !== 'answer') ?? [];
+  if (!plannedTask || requiredSteps.length === 0) return [];
+  const satisfiedStepIds = collectSatisfiedPlannedStepIds(plannedTask, cumulativeResults);
+  return requiredSteps.filter((step) => !satisfiedStepIds.has(step.stepId));
+}
+
+function collectSatisfiedPlannedStepIds(
+  plannedTask: PlannedTask,
+  cumulativeResults: Array<{ toolName: string; result: Record<string, unknown> }>,
+): Set<string> {
+  const satisfiedStepIds = new Set<string>();
+  for (const { toolName, result } of cumulativeResults) {
+    if (!isSuccessfulToolResult(result)) continue;
+    const args = readToolResultArgs(result);
+    const matchedStepId = matchPlannedStepForTool({
+      plannedTask,
+      toolName,
+      args,
+      previouslyMatchedStepIds: satisfiedStepIds,
+    });
+    if (matchedStepId) {
+      satisfiedStepIds.add(matchedStepId);
+    }
+  }
+  return satisfiedStepIds;
+}
+
+function readToolResultArgs(result: Record<string, unknown>): Record<string, unknown> {
+  const output = result.output;
+  if (output && typeof output === 'object' && !Array.isArray(output)) {
+    const outputRecord = output as Record<string, unknown>;
+    const path = typeof outputRecord.path === 'string' ? outputRecord.path : undefined;
+    const cwd = typeof outputRecord.cwd === 'string' ? outputRecord.cwd : undefined;
+    const command = typeof outputRecord.command === 'string' ? outputRecord.command : undefined;
+    return {
+      ...(path ? { path } : {}),
+      ...(cwd ? { cwd } : {}),
+      ...(command ? { command } : {}),
+    };
+  }
+  return {};
 }
 
 function shouldRetryPolicyBlockedToolRoundCorrection(
@@ -968,26 +1044,27 @@ function isReadOnlyEvidenceTool(toolName: string): boolean {
     || toolName.endsWith('_search');
 }
 
+function isExecutionEvidenceTool(toolName: string): boolean {
+  return toolName === 'coding_backend_run'
+    || toolName === 'shell_safe'
+    || toolName === 'code_remote_exec'
+    || toolName === 'code_test'
+    || toolName === 'code_build'
+    || toolName === 'code_lint'
+    || toolName.startsWith('browser_')
+    || toolName.startsWith('web_');
+}
+
 function isSuccessfulMutationToolResult(toolName: string, result: Record<string, unknown>): boolean {
   if (!isSuccessfulToolResult(result)) return false;
   return toolName === 'fs_write'
     || toolName === 'fs_delete'
     || toolName === 'fs_move'
     || toolName === 'fs_copy'
+    || toolName === 'coding_backend_run'
     || toolName === 'code_create'
     || toolName === 'code_edit'
     || toolName === 'code_patch';
-}
-
-function isSuccessfulPlannedWriteMutationToolResult(
-  toolName: string,
-  result: Record<string, unknown>,
-  plannedTask: PlannedTask | undefined,
-): boolean {
-  if (toolName === 'fs_mkdir') {
-    return plannedTaskHasDirectoryWriteObjective(plannedTask);
-  }
-  return isSuccessfulMutationToolResult(toolName, result);
 }
 
 function isPreparatoryMutationEvidenceTool(toolName: string, plannedTask: PlannedTask | undefined): boolean {
@@ -1006,6 +1083,12 @@ function plannedTaskHasDirectoryWriteObjective(plannedTask: PlannedTask | undefi
 
 function isPendingApprovalToolResult(result: Record<string, unknown>): boolean {
   return readString(result.status).toLowerCase() === 'pending_approval';
+}
+
+function isFailedNonApprovalToolResult(result: Record<string, unknown>): boolean {
+  return !isSuccessfulToolResult(result)
+    && !isPendingApprovalToolResult(result)
+    && !isFixablePolicyBlockedToolResult(result);
 }
 
 function isFixablePolicyBlockedToolResult(result: Record<string, unknown>): boolean {
@@ -1055,11 +1138,28 @@ function buildDiscoveryContinuationCorrectionPrompt(
 function buildPlannedTaskContinuationCorrectionPrompt(
   plannedTask: PlannedTask | undefined,
   toolDefs: import('../llm/types.js').ToolDefinition[] = [],
+  cumulativeResults: Array<{ toolName: string; result: Record<string, unknown> }> = [],
 ): string {
-  const writeSteps = plannedTask?.steps
-    .filter((step) => step.required !== false && step.kind === 'write')
-    .map((step) => `- ${step.stepId}: ${step.summary}`)
+  const requiredSteps = plannedTask?.steps
+    .filter((step) => step.required !== false && step.kind !== 'answer')
+    .map((step) => {
+      const categories = step.expectedToolCategories?.length
+        ? ` [${step.expectedToolCategories.join(', ')}]`
+        : '';
+      return `- ${step.stepId}: ${step.summary}${categories}`;
+    })
     ?? [];
+  const unsatisfiedSteps = collectUnsatisfiedRequiredNonAnswerSteps(plannedTask, cumulativeResults)
+    .map((step) => {
+      const categories = step.expectedToolCategories?.length
+        ? ` [${step.expectedToolCategories.join(', ')}]`
+        : '';
+      return `- ${step.stepId}: ${step.summary}${categories}`;
+    });
+  const hasRuntimeEvidenceStep = plannedTask?.steps.some((step) => (
+    step.required !== false
+    && step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true
+  )) ?? false;
   const mutationTools = toolDefs
     .map((tool) => tool.name)
     .filter((name) => name && (
@@ -1069,13 +1169,26 @@ function buildPlannedTaskContinuationCorrectionPrompt(
       || name === 'code_patch'
     ))
     .slice(0, 10);
+  const executionTools = toolDefs
+    .map((tool) => tool.name)
+    .filter(isExecutionEvidenceTool)
+    .slice(0, 10);
   return [
-    'System correction: the previous tool call gathered read-only context, but the planned write step is still unsatisfied.',
+    'System correction: the previous tool calls did not satisfy every required non-answer step in the execution plan.',
     'Do not stop with a bare tool-completed status or a progress update.',
-    'Continue now by calling a file-writing or code creation/editing tool for the required write step.',
+    'Continue now by calling the tool needed for the next unsatisfied required step.',
     'Creating a directory alone is only preparatory unless the required write step is specifically a directory task.',
-    ...(writeSteps.length > 0 ? ['Required write steps:', ...writeSteps] : []),
+    ...(hasRuntimeEvidenceStep
+      ? [
+          'For runtime_evidence steps, file reads, file listings, directory creation, and file writes do not count. Use an execution-capable tool such as coding_backend_run, code_build, code_test, code_remote_exec, shell_safe, or an available browser tool.',
+          'If runtime proof is impossible because a linked static asset or local entrypoint is missing, create only that missing runtime support file first, then call the execution-capable tool.',
+          'If no execution-capable tool is visible, first call find_tools with the exact query "coding_backend_run code_build code_test code_remote_exec shell_safe browser_navigate", then call one of the discovered execution tools.',
+        ]
+      : []),
+    ...(unsatisfiedSteps.length > 0 ? ['Unsatisfied required non-answer steps:', ...unsatisfiedSteps] : []),
+    ...(requiredSteps.length > 0 ? ['Required non-answer steps:', ...requiredSteps] : []),
     ...(mutationTools.length > 0 ? [`Available mutation tools include: ${mutationTools.join(', ')}.`] : []),
+    ...(executionTools.length > 0 ? [`Available execution/verification tools include: ${executionTools.join(', ')}.`] : []),
     'Only pause if a real mutation tool returns pending_approval or another real blocker.',
   ].join('\n');
 }

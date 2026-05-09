@@ -463,6 +463,12 @@ export class ContinuityThreadStore {
     this.records.delete(continuityKey);
   }
 
+  reset(scope: ContinuityThreadScope, nowMs: number = this.now()): boolean {
+    const existing = this.get(scope, nowMs);
+    this.remove(buildContinuityKey(scope));
+    return !!existing;
+  }
+
   get(scope: ContinuityThreadScope, nowMs: number = this.now()): ContinuityThreadRecord | null {
     const continuityKey = buildContinuityKey(scope);
     const sqliteRow = this.mode === 'sqlite' && this.rowByKeyStmt

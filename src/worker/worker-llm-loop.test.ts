@@ -555,7 +555,7 @@ describe('runLlmLoop', () => {
     expect(chatCalls).toHaveLength(6);
     expect(chatCalls[2]?.messages.at(-1)).toMatchObject({
       role: 'user',
-      content: expect.stringContaining('planned write step is still unsatisfied'),
+      content: expect.stringContaining('did not satisfy every required non-answer step'),
     });
     expect(chatCalls[4]?.messages.at(-1)).toMatchObject({
       role: 'user',
@@ -1814,6 +1814,309 @@ describe('runLlmLoop', () => {
 
     expect(calledTools).toEqual(['find_tools', 'vercel_status']);
     expect(result.finalContent).toBe('Vercel profile main is available.');
+  });
+
+  it('keeps app-build workers moving after writes until runtime evidence is collected', async () => {
+    const messages: ChatMessage[] = [{
+      role: 'user',
+      content: 'Build a simple music app and verify it runs locally.',
+    }];
+    const plannedTask: PlannedTask = {
+      planId: 'plan:coding_task:create:runtime',
+      allowAdditionalSteps: true,
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'write',
+          summary: 'Create the app files.',
+          expectedToolCategories: ['fs_write'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'tool_call',
+          summary: 'Start or exercise the app locally and collect runtime evidence before answering.',
+          expectedToolCategories: ['runtime_evidence'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+        {
+          stepId: 'step_3',
+          kind: 'answer',
+          summary: 'Report the local URL and verification result.',
+          required: true,
+          dependsOn: ['step_2'],
+        },
+      ],
+    };
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'fs_write', arguments: JSON.stringify({ path: 'package.json', content: '{}' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'I created the files and will verify next.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-2', name: 'code_build', arguments: JSON.stringify({ cwd: '.', command: 'npm run build' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Verified with npm run build. Local URL: http://localhost:3000.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const correctionPrompts: string[] = [];
+    const calledTools: string[] = [];
+    let firstLoopToolNames: string[] = [];
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [
+          {
+            name: 'fs_write',
+            description: 'Write a file.',
+            parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } },
+            risk: 'mutating',
+            category: 'filesystem',
+          },
+        ];
+      },
+      searchTools(query) {
+        if (query === 'code_build') {
+          return [{
+            name: 'code_build',
+            description: 'Run a build command.',
+            parameters: { type: 'object', properties: { cwd: { type: 'string' }, command: { type: 'string' } } },
+            risk: 'mutating',
+            category: 'coding',
+          }];
+        }
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        if (request.toolName === 'fs_write') {
+          return { success: true, output: { path: request.args.path } };
+        }
+        expect(request.toolName).toBe('code_build');
+        return { success: true, output: { command: request.args.command, stdout: 'built' } };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (roundMessages, options) => {
+        if (firstLoopToolNames.length === 0 && Array.isArray(options?.tools)) {
+          firstLoopToolNames = options.tools.map((tool) => tool.name);
+        }
+        const latest = roundMessages.at(-1);
+        if (latest?.role === 'user' && latest.content.includes('did not satisfy every required non-answer step')) {
+          correctionPrompts.push(latest.content);
+        }
+        const next = responses.shift();
+        if (!next) throw new Error('Unexpected extra chatFn call');
+        return next;
+      },
+      toolCaller,
+      6,
+      32_000,
+      undefined,
+      { plannedTask },
+    );
+
+    expect(firstLoopToolNames).toContain('code_build');
+    expect(correctionPrompts).toHaveLength(1);
+    expect(correctionPrompts[0]).toContain('runtime_evidence');
+    expect(correctionPrompts[0]).toContain('file reads, file listings, directory creation, and file writes do not count');
+    expect(calledTools).toEqual(['fs_write', 'code_build']);
+    expect(result.finalContent).toContain('Verified with npm run build');
+  });
+
+  it('refreshes planned-continuation budget when app-build tool evidence makes progress', async () => {
+    const messages: ChatMessage[] = [{
+      role: 'user',
+      content: 'Build a simple music app from scratch and verify it runs locally.',
+    }];
+    const plannedTask: PlannedTask = {
+      planId: 'plan:coding_task:create:app',
+      allowAdditionalSteps: true,
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'write',
+          summary: 'Create the app files.',
+          expectedToolCategories: ['write'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'read',
+          summary: 'Verify the changed workspace file or path after the mutation.',
+          expectedToolCategories: ['fs_read', 'fs_list'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+        {
+          stepId: 'step_3',
+          kind: 'tool_call',
+          summary: 'Start or exercise the app locally and collect runtime evidence before answering.',
+          expectedToolCategories: ['runtime_evidence'],
+          required: true,
+          dependsOn: ['step_2'],
+        },
+        {
+          stepId: 'step_4',
+          kind: 'answer',
+          summary: 'Report the completed repo change and verification result.',
+          required: true,
+          dependsOn: ['step_3'],
+        },
+      ],
+    };
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'fs_mkdir', arguments: JSON.stringify({ path: 'public' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'I created the directories and will add files next.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-2', name: 'fs_write', arguments: JSON.stringify({ path: 'package.json', content: '{}' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'I wrote package.json and will plan the remaining checks.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-3', name: 'code_plan', arguments: JSON.stringify({}) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'The plan tool failed, so I will inspect the files.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-4', name: 'fs_read', arguments: JSON.stringify({ path: 'package.json' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'The files are present and I will verify runtime now.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-5', name: 'code_build', arguments: JSON.stringify({ cwd: '.', command: 'npm start' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Started and verified the app at http://localhost:3000.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const correctionPrompts: string[] = [];
+    const calledTools: string[] = [];
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [
+          {
+            name: 'fs_mkdir',
+            description: 'Create a directory.',
+            parameters: { type: 'object', properties: { path: { type: 'string' } } },
+            risk: 'mutating',
+            category: 'filesystem',
+          },
+          {
+            name: 'fs_write',
+            description: 'Write a file.',
+            parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } },
+            risk: 'mutating',
+            category: 'filesystem',
+          },
+          {
+            name: 'fs_read',
+            description: 'Read a file.',
+            parameters: { type: 'object', properties: { path: { type: 'string' } } },
+            risk: 'safe',
+            category: 'filesystem',
+          },
+          {
+            name: 'code_plan',
+            description: 'Plan coding work.',
+            parameters: { type: 'object', properties: { task: { type: 'string' } }, required: ['task'] },
+            risk: 'safe',
+            category: 'coding',
+          },
+          {
+            name: 'code_build',
+            description: 'Run a build or runtime command.',
+            parameters: { type: 'object', properties: { cwd: { type: 'string' }, command: { type: 'string' } } },
+            risk: 'mutating',
+            category: 'coding',
+          },
+        ];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        if (request.toolName === 'code_plan') {
+          return { success: false, error: 'Schema validation failed: data must have required property task' };
+        }
+        if (request.toolName === 'code_build') {
+          return { success: true, output: { command: request.args.command, stdout: 'listening at http://localhost:3000' } };
+        }
+        return { success: true, output: { path: request.args.path } };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (roundMessages) => {
+        const latest = roundMessages.at(-1);
+        if (latest?.role === 'user' && latest.content.includes('did not satisfy every required non-answer step')) {
+          correctionPrompts.push(latest.content);
+        }
+        const next = responses.shift();
+        if (!next) throw new Error('Unexpected extra chatFn call');
+        return next;
+      },
+      toolCaller,
+      8,
+      32_000,
+      undefined,
+      { plannedTask },
+    );
+
+    expect(correctionPrompts.length).toBeGreaterThanOrEqual(4);
+    expect(correctionPrompts.at(-1)).toContain('Unsatisfied required non-answer steps:');
+    expect(correctionPrompts.at(-1)).toContain('runtime_evidence');
+    expect(calledTools).toEqual(['fs_mkdir', 'fs_write', 'code_plan', 'fs_read', 'code_build']);
+    expect(result.finalContent).toContain('Started and verified');
   });
 
   it('reissues discovery-continuation correction when a multi-domain worker keeps discovering instead of calling tools', async () => {

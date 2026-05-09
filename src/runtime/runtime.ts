@@ -37,9 +37,10 @@ import {
   readSelectedExecutionProfileMetadata,
   selectDelegatedExecutionProfile,
 } from './execution-profiles.js';
-import { readPreRoutedIntentGatewayMetadata } from './intent-gateway.js';
+import { readPreRoutedIntentGatewayMetadata, type IntentGatewayDecision } from './intent-gateway.js';
 
 const log = createLogger('runtime');
+const RUNTIME_PROVEN_CODING_INVOCATION_BUDGET_MS = 15 * 60_000;
 const TRUSTED_SERVICE_EVENT_SOURCES = new Set([
   'network-sentinel',
   'host-monitor',
@@ -101,6 +102,27 @@ function buildInvocationTimeoutMessage(input: {
     ? ` Last known routing context: ${details.join('; ')}.`
     : '';
   return `Agent '${input.agentId}' exceeded budget timeout (${input.budgetMs}ms).${suffix}`;
+}
+
+function isRuntimeProvenCodingTask(decision: IntentGatewayDecision | undefined): boolean {
+  if (decision?.route !== 'coding_task') return false;
+  return (decision.plannedSteps ?? []).some((step) => (
+    step.required !== false
+    && (step.expectedToolCategories ?? []).some((category) => (
+      category === 'runtime_evidence'
+      || category === 'execution_evidence'
+    ))
+  ));
+}
+
+function resolveInvocationBudgetMs(input: {
+  configuredBudgetMs: number;
+  message: UserMessage;
+}): number {
+  if (input.configuredBudgetMs <= 0) return input.configuredBudgetMs;
+  const routed = readPreRoutedIntentGatewayMetadata(input.message.metadata);
+  if (!isRuntimeProvenCodingTask(routed?.decision)) return input.configuredBudgetMs;
+  return Math.max(input.configuredBudgetMs, RUNTIME_PROVEN_CODING_INVOCATION_BUDGET_MS);
 }
 
 export class Runtime {
@@ -350,7 +372,10 @@ export class Runtime {
     }
 
     const limits = instance.definition.resourceLimits;
-    const budgetMs = limits.maxInvocationBudgetMs;
+    const budgetMs = resolveInvocationBudgetMs({
+      configuredBudgetMs: limits.maxInvocationBudgetMs,
+      message,
+    });
     const budgetAbortController = budgetMs > 0 ? new AbortController() : undefined;
     const invocationAbortSignal = mergeAbortSignals([
       message.abortSignal,

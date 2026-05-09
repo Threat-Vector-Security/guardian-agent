@@ -15,6 +15,8 @@ type NotificationHandler = (notification: JsonRpcNotification) => void;
 
 const DEFAULT_BROKER_REQUEST_TIMEOUT_MS = 30_000;
 const BROKER_TOOL_CALL_REQUEST_TIMEOUT_MS = 120_000;
+const BROKER_LLM_CHAT_REQUEST_TIMEOUT_MS = 120_000;
+const BROKER_LLM_CHAT_TIMEOUT_GRACE_MS = 15_000;
 
 export function toBrokerTransportChatOptions(options?: ChatOptions): Omit<ChatOptions, 'signal'> | undefined {
   if (!options) return undefined;
@@ -125,18 +127,23 @@ export class BrokerClient {
   async llmChat(
     messages: ChatMessage[],
     options?: ChatOptions,
-    opts?: { useFallback?: boolean; providerName?: string; fallbackProviderOrder?: string[] },
+    opts?: { useFallback?: boolean; providerName?: string; fallbackProviderOrder?: string[]; timeoutMs?: number },
   ): Promise<ChatResponse & { providerName?: string; providerLocality?: 'local' | 'external' }> {
-    // LLM calls can take up to 120s; use extended timeout
+    const providerTimeoutMs = Math.max(
+      1_000,
+      opts?.timeoutMs ?? BROKER_LLM_CHAT_REQUEST_TIMEOUT_MS,
+    );
+    const brokerTimeoutMs = providerTimeoutMs + BROKER_LLM_CHAT_TIMEOUT_GRACE_MS;
     return this.sendRequest<ChatResponse & { providerName?: string; providerLocality?: 'local' | 'external' }>('llm.chat', {
       messages,
       options: toBrokerTransportChatOptions(options) ?? {},
       useFallback: opts?.useFallback ?? false,
+      timeoutMs: providerTimeoutMs,
       ...(typeof opts?.providerName === 'string' && opts.providerName.trim() ? { providerName: opts.providerName.trim() } : {}),
       ...(Array.isArray(opts?.fallbackProviderOrder) && opts.fallbackProviderOrder.length > 0
         ? { fallbackProviderOrder: opts.fallbackProviderOrder }
         : {}),
-    }, 120_000);
+    }, brokerTimeoutMs);
   }
 
   async listJobs(

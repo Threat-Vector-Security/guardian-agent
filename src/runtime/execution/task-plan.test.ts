@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPlannedTask,
   buildStepReceipts,
+  collectMissingEvidenceKinds,
   computeWorkerRunStatus,
   findAnswerStepId,
   matchPlannedStepForTool,
@@ -451,6 +452,27 @@ describe('task plan receipt accounting', () => {
     ].filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
 
     expect(matchedStepIds.get('receipt-runtime')).toBe('step_4');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'fs_read',
+      args: { path: 'package.json' },
+    })).not.toBe('step_4');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'fs_list',
+      args: { path: '.' },
+    })).not.toBe('step_4');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'coding_backend_run',
+      args: { task: 'Build and verify the app locally.' },
+    })).toBe('step_2');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'coding_backend_run',
+      args: { task: 'Start the app and report the local URL.' },
+      previouslyMatchedStepIds: new Set(['step_2', 'step_3']),
+    })).toBe('step_4');
 
     const stepReceipts = buildStepReceipts({
       plannedTask,
@@ -869,6 +891,7 @@ describe('task plan receipt accounting', () => {
     });
 
     expect(plannedTask.allowAdditionalSteps).toBe(true);
+    expect(collectMissingEvidenceKinds(plannedTask, [])).toEqual(['runtime_evidence', 'answer']);
   });
 
   it('maps Microsoft and Google status tools to connector status categories', () => {

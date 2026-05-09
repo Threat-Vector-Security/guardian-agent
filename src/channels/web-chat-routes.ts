@@ -248,16 +248,19 @@ export async function handleWebChatRoutes(context: WebChatRoutesContext): Promis
     }
 
     try {
-      const parsed = await readJsonBody<{ agentId?: string; userId?: string; channel?: string }>(req, context.maxBodyBytes);
+      const parsed = await readJsonBody<{ agentId?: string; userId?: string; channel?: string; surfaceId?: string }>(req, context.maxBodyBytes);
       if (!parsed.agentId) {
         sendJSON(res, 400, { error: 'agentId is required' });
         return true;
       }
       try {
+        const principal = context.resolveRequestPrincipal(req);
         const result = await dashboard.onConversationReset({
           agentId: parsed.agentId,
           userId: parsed.userId ?? 'web-user',
           channel: parsed.channel ?? 'web',
+          principalId: principal.principalId,
+          surfaceId: trimOptionalString(parsed.surfaceId),
         });
         sendJSON(res, 200, result);
         context.maybeEmitUIInvalidation(result, ['dashboard'], 'conversation.reset', url.pathname);

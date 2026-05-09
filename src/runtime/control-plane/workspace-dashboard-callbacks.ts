@@ -5,7 +5,9 @@ import type {
 import type { ConversationService } from '../conversation.js';
 import { MAX_CODE_SESSIONS_PER_USER } from '../code-sessions.js';
 import type { CodeSessionRecord, CodeSessionStore } from '../code-sessions.js';
+import type { ContinuityThreadStore } from '../continuity-threads.js';
 import type { IdentityService } from '../identity.js';
+import type { PendingActionStore } from '../pending-actions.js';
 import type { RunTimelineStore } from '../run-timeline.js';
 import { ToolExecutor } from '../../tools/executor.js';
 
@@ -46,6 +48,8 @@ interface WorkspaceDashboardCallbackOptions {
   codeSessionStore: CodeSessionStore;
   identity: IdentityService;
   conversations: ConversationService;
+  continuityThreadStore?: ContinuityThreadStore;
+  pendingActionStore?: PendingActionStore;
   runTimeline: RunTimelineStore;
   toolExecutor: ToolExecutor;
   refreshRunTimelineSnapshots: () => void;
@@ -113,6 +117,78 @@ interface WorkspaceDashboardCallbackOptions {
 export function createWorkspaceDashboardCallbacks(
   options: WorkspaceDashboardCallbackOptions,
 ): WorkspaceDashboardCallbacks {
+  const resolveStateAgentId = (agentId?: string | null, session?: CodeSessionRecord): string => {
+    const requestedAgentId = agentId?.trim() || session?.agentId?.trim() || undefined;
+    return options.resolveSharedStateAgentId(requestedAgentId) ?? requestedAgentId ?? 'default';
+  };
+
+  const resetSharedConversationState = (args: {
+    agentId: string;
+    canonicalUserId: string;
+    channel: string;
+    surfaceId?: string;
+    session?: CodeSessionRecord | null;
+  }): {
+    removedConversation: boolean;
+    removedCodeSessionConversation: boolean;
+    resetContinuity: boolean;
+    cancelledPendingCount: number;
+  } => {
+    const removedConversation = options.conversations.resetConversation({
+      agentId: args.agentId,
+      userId: args.canonicalUserId,
+      channel: args.channel,
+    });
+    const removedCodeSessionConversation = args.session
+      ? options.conversations.resetConversation(options.getCodeSessionConversationKey(args.session))
+      : false;
+    const resetContinuity = options.continuityThreadStore?.reset({
+      assistantId: args.agentId,
+      userId: args.canonicalUserId,
+    }) ?? false;
+    const cancelledPendingIds = new Set<string>();
+    for (const record of options.pendingActionStore?.cancelActiveForAssistantUser({
+      agentId: args.agentId,
+      userId: args.canonicalUserId,
+    }) ?? []) {
+      cancelledPendingIds.add(record.id);
+    }
+    if (args.session) {
+      for (const record of options.pendingActionStore?.cancelActiveForCodeSession({
+        agentId: args.agentId,
+        codeSessionId: args.session.id,
+      }) ?? []) {
+        cancelledPendingIds.add(record.id);
+      }
+      options.codeSessionStore.updateSession({
+        sessionId: args.session.id,
+        ownerUserId: args.canonicalUserId,
+        status: 'active',
+        uiState: {
+          selectedFilePath: null,
+        },
+        workState: {
+          focusSummary: '',
+          planSummary: '',
+          compactedSummary: '',
+          compactedSummaryUpdatedAt: undefined,
+          workingSet: null,
+          pendingApprovals: [],
+          recentJobs: [],
+          changedFiles: [],
+          verification: [],
+          workflow: null,
+        },
+      });
+    }
+    return {
+      removedConversation,
+      removedCodeSessionConversation,
+      resetContinuity,
+      cancelledPendingCount: cancelledPendingIds.size,
+    };
+  };
+
   const buildCodeSessionsList = (args: {
     canonicalUserId: string;
     principalId?: string;
@@ -539,7 +615,7 @@ export function createWorkspaceDashboardCallbacks(
       });
     },
 
-    onCodeSessionResetConversation: ({ sessionId, userId, channel }) => {
+    onCodeSessionResetConversation: ({ sessionId, userId, channel, agentId, principalId, surfaceId }) => {
       const resolvedChannel = channel?.trim() || 'web';
       const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
       const canonicalUserId = options.identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
@@ -547,19 +623,53 @@ export function createWorkspaceDashboardCallbacks(
       if (!session) {
         return { success: false, message: `Code session '${sessionId}' was not found.` };
       }
-      const removed = options.conversations.resetConversation(options.getCodeSessionConversationKey(session));
+      const stateAgentId = resolveStateAgentId(agentId, session);
+      const resolvedSurfaceId = surfaceId?.trim() || options.getCodeSessionSurfaceId({
+        channel: resolvedChannel,
+        userId: canonicalUserId,
+        principalId,
+      });
+      resetSharedConversationState({
+        agentId: stateAgentId,
+        canonicalUserId,
+        channel: resolvedChannel,
+        surfaceId: resolvedSurfaceId,
+        session,
+      });
+      options.trackConversationReset({
+        agentId: agentId?.trim() || stateAgentId,
+        channel: resolvedChannel,
+        channelUserId,
+        canonicalUserId,
+      });
       return {
         success: true,
-        message: removed
-          ? `Conversation reset for coding session '${session.title}'.`
-          : `No stored conversation found for coding session '${session.title}'.`,
+        message: 'Conversation reset.',
       };
     },
 
-    onConversationReset: async ({ agentId, userId, channel }) => {
+    onConversationReset: async ({ agentId, userId, channel, principalId, surfaceId }) => {
       const canonicalUserId = options.identity.resolveCanonicalUserId(channel, userId);
       const stateAgentId = options.resolveSharedStateAgentId(agentId) ?? agentId;
-      const removed = options.conversations.resetConversation({ agentId: stateAgentId, userId: canonicalUserId, channel });
+      const resolvedSurfaceId = surfaceId?.trim() || options.getCodeSessionSurfaceId({
+        channel,
+        userId: canonicalUserId,
+        principalId,
+      });
+      const currentCodeSession = options.codeSessionStore.resolveForRequest({
+        userId: canonicalUserId,
+        principalId,
+        channel,
+        surfaceId: resolvedSurfaceId,
+        touchAttachment: false,
+      })?.session ?? null;
+      resetSharedConversationState({
+        agentId: stateAgentId,
+        canonicalUserId,
+        channel,
+        surfaceId: resolvedSurfaceId,
+        session: currentCodeSession,
+      });
       options.trackConversationReset({
         agentId,
         channel,
@@ -568,9 +678,7 @@ export function createWorkspaceDashboardCallbacks(
       });
       return {
         success: true,
-        message: removed
-          ? `Conversation reset for '${agentId}'.`
-          : `No stored conversation found for '${agentId}'.`,
+        message: 'Conversation reset.',
       };
     },
 

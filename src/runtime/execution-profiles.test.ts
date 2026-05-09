@@ -181,7 +181,7 @@ describe('execution profiles', () => {
     });
   });
 
-  it('does not treat repo inspections with structured write steps as direct reasoning', () => {
+  it('keeps structured-write repo work on managed cloud before escalation', () => {
     const profile = selectExecutionProfile({
       config: createConfig(),
       routeDecision: { tier: 'external' },
@@ -202,14 +202,11 @@ describe('execution profiles', () => {
     });
 
     expect(profile).toMatchObject({
-      providerName: 'anthropic',
-      providerTier: 'frontier',
+      providerTier: 'managed_cloud',
     });
   });
 
-  it('prefers frontier for non-inspect repo-grounded chat_synthesis in balanced auto mode', () => {
-    // When a repo-grounded task goes through the delegated pipeline (e.g.,
-    // chat_synthesis without inspect operation), frontier preference applies.
+  it('keeps non-inspect repo-grounded chat_synthesis on managed cloud before escalation', () => {
     const profile = selectExecutionProfile({
       config: createConfig(),
       routeDecision: { tier: 'external' },
@@ -221,9 +218,9 @@ describe('execution profiles', () => {
     });
 
     expect(profile).toMatchObject({
-      providerName: 'anthropic',
-      providerTier: 'frontier',
+      providerTier: 'managed_cloud',
     });
+    expect(profile?.reason).toContain('managed cloud selected as the primary external tier');
   });
 
   it('still uses managed cloud for low-confidence repo-grounded coding inspection in balanced auto mode', () => {
@@ -263,9 +260,7 @@ describe('execution profiles', () => {
     });
   });
 
-  it('still prefers frontier for delegated repo-grounded tasks with chat_synthesis answer path', () => {
-    // Non-inspect repo-grounded tasks (e.g., security analysis) still
-    // go through the delegated pipeline and should still prefer frontier.
+  it('keeps security analysis on managed cloud before escalation in balanced auto mode', () => {
     const profile = selectExecutionProfile({
       config: createConfig(),
       routeDecision: { tier: 'external' },
@@ -277,7 +272,7 @@ describe('execution profiles', () => {
     });
 
     expect(profile).toMatchObject({
-      providerTier: 'frontier',
+      providerTier: 'managed_cloud',
     });
   });
 
@@ -503,7 +498,7 @@ describe('execution profiles', () => {
     expect(profile?.reason).toContain("managed-cloud role 'coding' selected provider 'ollama-cloud-coding'");
   });
 
-  it('prefers frontier for runtime-verified greenfield app creation in an attached coding session', () => {
+  it('uses the managed-cloud coding profile for runtime-verified greenfield app creation in an attached coding session', () => {
     const profile = selectExecutionProfile({
       config: createConfig(),
       routeDecision: {
@@ -525,11 +520,12 @@ describe('execution profiles', () => {
     });
 
     expect(profile).toMatchObject({
-      providerName: 'anthropic',
-      providerTier: 'frontier',
-      id: 'frontier_deep',
+      providerName: 'ollama-cloud-coding',
+      providerModel: 'qwen3-coder-next',
+      providerTier: 'managed_cloud',
+      id: 'managed_cloud_tool',
     });
-    expect(profile?.reason).toContain('frontier preferred for heavier repo/synthesis workload');
+    expect(profile?.reason).toContain('managed cloud coding role binding selected for coding workspace workload');
   });
 
   it('uses the managed-cloud direct profile for direct-assistant personal work even when the gateway prefers tool_loop', () => {
@@ -1119,7 +1115,7 @@ describe('execution profiles', () => {
     expect(delegatedDecision?.plannedSteps?.map((step) => step.kind)).toEqual(['search', 'answer']);
   });
 
-  it('keeps security verification on frontier when delegating to a security verifier', () => {
+  it('keeps security verification on managed cloud before an explicit escalation', () => {
     const config = createConfig();
     const parentProfile = selectExecutionProfile({
       config,
@@ -1160,8 +1156,7 @@ describe('execution profiles', () => {
       providerTier: 'managed_cloud',
     });
     expect(profile).toMatchObject({
-      providerName: 'anthropic',
-      providerTier: 'frontier',
+      providerTier: 'managed_cloud',
       selectionSource: 'delegated_role',
     });
   });
@@ -1201,7 +1196,7 @@ describe('execution profiles', () => {
     expect(profile?.reason).toContain('managed cloud coding role binding selected for coding workspace workload');
   });
 
-  it('prefers frontier for delegated runtime-verified greenfield app creation', () => {
+  it('uses the managed-cloud coding profile for delegated runtime-verified greenfield app creation', () => {
     const config = createConfig();
     const profile = selectDelegatedExecutionProfile({
       config,
@@ -1230,10 +1225,11 @@ describe('execution profiles', () => {
     });
 
     expect(profile).toMatchObject({
-      providerName: 'anthropic',
-      providerTier: 'frontier',
+      providerName: 'ollama-cloud-coding',
+      providerTier: 'managed_cloud',
       selectionSource: 'delegated_role',
     });
+    expect(profile?.reason).toContain('managed cloud coding role binding selected for coding workspace workload');
   });
 
   it('orders alternate frontier providers before degrading an escalated frontier profile', () => {

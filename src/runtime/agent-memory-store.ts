@@ -1276,15 +1276,24 @@ export class AgentMemoryStore {
 
   private shouldIncludeContextFlushEntryForQuery(query: NormalizedMemoryContextQuery | null): boolean {
     if (!query) return true;
-    if (query.tags.includes('continuity')) return true;
     if (query.categoryHints.includes('context flushes')) return true;
+    if (query.tags.includes('continuity') && !this.isCodingContinuityQuery(query)) return true;
+    if (query.tags.some((tag) => tag === 'approval' || tag === 'clarification' || tag === 'blocked' || tag === 'pending_action')) {
+      return true;
+    }
     return query.identifiers.some((identifier) => (
-      identifier.startsWith('code_session:')
-      || identifier.startsWith('pending_action:')
+      identifier.startsWith('pending_action:')
       || identifier.startsWith('automation:')
       || identifier.startsWith('auth_flow:')
-      || identifier.startsWith('execution:')
     ));
+  }
+
+  private isCodingContinuityQuery(query: NormalizedMemoryContextQuery): boolean {
+    return query.tags.includes('coding')
+      || query.identifiers.some((identifier) => (
+        identifier.startsWith('code_session:')
+        || identifier.startsWith('execution:')
+      ));
   }
 
   private scoreContextEntry(

@@ -405,6 +405,22 @@ function deriveWorkerLoopBudget(
   };
 }
 
+function deriveBrokeredLlmChatTimeoutMs(
+  selectedExecutionProfile: SelectedExecutionProfile,
+): number {
+  if (
+    selectedExecutionProfile.preferredAnswerPath === 'tool_loop'
+    || selectedExecutionProfile.expectedContextPressure === 'high'
+    || selectedExecutionProfile.providerTier === 'frontier'
+  ) {
+    return 240_000;
+  }
+  if (selectedExecutionProfile.expectedContextPressure === 'medium') {
+    return 180_000;
+  }
+  return 120_000;
+}
+
 function buildAnswerOnlyTaskContract(
   taskContract: DelegatedTaskContract,
   summary: string,
@@ -690,6 +706,20 @@ function buildDelegatedTaskPlanGuidance(taskContract: DelegatedTaskContract): st
     return `- ${step.stepId} [${step.kind}]${dependencySummary}: ${step.summary}${toolSummary}`;
   });
   const answerSteps = requiredSteps.filter((step) => step.kind === 'answer');
+  const hasRuntimeEvidenceStep = requiredSteps.some((step) => (
+    step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true
+  ));
+  const hasRepoWriteStep = requiredSteps.some((step) => (
+    step.kind === 'write'
+    || step.expectedToolCategories?.some((category) => {
+      const normalized = category.trim().toLowerCase();
+      return normalized === 'repo_mutation'
+        || normalized === 'repo_write'
+        || normalized === 'fs_write'
+        || normalized === 'fs_mkdir'
+        || normalized === 'coding_backend_run';
+    }) === true
+  ));
   const hasCatalogEvidenceStep = requiredSteps.some((step) => (
     step.kind !== 'answer'
     && (step.expectedToolCategories?.some(isCatalogEvidenceCategory) ?? false)
@@ -714,6 +744,20 @@ function buildDelegatedTaskPlanGuidance(taskContract: DelegatedTaskContract): st
           'When answering from automation or Second Brain catalog/list tools, use exact names, ids, enabled/status fields, and summaries returned by successful tool receipts.',
           'If the catalog/list evidence has no matching item, say that plainly and base the recommendation on the absence of a match.',
           'Do not describe a catalog item as a likely match unless the returned evidence explicitly supports that relation.',
+        ]
+      : []),
+    ...(taskContract.route === 'coding_task' && hasRepoWriteStep && hasRuntimeEvidenceStep
+      ? [
+          'Local app build rule:',
+          'For coding tasks that require both repo changes and runtime evidence, complete the implementation first, then collect a successful run/build/test/browser receipt before answering.',
+          'If `coding_backend_run` is available, prefer it as the main implementation tool for broad app builds; otherwise use concrete mutation tools such as fs_mkdir/fs_write/code_edit until the app files are complete.',
+          'For simple empty local app builds, avoid adding runtime package dependencies unless the user explicitly asked for a framework or a dependency is essential. Prefer dependency-free static HTML/CSS/JS or a built-in Node http server so the app can be run and verified without package_install approval.',
+          'For dependency-free app builds, create a complete runnable file set before runtime proof. If index.html links to app.js or styles.css, write those linked assets in the same implementation pass, and add a simple local entrypoint or verification script when the repo does not already have one.',
+          'When implementing directly with file tools, keep the first runnable version small, create all required files in as few tool rounds as possible, and include a bounded verification script such as `npm run verify`, `npm test`, or `npm run build` when the project does not already have one.',
+          'Do not call package_install for a simple app before first trying a dependency-free implementation path.',
+          'Do not spend repeated rounds polishing styling before runtime proof. Build the minimal working app, run or verify it, then make only necessary fixes from the runtime result.',
+          'If no execution-capable tool is visible when the runtime_evidence step remains, call find_tools with the exact query "coding_backend_run code_build code_test code_remote_exec shell_safe browser_navigate", then call one of the discovered execution tools.',
+          'Runtime evidence must come from an execution-capable tool receipt such as coding_backend_run, code_build, code_test, code_remote_exec, shell_safe, or a browser tool. A final answer or file write alone does not satisfy runtime_evidence.',
         ]
       : []),
     ...(answerSteps.length > 0
@@ -753,13 +797,24 @@ function buildDelegatedTaskContractToolExecutionCorrectionPrompt(
     ...new Set(evidenceSteps.flatMap((step) => step.expectedToolCategories ?? []).map((category) => category.trim()).filter(Boolean)),
   ];
   const hasRuntimeEvidencePlaceholder = expectedCategories.includes('runtime_evidence');
+  const hasLocalAppRuntimeEvidenceStep = evidenceSteps.some((step) => (
+    step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true
+    && isLocalAppRuntimeEvidenceStepSummary(step.summary)
+  ));
   return [
     'System correction: this delegated turn has a task contract that requires real tool evidence.',
     'Do not answer from memory, stop after tool discovery, or claim findings before satisfying the required non-answer planned steps with real tool results.',
     ...(expectedCategories.length > 0
       ? [`Use tools matching these planned categories before the final answer: ${expectedCategories.join(', ')}.`]
       : ['Use available tools that match the required planned steps before the final answer.']),
-    ...(hasRuntimeEvidencePlaceholder
+    ...(hasLocalAppRuntimeEvidenceStep
+      ? [
+          'For local app runtime_evidence, the required evidence is execution evidence, not another file read/list/write. Call an execution-capable tool such as coding_backend_run, code_build, code_test, code_remote_exec, shell_safe, or an available browser tool.',
+          'If a missing linked asset or missing local entrypoint prevents runtime evidence, create only that missing runtime support file first, then call the execution-capable tool.',
+          'If no execution-capable tool is visible, first call find_tools with the exact query "coding_backend_run code_build code_test code_remote_exec shell_safe browser_navigate", then call one of the discovered execution tools.',
+          'If the runtime command fails, fix the concrete repo files and run or verify the app again before answering.',
+        ]
+      : hasRuntimeEvidencePlaceholder
       ? [
           'The runtime_evidence category is a placeholder for real read-only evidence tools across the requested domains; find_tools can discover tools, but find_tools itself does not satisfy runtime_evidence.',
           'After discovering a matching read-only status, list, read, search, or schema tool, call that tool. If no matching tool exists for a requested domain after discovery, report that domain as unavailable in the final answer instead of continuing broad discovery.',
@@ -768,6 +823,12 @@ function buildDelegatedTaskContractToolExecutionCorrectionPrompt(
     'After collecting tool evidence, synthesize the answer from those tool results.',
     'Only pause if a real tool result returns pending_approval or another real blocker.',
   ].join(' ');
+}
+
+function isLocalAppRuntimeEvidenceStepSummary(summary: string | undefined): boolean {
+  const normalized = summary?.trim().toLowerCase() ?? '';
+  return /\b(?:start|run|serve|launch|build|test|lint|verify|open|browse|exercise)\b/.test(normalized)
+    && /\b(?:app|application|site|server|dev server|localhost|local url|runtime|browser)\b/.test(normalized);
 }
 
 function mapEvidenceStatus(result: Record<string, unknown> | undefined, errorMessage?: string): EvidenceReceipt['status'] {
@@ -2312,7 +2373,7 @@ export class BrokeredWorkerSession {
       executionProfile
         ? {
             providerName: executionProfile.providerName,
-            fallbackProviderOrder: executionProfile.fallbackProviderOrder,
+            timeoutMs: deriveBrokeredLlmChatTimeoutMs(executionProfile),
           }
         : undefined,
     );

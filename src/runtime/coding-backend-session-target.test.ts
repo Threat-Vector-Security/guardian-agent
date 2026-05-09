@@ -70,6 +70,18 @@ describe('resolveCodingBackendSessionTarget', () => {
     });
   });
 
+  it('treats descriptive current attached repo targets as the current attachment', () => {
+    expect(resolveCodingBackendSessionTarget({
+      sessions: [...SESSIONS],
+      currentSessionId: 'guardian',
+      requestedSessionTarget: 'currently attached empty music app repo',
+    })).toEqual({
+      status: 'current',
+      currentSession: SESSIONS[0],
+      targetSession: SESSIONS[0],
+    });
+  });
+
   it('requires a switch when the mentioned workspace differs from the current attachment', () => {
     expect(resolveCodingBackendSessionTarget({
       sessions: [...SESSIONS],

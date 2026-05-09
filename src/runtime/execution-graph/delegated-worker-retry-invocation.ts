@@ -30,6 +30,7 @@ export interface DelegatedWorkerRetryInvocationInput<TRequest, TResult> {
   insufficiency: DelegatedResultSufficiencyFailure | null;
   codeSessionId?: string;
   baseSections: PromptAssemblyAdditionalSection[];
+  allowSameProfileRetry?: boolean;
   buildRetryRequest: (input: DelegatedWorkerRetryRequestBuildInput<TRequest>) => TRequest;
   dispatchRetry: (input: DelegatedWorkerRetryDispatchInput<TRequest>) => Promise<TResult>;
   drainPendingJobs: () => Promise<DelegatedJobDrainResult>;
@@ -99,7 +100,7 @@ export async function runDelegatedWorkerRetryInvocation<TRequest, TResult>(
   const retryProfile = shouldUseSameProfileDelegatedRetry(
     insufficiency,
     input.currentExecutionProfile,
-  )
+  ) && input.allowSameProfileRetry !== false
     ? input.currentExecutionProfile ?? null
     : selectDelegatedRetryExecutionProfile({
         config: input.config,

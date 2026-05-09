@@ -383,8 +383,8 @@ function hasAttachedCodeSessionReference(repairContext: IntentGatewayRepairConte
 }
 
 function refersToCurrentAttachedCodingWorkspace(normalizedSourceContent: string): boolean {
-  return /\b(?:attached|current|active)\b[\s\S]{0,60}\b(?:coding\s+)?(?:workspace|session)\b/.test(normalizedSourceContent)
-    || /\b(?:coding\s+)?(?:workspace|session)\b[\s\S]{0,60}\b(?:attached|current|active)\b/.test(normalizedSourceContent);
+  return /\b(?:attached|current|currently|active|selected)\b[\s\S]{0,80}\b(?:(?:coding\s+)?(?:workspace|session)|repo(?:sitory)?|project|codebase)\b/.test(normalizedSourceContent)
+    || /\b(?:(?:coding\s+)?(?:workspace|session)|repo(?:sitory)?|project|codebase)\b[\s\S]{0,80}\b(?:attached|current|currently|active|selected)\b/.test(normalizedSourceContent);
 }
 
 function inferWebSearchQuery(

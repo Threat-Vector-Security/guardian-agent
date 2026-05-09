@@ -1445,11 +1445,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const text = readOutput(output);
     expect(text).toContain('Conversation reset');
     expect(text).not.toContain('coding session');
-    expect(codeResetSeen).toEqual([{
-      sessionId: 'code-2',
-      channel: 'cli',
-      userId: 'owner',
-    }]);
+    expect(codeResetSeen).toEqual([]);
     expect(chatResetSeen).toEqual([{
       agentId: 'agent-1',
       channel: 'cli',

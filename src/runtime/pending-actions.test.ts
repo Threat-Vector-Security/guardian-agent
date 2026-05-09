@@ -190,6 +190,63 @@ describe('PendingActionStore', () => {
     expect(active?.blocker.kind).toBe('workspace_switch');
   });
 
+  it('cancels active pending actions for a reset conversation scope', () => {
+    const store = createStore();
+    const scope = createScope();
+    const first = store.replaceActive(scope, createRecord());
+    const sameConversationOtherSurface = store.replaceActive({
+      ...scope,
+      surfaceId: 'surface-2',
+    }, createRecord());
+    const otherUser = store.replaceActive({
+      ...scope,
+      userId: 'user-2',
+    }, createRecord());
+
+    const cancelled = store.cancelActiveForAssistantUser({
+      agentId: 'local',
+      userId: 'user-1',
+    });
+
+    expect(cancelled.map((record) => record.id).sort()).toEqual([
+      first.id,
+      sameConversationOtherSurface.id,
+    ].sort());
+    expect(store.get(first.id)?.status).toBe('cancelled');
+    expect(store.get(sameConversationOtherSurface.id)?.status).toBe('cancelled');
+    expect(store.get(otherUser.id)?.status).toBe('pending');
+  });
+
+  it('cancels active pending actions tied to a coding session conversation', () => {
+    const store = createStore();
+    const scope = createScope();
+    const normalConversation = store.replaceActive(scope, createRecord());
+    const metadataLinked = store.replaceActive({
+      ...scope,
+      userId: 'user-2',
+      surfaceId: 'surface-2',
+    }, createRecord({ codeSessionId: 'code-1' }));
+    const conversationKeyLinked = store.replaceActive({
+      ...scope,
+      userId: 'code-session:code-1:music-app',
+      channel: 'code-session',
+      surfaceId: 'code-session:code-1:music-app',
+    }, createRecord());
+
+    const cancelled = store.cancelActiveForCodeSession({
+      agentId: 'local',
+      codeSessionId: 'code-1',
+    });
+
+    expect(cancelled.map((record) => record.id).sort()).toEqual([
+      metadataLinked.id,
+      conversationKeyLinked.id,
+    ].sort());
+    expect(store.get(metadataLinked.id)?.status).toBe('cancelled');
+    expect(store.get(conversationKeyLinked.id)?.status).toBe('cancelled');
+    expect(store.get(normalConversation.id)?.status).toBe('pending');
+  });
+
   it('finds active approval blockers by approval id', () => {
     const store = createStore();
     const scope = createScope();

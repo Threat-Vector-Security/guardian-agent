@@ -221,6 +221,32 @@ describe('AgentMemoryStore context packing', () => {
     expect(result.queryPreview).toContain('save the browser automation artifact');
   });
 
+  it('does not recall context flushes for a fresh coding turn only because continuity metadata exists', () => {
+    const store = makeStore(260);
+    store.append('agent1', {
+      content: '## Context Flush\ndate: 2026-05-07\nobjective:\nBuild an older music app attempt that should not leak into a clean new coding task.',
+      summary: 'Older music app context flush.',
+      createdAt: '2026-05-07',
+      category: 'Context Flushes',
+      sourceType: 'system',
+      tags: ['context_flush', 'continuity', 'coding'],
+      provenance: {
+        sessionId: 'code_session:music-session',
+      },
+    });
+
+    const result = store.loadForContextWithSelection('agent1', {
+      query: {
+        text: 'New task. Build a simple music app from scratch.',
+        tags: ['continuity', 'coding'],
+        identifiers: ['default:owner', 'code_session:music-session', 'execution:current-run'],
+      },
+    });
+
+    expect(result.content).not.toContain('Older music app context flush.');
+    expect(result.selectedEntries.some((entry) => entry.isContextFlush)).toBe(false);
+  });
+
   it('prefers operator-curated pages over equally matching derived artifacts', () => {
     const store = makeStore(260);
     store.append('agent1', {

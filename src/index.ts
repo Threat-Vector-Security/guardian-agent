@@ -675,6 +675,7 @@ function buildDashboardCallbacks(
   microsoftServiceRef: { current: import('./microsoft/microsoft-service.js').MicrosoftService | null },
   toolExecutorRef: { current: import('./tools/executor.js').ToolExecutor | null },
   pendingActionStore: PendingActionStore,
+  continuityThreadStore: ContinuityThreadStore,
   codingBackendServiceRef: { current: CodingBackendService | null },
   prepareIncomingDispatch: (
     channelDefault: string | undefined,
@@ -2121,6 +2122,8 @@ function buildDashboardCallbacks(
       codeSessionStore,
       identity,
       conversations,
+      continuityThreadStore,
+      pendingActionStore,
       runTimeline,
       toolExecutor,
       refreshRunTimelineSnapshots,
@@ -6509,6 +6512,7 @@ async function main(): Promise<void> {
     microsoftServiceRef,
     { current: toolExecutor },
     pendingActionStore,
+    continuityThreadStore,
     codingBackendServiceRef,
     prepareIncomingDispatch,
   );

@@ -128,6 +128,26 @@ describe('resolveIntentGatewayEntities', () => {
     expect(result.provenance?.sessionTarget).toBeUndefined();
   });
 
+  it('does not re-match descriptive current attached repo phrasing when a code session is already attached', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      {
+        sourceContent: 'New task. In the currently attached empty music app repo, build a simple music app from scratch.',
+        continuity: {
+          continuityKey: 'default:owner',
+          linkedSurfaceCount: 1,
+          activeExecutionRefs: ['code_session:music-app'],
+        },
+      },
+      'coding_task',
+      'create',
+      'repair.structured',
+    );
+
+    expect(result.entities.sessionTarget).toBeUndefined();
+    expect(result.provenance?.sessionTarget).toBeUndefined();
+  });
+
   it('preserves classifier-provided coding-task session targets when no source content is available', () => {
     const result = resolveIntentGatewayEntities(
       {

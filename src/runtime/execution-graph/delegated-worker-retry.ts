@@ -32,6 +32,7 @@ export interface DelegatedResultSufficiencyFailure {
     stepId: string;
     kind?: string;
     summary: string;
+    expectedToolCategories?: string[];
     status: 'missing' | 'failed' | 'blocked';
     reason?: string;
   }>;
@@ -144,7 +145,11 @@ export function selectDelegatedRetryExecutionProfile(
 ): SelectedExecutionProfile | null {
   const currentProfile = input.currentProfile ?? null;
   if (!input.config) return currentProfile;
-  if (input.insufficiency && isDelegatedToolEvidenceRetry(input.insufficiency)) {
+  if (
+    input.insufficiency
+    && isDelegatedToolEvidenceRetry(input.insufficiency)
+    && !isDelegatedRuntimeEvidenceRetry(input.insufficiency)
+  ) {
     const sibling = selectManagedCloudSiblingDelegatedExecutionProfile({
       config: input.config,
       currentProfile,
@@ -555,6 +560,16 @@ export function isDelegatedToolEvidenceRetry(
   return hasUnsatisfiedNonAnswerStep || hasMissingToolEvidence;
 }
 
+export function isDelegatedRuntimeEvidenceRetry(
+  insufficiency: DelegatedResultSufficiencyFailure,
+): boolean {
+  const missingEvidenceKinds = insufficiency.decision.missingEvidenceKinds ?? [];
+  return missingEvidenceKinds.includes('runtime_evidence')
+    || insufficiency.unsatisfiedSteps.some((step) => (
+      step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true
+    ));
+}
+
 export function buildDelegatedRetryDetail(
   targetLabel: string,
   executionProfile: SelectedExecutionProfile | undefined,
@@ -580,6 +595,10 @@ export function shouldUseSameProfileDelegatedRetry(
   currentProfile: SelectedExecutionProfile | undefined,
 ): boolean {
   return shouldRetryDelegatedAnswerSynthesisOnSameProfile(insufficiency, currentProfile)
+    || (
+      isDelegatedRuntimeEvidenceRetry(insufficiency)
+      && currentProfile?.providerTier !== 'frontier'
+    )
     || (
       shouldRetryDelegatedCorrectivePassOnSameProfile(insufficiency, currentProfile)
       && !isDelegatedToolEvidenceRetry(insufficiency)
@@ -711,6 +730,38 @@ export function appendDelegatedRetrySection(
       },
     ];
   }
+  if (isDelegatedRuntimeEvidenceRetry(insufficiency)) {
+    return [
+      ...sections,
+      {
+        section: 'Delegated Retry Directive',
+        mode: 'plain',
+        content: [
+          'The previous delegated attempt did not start or exercise the local app requested by the user.',
+          `Failure mode: ${insufficiency.failureSummary}`,
+          'Unsatisfied required steps:',
+          ...unsatisfiedLines,
+          `Already satisfied steps: ${satisfiedSummary}`,
+          ...(satisfiedRefLines.length > 0
+            ? [
+                'Grounded file/path candidates from already satisfied steps:',
+                ...satisfiedRefLines,
+                'Reuse those grounded candidates before starting any new speculative search.',
+              ]
+            : []),
+          retryInstruction,
+          'This retry is a runtime-proof retry. Successful file reads, file listings, and file writes do not satisfy the remaining runtime evidence step.',
+          'If the app already has a runnable entrypoint and all referenced static assets exist, your next tool action must target runtime proof: call coding_backend_run, code_build, code_test, code_remote_exec, shell_safe, or an available browser tool before any more file reads or writes.',
+          'If the app is not yet runnable because a referenced asset, server entrypoint, or package verification script is missing, create only those missing runtime support files first, then immediately call the execution-capable tool.',
+          'If no execution-capable tool is visible, first call find_tools with the exact query "coding_backend_run code_build code_test code_remote_exec shell_safe browser_navigate", then call one of the discovered execution tools.',
+          'If the runtime command fails, fix the repo files and run the app or verification command again before answering.',
+          'Capture the command, local URL when available, and the concrete runtime or build result in the final answer.',
+          'Do not ask the user whether to proceed when the original request already asked you to start or verify the app.',
+          'Only pause if a real tool result returns pending_approval or another real blocker.',
+        ].join('\n'),
+      },
+    ];
+  }
   if (missingEvidenceKinds.includes('execution_evidence')) {
     return [
       ...sections,
@@ -830,6 +881,9 @@ function buildDelegatedRetryReason(
   if (missingEvidenceKinds.includes('filesystem_mutation_receipt')) {
     return 'the previous attempt claimed a filesystem change without producing a successful tool result or a real blocker';
   }
+  if (missingEvidenceKinds.includes('runtime_evidence')) {
+    return 'the previous attempt did not start or exercise the app locally';
+  }
   if (missingEvidenceKinds.includes('execution_evidence')) {
     return 'the previous attempt did not actually execute the requested command or verification step';
   }
@@ -871,6 +925,9 @@ function collectDelegatedUnsatisfiedSteps(
       stepId,
       ...(step?.kind ? { kind: step.kind } : {}),
       summary: step?.summary ?? fallbackReason ?? stepId,
+      ...(step?.expectedToolCategories?.length
+        ? { expectedToolCategories: [...step.expectedToolCategories] }
+        : {}),
       status: receipt?.status === 'blocked'
         ? 'blocked'
         : receipt?.status === 'failed'

@@ -532,9 +532,9 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ mode }),
   }),
-  resetConversation: (agentId, userId = 'web-user', channel = 'web') => request('/api/conversations/reset', {
+  resetConversation: (agentId, userId = 'web-user', channel = 'web', surfaceId) => request('/api/conversations/reset', {
     method: 'POST',
-    body: JSON.stringify({ agentId, userId, channel }),
+    body: JSON.stringify({ agentId, userId, channel, ...(surfaceId ? { surfaceId } : {}) }),
   }),
   conversationSessions: (agentId, userId = 'web-user', channel = 'web') => {
     const qs = new URLSearchParams({ userId, channel });

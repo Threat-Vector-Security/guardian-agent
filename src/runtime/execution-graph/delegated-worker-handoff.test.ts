@@ -42,6 +42,46 @@ describe('delegated worker handoff graph policy', () => {
     expect(resolveDelegatedWorkerLifecycle(metadata, handoff.unresolvedBlockerKind, verification)).toBe('blocked');
   });
 
+  it('does not surface stale approval metadata once verification is satisfied', () => {
+    const verification: VerificationDecision = {
+      decision: 'satisfied',
+      reasons: ['Delegated worker satisfied every required planned step.'],
+      retryable: false,
+    };
+    const metadata = {
+      ...buildDelegatedExecutionMetadata(buildDelegatedSyntheticEnvelope({
+        taskContract: delegatedTaskContract(),
+        runStatus: 'suspended',
+        stopReason: 'approval_required',
+        operatorSummary: 'Completed and verified the app.',
+        interruptions: [{
+          interruptionId: 'approval-extra-run',
+          kind: 'approval',
+          prompt: 'Waiting for approval to run an extra command.',
+          approvalSummaries: [{ id: 'approval-extra-run', toolName: 'code_remote_exec', argsPreview: '{}' }],
+        }],
+      })),
+      pendingAction: {
+        blocker: {
+          kind: 'approval',
+          prompt: 'Waiting for approval to run an extra command.',
+          approvalSummaries: [{ id: 'approval-extra-run', toolName: 'code_remote_exec', argsPreview: '{}' }],
+        },
+      },
+    };
+
+    const handoff = buildDelegatedHandoff('Completed and verified the app.', metadata, 'short_lived', verification);
+
+    expect(handoff).toMatchObject({
+      summary: 'Completed and verified the app.',
+      runClass: 'short_lived',
+      reportingMode: 'inline_response',
+    });
+    expect(handoff.unresolvedBlockerKind).toBeUndefined();
+    expect(handoff.approvalCount).toBeUndefined();
+    expect(resolveDelegatedWorkerLifecycle(metadata, handoff.unresolvedBlockerKind, verification)).toBe('completed');
+  });
+
   it('surfaces safe partial progress when delegated work pauses for approval', () => {
     const taskContract = delegatedTaskContract();
     const metadata = {
@@ -271,6 +311,20 @@ describe('delegated worker handoff graph policy', () => {
       codeSessionId: 'code-session-1',
       orchestration: { role: 'implementer', label: 'Workspace Implementer', lenses: ['coding-workspace'] },
     })).toBe('in_invocation');
+    expect(resolveDelegatedWorkerRunClass({
+      originChannel: 'code-session',
+      originSurfaceId: 'web-guardian-chat',
+      codeSessionId: 'code-session-1',
+      activeExecutionRefs: ['execution:req-1', 'code_session:code-session-1'],
+      orchestration: { role: 'implementer', label: 'Workspace Implementer', lenses: ['coding-workspace'] },
+    })).toBe('in_invocation');
+    expect(resolveDelegatedWorkerRunClass({
+      originChannel: 'code-session',
+      originSurfaceId: 'web-guardian-chat',
+      codeSessionId: 'code-session-1',
+      activeExecutionRefs: ['code_session:code-session-1', 'delegated:repo-digest'],
+      orchestration: { role: 'explorer', label: 'Workspace Explorer', lenses: ['coding-workspace'] },
+    })).toBe('long_running');
     expect(resolveDelegatedWorkerRunClass({
       codeSessionId: 'code-session-1',
       orchestration: { role: 'explorer', label: 'Workspace Explorer', lenses: ['coding-workspace'] },

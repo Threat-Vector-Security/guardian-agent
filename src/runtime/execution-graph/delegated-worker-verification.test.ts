@@ -137,6 +137,95 @@ describe('delegated worker verification graph policy', () => {
     expect(result.decision.missingEvidenceKinds ?? []).not.toContain('delegated_result_envelope');
   });
 
+  it('allows a later successful runtime job to satisfy a step after an earlier failed proof', () => {
+    const taskContract: DelegatedTaskContract = {
+      kind: 'repo_mutation',
+      route: 'coding_task',
+      operation: 'create',
+      requiresEvidence: true,
+      allowsAnswerFirst: false,
+      requireExactFileReferences: false,
+      plan: {
+        planId: 'plan-runtime-recovery',
+        steps: [
+          {
+            stepId: 'write',
+            kind: 'write',
+            summary: 'Create the app files.',
+            expectedToolCategories: ['repo_mutation'],
+            required: true,
+          },
+          {
+            stepId: 'verify',
+            kind: 'tool_call',
+            summary: 'Verify the app locally.',
+            expectedToolCategories: ['runtime_evidence'],
+            required: true,
+            dependsOn: ['write'],
+          },
+          {
+            stepId: 'answer',
+            kind: 'answer',
+            summary: 'Report the URL and verification.',
+            required: true,
+            dependsOn: ['verify'],
+          },
+        ],
+      },
+    };
+    const metadata = buildDelegatedExecutionMetadata(buildDelegatedSyntheticEnvelope({
+      taskContract,
+      runStatus: 'incomplete',
+      stopReason: 'end_turn',
+      operatorSummary: 'Needs runtime recovery.',
+    }));
+
+    const result = verifyDelegatedWorkerResult({
+      metadata,
+      intentDecision: undefined,
+      executionProfile: undefined,
+      taskContract,
+      jobSnapshots: [
+        {
+          id: 'write-index',
+          toolName: 'fs_write',
+          status: 'succeeded',
+          startedAt: 1,
+          completedAt: 2,
+          argsPreview: '{"path":"public/index.html"}',
+          resultPreview: '{"path":"public/index.html"}',
+        },
+        {
+          id: 'verify-missing-asset',
+          toolName: 'code_build',
+          status: 'failed',
+          startedAt: 3,
+          completedAt: 4,
+          argsPreview: '{"cwd":"S:/Development/MusicApp","command":"npm run verify"}',
+          resultPreview: '{"success":false,"output":{"stderr":"MISSING: public/app.js"}}',
+        },
+        {
+          id: 'verify-success',
+          toolName: 'code_build',
+          status: 'succeeded',
+          startedAt: 5,
+          completedAt: 6,
+          argsPreview: '{"cwd":"S:/Development/MusicApp","command":"npm run verify"}',
+          resultPreview: '{"success":true,"output":{"stdout":"Verify passed."}}',
+        },
+      ],
+    });
+
+    expect(result.envelope.stepReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stepId: 'verify',
+        status: 'satisfied',
+        evidenceReceiptIds: ['job:verify-success'],
+      }),
+    ]));
+    expect(result.decision.unsatisfiedStepIds).not.toContain('verify');
+  });
+
   it('finalizes verification envelopes and trace reconciliation details without WorkerManager state', () => {
     const supervisorContract = delegatedTaskContract();
     const workerContract: DelegatedTaskContract = {

@@ -65,6 +65,14 @@ export function resolveCodingBackendSessionTarget(input: {
     };
   }
 
+  if (currentSession && refersToCurrentAttachedSessionTarget(requestedSessionTarget)) {
+    return {
+      status: 'current',
+      currentSession,
+      targetSession: currentSession,
+    };
+  }
+
   if (currentSession) {
     const currentResolved = resolveCodeSessionTarget(requestedSessionTarget, [currentSession]);
     if (currentResolved.session) {
@@ -118,4 +126,10 @@ function normalizeRequestedSessionTarget(value?: string | null): string | undefi
     .filter(Boolean)
     .filter((token) => !GENERIC_SESSION_TARGET_TOKENS.has(token));
   return semanticTokens.length > 0 ? cleaned : undefined;
+}
+
+function refersToCurrentAttachedSessionTarget(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return /\b(?:attached|current|currently|active|selected)\b[\s\S]{0,80}\b(?:(?:coding\s+)?(?:workspace|session)|repo(?:sitory)?|project|codebase)\b/.test(normalized)
+    || /\b(?:(?:coding\s+)?(?:workspace|session)|repo(?:sitory)?|project|codebase)\b[\s\S]{0,80}\b(?:attached|current|currently|active|selected)\b/.test(normalized);
 }

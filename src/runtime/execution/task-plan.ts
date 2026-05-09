@@ -60,10 +60,25 @@ const FILESYSTEM_WRITE_TOOL_NAMES = new Set([
 ]);
 const REPO_MUTATION_TOOL_NAMES = new Set([
   ...FILESYSTEM_WRITE_TOOL_NAMES,
+  'coding_backend_run',
   'code_git_commit',
   'code_remote_exec',
   'package_install',
   'shell_safe',
+]);
+const LOCAL_APP_RUNTIME_EVIDENCE_TOOL_NAMES = new Set([
+  'coding_backend_run',
+  'shell_safe',
+  'code_remote_exec',
+  'code_test',
+  'code_build',
+  'code_lint',
+  'browser_navigate',
+  'browser_read',
+  'browser_state',
+  'browser_extract',
+  'browser_act',
+  'browser_interact',
 ]);
 const M365_STATUS_TOOL_CATEGORIES = new Set([
   'm365_calendar_status',
@@ -339,6 +354,7 @@ function isRepoMutationToolCategory(value: string): boolean {
     || normalized === 'git_write'
     || normalized === 'shell'
     || normalized === 'command'
+    || normalized === 'coding_backend_run'
     || normalized === 'code_remote_exec'
     || normalized === 'package_install'
     || normalized === 'code_git_commit'
@@ -356,6 +372,7 @@ function isWriteToolCategory(value: string): boolean {
 function isExecutionToolCategory(value: string): boolean {
   const normalized = normalizeExpectedToolCategory(value);
   return normalized === 'tool_call'
+    || normalized === 'coding_backend_run'
     || normalized === 'code_remote_exec'
     || normalized === 'execute_code'
     || normalized === 'shell'
@@ -842,7 +859,7 @@ export function matchPlannedStepForTool(input: ToolStepMatchInput): string | und
       };
     }
     if (step.kind === toolKind) score += 8;
-    if (step.expectedToolCategories?.some((value) => expectedToolCategoryMatchesTool(value, input.toolName, toolKind, step.kind))) {
+    if (step.expectedToolCategories?.some((value) => expectedToolCategoryMatchesTool(value, input.toolName, toolKind, step))) {
       score += 6;
     }
     const summaryRefs = extractNormalizedRefs(step.summary);
@@ -1034,8 +1051,20 @@ export function collectMissingEvidenceKinds(
         const receipt = receiptByStepId.get(step.stepId);
         return !receipt || receipt.evidenceReceiptIds.length === 0 || receipt.status === 'failed';
       })
-      .map((step) => step.kind),
+      .map((step) => missingEvidenceKindForStep(step)),
   )];
+}
+
+function missingEvidenceKindForStep(step: PlannedStep): string {
+  if (
+    step.kind === 'tool_call'
+    && step.expectedToolCategories?.some((category) => (
+      normalizeExpectedToolCategory(category) === 'runtime_evidence'
+    ))
+  ) {
+    return 'runtime_evidence';
+  }
+  return step.kind;
 }
 
 export function collectSatisfiedStepIdsRespectingDependencies(
@@ -1429,6 +1458,7 @@ function inferStepKindFromToolName(toolName: string): PlannedStepKind {
     || toolName === 'fs_delete'
     || toolName === 'fs_move'
     || toolName === 'fs_copy'
+    || toolName === 'coding_backend_run'
     || isSecondBrainWriteToolName(toolName)
     || AUTOMATION_WRITE_TOOL_NAMES.has(toolName)
   ) {
@@ -1497,7 +1527,7 @@ function toolNameSatisfiesStep(
       : step.kind === inferredToolKind;
   }
   return step.expectedToolCategories.some((value) => (
-    expectedToolCategoryMatchesTool(value, toolName, inferredToolKind, step.kind)
+    expectedToolCategoryMatchesTool(value, toolName, inferredToolKind, step)
   ));
 }
 
@@ -1505,18 +1535,14 @@ function expectedToolCategoryMatchesTool(
   value: string,
   toolName: string,
   inferredToolKind: PlannedStepKind,
-  stepKind: PlannedStepKind,
+  step: PlannedStep,
 ): boolean {
   const normalized = normalizeExpectedToolCategory(value);
   return normalized === toolName
     || normalized === inferredToolKind
     || (isFilesystemReadCategory(normalized) && FILESYSTEM_READ_TOOL_NAMES.has(toolName))
     || (isFilesystemWriteCategory(normalized) && FILESYSTEM_WRITE_TOOL_NAMES.has(toolName))
-    || (normalized === 'runtime_evidence' && toolName !== 'find_tools' && (
-      inferredToolKind === 'read'
-        || inferredToolKind === 'search'
-        || inferredToolKind === 'tool_call'
-    ))
+    || (normalized === 'runtime_evidence' && runtimeEvidenceCategoryMatchesTool(step, toolName, inferredToolKind))
     || (normalized === 'repo' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
     || (normalized === 'repository' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
     || (normalized === 'repo_inspect' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
@@ -1531,12 +1557,12 @@ function expectedToolCategoryMatchesTool(
     || (normalized === 'browser_task' && (toolName.startsWith('browser_') || toolName.startsWith('web_')))
     || (normalized === 'search_task' && (toolName.startsWith('web_') || toolName.startsWith('browser_')))
     || (normalized === 'memory' && (
-      stepKind === 'memory_save'
+      step.kind === 'memory_save'
         ? toolName === 'memory_save'
         : MEMORY_READ_TOOL_NAMES.has(toolName)
     ))
     || (normalized === 'memory_task' && (
-      stepKind === 'memory_save'
+      step.kind === 'memory_save'
         ? toolName === 'memory_save'
         : MEMORY_READ_TOOL_NAMES.has(toolName)
     ))
@@ -1545,6 +1571,26 @@ function expectedToolCategoryMatchesTool(
     || (GWS_STATUS_TOOL_CATEGORIES.has(normalized) && (toolName === 'gws_status' || toolName === 'gws'))
     || (normalized === 'm365' && toolName.startsWith('m365'))
     || (normalized === 'gws' && (toolName === 'gws' || toolName === 'gws_schema'));
+}
+
+function runtimeEvidenceCategoryMatchesTool(
+  step: PlannedStep,
+  toolName: string,
+  inferredToolKind: PlannedStepKind,
+): boolean {
+  if (toolName === 'find_tools') return false;
+  if (isLocalAppRuntimeEvidenceStep(step)) {
+    return LOCAL_APP_RUNTIME_EVIDENCE_TOOL_NAMES.has(toolName);
+  }
+  return inferredToolKind === 'read'
+    || inferredToolKind === 'search'
+    || inferredToolKind === 'tool_call';
+}
+
+function isLocalAppRuntimeEvidenceStep(step: PlannedStep): boolean {
+  const normalized = (step.summary ?? '').toLowerCase();
+  return /\b(?:start|run|serve|launch|build|test|lint|verify|open|browse)\b/.test(normalized)
+    && /\b(?:app|application|site|server|dev server|localhost|local url|runtime|browser)\b/.test(normalized);
 }
 
 function normalizeExpectedToolCategory(value: string): string {

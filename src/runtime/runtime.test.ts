@@ -10,6 +10,7 @@ import {
   readSelectedExecutionProfileMetadata,
   selectExecutionProfile,
 } from './execution-profiles.js';
+import { attachPreRoutedIntentGatewayMetadata } from './intent-gateway.js';
 
 class EchoAgent extends BaseAgent {
   receivedMessages: UserMessage[] = [];
@@ -1098,6 +1099,68 @@ describe('Runtime', () => {
 
       expect(observedAbortSignal?.aborted).toBe(true);
       expect(observedAbortEvent).toBe(true);
+    });
+
+    it('extends the invocation budget for runtime-proven coding tasks', async () => {
+      let observedAbortSignal: AbortSignal | undefined;
+      let observedAbortEvent = false;
+      class RuntimeVerifiedCodingAgent extends BaseAgent {
+        constructor() {
+          super('runtime-coding', 'RuntimeCodingAgent', { handleMessages: true });
+        }
+        async onMessage(message: UserMessage): Promise<AgentResponse> {
+          observedAbortSignal = message.abortSignal;
+          message.abortSignal?.addEventListener('abort', () => {
+            observedAbortEvent = true;
+          });
+          await new Promise(r => setTimeout(r, 80));
+          return { content: 'verified' };
+        }
+      }
+
+      runtime.registerAgent(createAgentDefinition({
+        agent: new RuntimeVerifiedCodingAgent(),
+        resourceLimits: { maxInvocationBudgetMs: 50, maxTokensPerMinute: 0, maxConcurrentTools: 0, maxQueueDepth: 0 },
+      }));
+
+      const response = await runtime.dispatchMessage('runtime-coding', {
+        id: 'runtime-coding-request',
+        userId: 'u',
+        channel: 'cli',
+        content: 'Build and verify the app locally.',
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'test-model',
+          latencyMs: 1,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'create',
+            summary: 'Build and verify an app locally.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'repo_grounded',
+            preferredTier: 'external',
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            expectedContextPressure: 'high',
+            preferredAnswerPath: 'tool_loop',
+            plannedSteps: [
+              { kind: 'write', summary: 'Create app files.', expectedToolCategories: ['fs_write'], required: true },
+              { kind: 'tool_call', summary: 'Run the app locally.', expectedToolCategories: ['runtime_evidence'], required: true },
+              { kind: 'answer', summary: 'Report the local URL and verification.', required: true },
+            ],
+            entities: {},
+          },
+        }),
+        timestamp: Date.now(),
+      });
+
+      expect(response.content).toBe('verified');
+      expect(observedAbortSignal?.aborted).toBe(false);
+      expect(observedAbortEvent).toBe(false);
     });
 
     it('should enforce token rate limit', async () => {

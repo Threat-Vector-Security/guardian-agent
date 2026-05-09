@@ -1,5 +1,6 @@
 import type { IntentGatewayEntities, IntentGatewayOperation } from '../types.js';
 import { collapseIntentGatewayWhitespace } from '../text.js';
+import { isExplicitWorkspaceAppBuildRequest } from '../request-patterns.js';
 
 const REMOTE_SANDBOX_REQUEST_PATTERN = /\b(?:remote|cloud|isolated|managed)\s+sandbox\b/i;
 const NAMED_REMOTE_SANDBOX_REQUEST_PATTERN = /\b(?:using|with|via)\s+(?:the\s+)?(?:existing\s+|current\s+|managed\s+)?[a-z0-9][a-z0-9._ -]*?\s+sandbox\b/i;
@@ -419,7 +420,8 @@ export function hasCodingDocumentArtifactReference(normalized: string): boolean 
 function hasExplicitCodingTaskTargetReference(normalized: string): boolean {
   return hasExplicitRepoFileReference(normalized)
     || hasExplicitRepoPathReference(normalized)
-    || hasCodingDocumentArtifactReference(normalized);
+    || hasCodingDocumentArtifactReference(normalized)
+    || isExplicitWorkspaceAppBuildRequest(normalized);
 }
 
 function inferCodingDocumentArtifactOperation(normalized: string): IntentGatewayOperation | null {

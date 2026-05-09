@@ -572,12 +572,13 @@ export async function initChatPanel(container) {
         : (select?.value || '');
       if (currentCodeSessionId) {
         await api.codeSessionResetConversation(currentCodeSessionId, {
+          agentId: apiAgentId,
           userId: webUserId,
           channel: 'web',
           surfaceId: GUARDIAN_CHAT_SURFACE_ID,
         });
       } else {
-        await api.resetConversation(apiAgentId, webUserId, 'web');
+        await api.resetConversation(apiAgentId, webUserId, 'web', GUARDIAN_CHAT_SURFACE_ID);
       }
       deleteChatHistory(resetId);
       renderHistory(history, resetId, approvalHandler);

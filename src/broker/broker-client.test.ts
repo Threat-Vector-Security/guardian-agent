@@ -83,4 +83,50 @@ describe('BrokerClient tool calls', () => {
       vi.useRealTimers();
     }
   });
+
+  it('sends brokered LLM timeout budgets and waits for the provider timeout plus grace', async () => {
+    vi.useFakeTimers();
+    try {
+      const brokerToClient = new PassThrough();
+      const clientToBroker = new PassThrough();
+      const requestChunks: string[] = [];
+      clientToBroker.on('data', (chunk) => {
+        requestChunks.push(String(chunk));
+      });
+      const client = new BrokerClient({
+        inputStream: brokerToClient,
+        outputStream: clientToBroker,
+        capabilityToken: 'capability-token',
+      });
+
+      const pending = client.llmChat(
+        [{ role: 'user', content: 'Build and verify the app.' }],
+        {},
+        { providerName: 'ollama-cloud-coding', timeoutMs: 240_000 },
+      );
+
+      await vi.advanceTimersByTimeAsync(120_001);
+      const request = JSON.parse(requestChunks.join('').trim()) as {
+        id: string;
+        params: { timeoutMs?: number };
+      };
+      expect(request.params.timeoutMs).toBe(240_000);
+
+      brokerToClient.write(`${JSON.stringify({
+        jsonrpc: '2.0',
+        id: request.id,
+        result: {
+          content: 'done',
+          model: 'glm-5.1',
+          finishReason: 'stop',
+        },
+      })}\n`);
+
+      await expect(pending).resolves.toMatchObject({
+        content: 'done',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

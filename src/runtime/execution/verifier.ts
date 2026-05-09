@@ -42,16 +42,35 @@ export function verifyDelegatedResult(input: {
   gatewayDecision?: IntentGatewayDecision | null;
   executionProfile?: SelectedExecutionProfile | null;
 }): VerificationDecision {
+  const unsatisfiedSteps = readUnsatisfiedRequiredSteps(
+    input.envelope.taskContract.plan,
+    input.envelope.stepReceipts,
+  );
+  const unsatisfiedStepIds = unsatisfiedSteps.map((step) => step.stepId);
+  const unsatisfiedNonAnswerSteps = unsatisfiedSteps.filter((step) => step.kind !== 'answer');
+  const hasRequiredNonAnswerStep = input.envelope.taskContract.plan.steps.some(
+    (step) => step.required !== false && step.kind !== 'answer',
+  );
   const interruptions = input.envelope.interruptions;
   if (interruptions.length > 0) {
     const approval = interruptions.find((interruption) => interruption.kind === 'approval');
     if (approval) {
-      return {
-        decision: 'blocked',
-        reasons: [approval.prompt || 'Delegated worker is waiting for approval.'],
-        retryable: false,
-        requiredNextAction: 'Resolve the pending approval(s) to continue the delegated run.',
-      };
+      if (!hasRequiredNonAnswerStep || unsatisfiedNonAnswerSteps.length > 0) {
+        return {
+          decision: 'blocked',
+          reasons: [approval.prompt || 'Delegated worker is waiting for approval.'],
+          retryable: false,
+          requiredNextAction: 'Resolve the pending approval(s) to continue the delegated run.',
+          missingEvidenceKinds: collectMissingEvidenceKinds(
+            input.envelope.taskContract.plan,
+            input.envelope.stepReceipts,
+          ),
+          unsatisfiedStepIds,
+        };
+      }
+      if (unsatisfiedStepIds.length > 0) {
+        return buildAnswerOnlyApprovalInsufficiency(input.envelope, unsatisfiedStepIds);
+      }
     }
     const clarification = interruptions.find((interruption) => interruption.kind === 'clarification');
     if (clarification) {
@@ -87,13 +106,14 @@ export function verifyDelegatedResult(input: {
     return provenanceFailure;
   }
 
-  const unsatisfiedSteps = readUnsatisfiedRequiredSteps(
-    input.envelope.taskContract.plan,
-    input.envelope.stepReceipts,
-  );
-  const unsatisfiedStepIds = unsatisfiedSteps.map((step) => step.stepId);
+  const approvalOnlyAfterContractSatisfied = interruptions.some((interruption) => interruption.kind === 'approval')
+    && hasRequiredNonAnswerStep
+    && unsatisfiedStepIds.length === 0;
 
-  if (input.envelope.runStatus === 'completed' && unsatisfiedStepIds.length === 0) {
+  if (
+    (input.envelope.runStatus === 'completed' || approvalOnlyAfterContractSatisfied)
+    && unsatisfiedStepIds.length === 0
+  ) {
     const ongoingAnswerFailure = verifyFinalAnswerIsTerminal(input.envelope);
     if (ongoingAnswerFailure) {
       return ongoingAnswerFailure;
@@ -179,20 +199,50 @@ export function verifyDelegatedResult(input: {
   };
 }
 
+function buildAnswerOnlyApprovalInsufficiency(
+  envelope: DelegatedResultEnvelope,
+  unsatisfiedStepIds: string[],
+): VerificationDecision {
+  return {
+    decision: 'insufficient',
+    reasons: ['Delegated worker collected the required evidence but paused before producing a usable user-facing answer.'],
+    retryable: true,
+    requiredNextAction: 'Synthesize a concrete final answer from the collected evidence before waiting on unrelated approval-only follow-up work.',
+    missingEvidenceKinds: collectMissingEvidenceKinds(
+      envelope.taskContract.plan,
+      envelope.stepReceipts,
+    ),
+    unsatisfiedStepIds,
+  };
+}
+
 function verifyFinalAnswerIsTerminal(
   envelope: DelegatedResultEnvelope,
 ): VerificationDecision | null {
-  const finalAnswer = envelope.finalUserAnswer?.trim();
-  if (!finalAnswer) {
-    return null;
-  }
   const hasRequiredEvidenceStep = envelope.taskContract.plan.steps.some(
     (step) => step.required !== false && step.kind !== 'answer',
   );
+  const answerStepIds = findAnswerStepIds(envelope.taskContract.plan);
+  const hasRequiredAnswerStep = envelope.taskContract.plan.steps.some(
+    (step) => step.required !== false && answerStepIds.includes(step.stepId),
+  );
+  const finalAnswer = resolveFinalAnswerCandidate(envelope);
+  if (!finalAnswer) {
+    if (hasRequiredEvidenceStep && hasRequiredAnswerStep) {
+      return {
+        decision: 'insufficient',
+        reasons: ['Delegated worker satisfied evidence steps but did not produce a usable user-facing answer.'],
+        retryable: true,
+        requiredNextAction: 'Synthesize a concrete final answer from the collected evidence before marking the delegated task complete.',
+        missingEvidenceKinds: ['answer'],
+        ...(answerStepIds.length > 0 ? { unsatisfiedStepIds: answerStepIds } : {}),
+      };
+    }
+    return null;
+  }
   if (!envelope.taskContract.requiresEvidence && !hasRequiredEvidenceStep) {
     return null;
   }
-  const answerStepIds = findAnswerStepIds(envelope.taskContract.plan);
   if (looksLikeRawToolMarkup(finalAnswer)) {
     return {
       decision: 'insufficient',
@@ -224,6 +274,37 @@ function verifyFinalAnswerIsTerminal(
     missingEvidenceKinds: ['answer'],
     ...(answerStepIds.length > 0 ? { unsatisfiedStepIds: answerStepIds } : {}),
   };
+}
+
+function resolveFinalAnswerCandidate(envelope: DelegatedResultEnvelope): string {
+  const explicitAnswer = envelope.finalUserAnswer?.trim();
+  if (explicitAnswer) {
+    return explicitAnswer;
+  }
+
+  const answerStepIds = new Set(findAnswerStepIds(envelope.taskContract.plan));
+  if (answerStepIds.size === 0) {
+    return '';
+  }
+  const answerReceiptIds = new Set(
+    envelope.stepReceipts
+      .filter((receipt) => answerStepIds.has(receipt.stepId))
+      .flatMap((receipt) => receipt.evidenceReceiptIds),
+  );
+  const answerReceipt = envelope.evidenceReceipts
+    .filter((receipt) => answerReceiptIds.has(receipt.receiptId))
+    .filter((receipt) => receipt.sourceType === 'model_answer')
+    .at(-1);
+  const answerReceiptSummary = answerReceipt?.summary.trim();
+  if (answerReceiptSummary) {
+    return answerReceiptSummary;
+  }
+
+  return envelope.stepReceipts
+    .filter((receipt) => answerStepIds.has(receipt.stepId) && receipt.status === 'satisfied')
+    .map((receipt) => receipt.summary.trim())
+    .filter(Boolean)
+    .at(-1) ?? '';
 }
 
 type MixedDomainAnswerSource = 'web' | 'repo' | 'memory';
@@ -741,6 +822,9 @@ function verifyRepoEvidenceQuality(
 }
 
 function contractLooksLikeImplementationLocationRequest(envelope: DelegatedResultEnvelope): boolean {
+  if (contractIsRuntimeVerifiedWorkspaceMutation(envelope)) {
+    return false;
+  }
   const summaries = [
     envelope.taskContract.summary,
     ...envelope.taskContract.plan.steps.map((step) => step.summary),
@@ -748,6 +832,22 @@ function contractLooksLikeImplementationLocationRequest(envelope: DelegatedResul
     .filter((summary): summary is string => typeof summary === 'string' && summary.trim().length > 0)
     .join(' ');
   return IMPLEMENTATION_LOCATION_REQUEST_PATTERN.test(summaries);
+}
+
+function contractIsRuntimeVerifiedWorkspaceMutation(envelope: DelegatedResultEnvelope): boolean {
+  const contract = envelope.taskContract;
+  const route = contract.route;
+  const operation = contract.operation;
+  if (route !== 'coding_task' && route !== 'filesystem_task') {
+    return false;
+  }
+  if (operation !== 'create' && operation !== 'update' && operation !== 'delete' && operation !== 'save') {
+    return false;
+  }
+  return contract.plan.steps.some((step) => (
+    step.required !== false
+    && step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true
+  ));
 }
 
 function findRepoEvidenceStepIds(

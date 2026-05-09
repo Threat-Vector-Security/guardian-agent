@@ -1674,6 +1674,38 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.sessionTarget).toBeUndefined();
   });
 
+  it('repairs attached repo app-build requests into runnable coding work when classifiers are unavailable', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'New task. In the currently attached empty music app repo, build a simple music app from scratch. Create whatever files are needed, make it runnable locally, include realistic sample songs, artists, and playlists, add basic browsing and playback controls, start the app, fix any setup or runtime errors, and finish by telling me the local URL and what you verified.',
+        channel: 'cli',
+        continuity: {
+          continuityKey: 'cli:owner',
+          linkedSurfaceCount: 1,
+          activeExecutionRefs: ['code_session:music-app'],
+        },
+      },
+      async () => {
+        throw new Error('classifier unavailable');
+      },
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.entities.sessionTarget).toBeUndefined();
+    expect(result.decision.plannedSteps?.map((step) => step.kind)).toEqual([
+      'read',
+      'write',
+      'read',
+      'tool_call',
+      'answer',
+    ]);
+    expect(result.decision.plannedSteps?.[3].expectedToolCategories).toEqual(['runtime_evidence']);
+  });
+
   it('infers local Second Brain calendar metadata from a structured personal-assistant decision', async () => {
     const gateway = new IntentGateway();
 

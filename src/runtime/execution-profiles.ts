@@ -582,7 +582,10 @@ function shouldPreferManagedCloudCodingRole(
   if (!explicitCodeSessionRoute && decision.entities.codingRemoteExecRequested !== true) {
     return false;
   }
-  if (shouldPreferFrontier(decision, policy)) {
+  if (
+    shouldPreferFrontier(decision, policy)
+    && !isRuntimeVerifiedWorkspaceMutation(decision)
+  ) {
     return false;
   }
   return decision.route === 'coding_task'
@@ -646,14 +649,6 @@ function chooseExternalTier(input: {
       reason: 'managed cloud coding role binding selected for coding workspace workload',
     };
   }
-  if (frontier && shouldPreferFrontier(input.decision, input.policy)) {
-    return {
-      tier: 'frontier',
-      reason: input.decision?.executionClass === 'security_analysis'
-        ? 'frontier preferred for security analysis workload'
-        : 'frontier preferred for heavier repo/synthesis workload',
-    };
-  }
   if (managedCloud && shouldPreferManagedCloud(input.decision, input.policy)) {
     return {
       tier: 'managed_cloud',
@@ -661,7 +656,7 @@ function chooseExternalTier(input: {
     };
   }
   if (managedCloud) {
-    return { tier: 'managed_cloud', reason: 'managed cloud selected as the default external tier' };
+    return { tier: 'managed_cloud', reason: 'managed cloud selected as the primary external tier; frontier is reserved for escalation' };
   }
   if (frontier) {
     return { tier: 'frontier', reason: 'frontier selected because managed cloud is unavailable' };

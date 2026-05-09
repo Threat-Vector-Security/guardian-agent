@@ -4460,21 +4460,13 @@ export class CLIChannel implements ChannelAdapter {
   private async handleReset(args: string[]): Promise<void> {
     if (args.length === 0) {
       const results: Array<{ success: boolean; message: string }> = [];
-      const codeSessions = this.listCliCodeSessions();
-      if (codeSessions?.currentSessionId && this.dashboard?.onCodeSessionResetConversation) {
-        results.push(this.dashboard.onCodeSessionResetConversation({
-          sessionId: codeSessions.currentSessionId,
-          userId: this.defaultUserId,
-          channel: 'cli',
-        }));
-      }
-
       if (this.dashboard?.onConversationReset) {
         const agentId = this.activeAgentId ?? this.defaultAgentId ?? 'default';
         results.push(await this.dashboard.onConversationReset({
           agentId,
           userId: this.defaultUserId,
           channel: 'cli',
+          surfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
         }));
       }
 
@@ -4504,6 +4496,7 @@ export class CLIChannel implements ChannelAdapter {
       agentId,
       userId: this.defaultUserId,
       channel: 'cli',
+      surfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
     });
     this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
   }

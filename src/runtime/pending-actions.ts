@@ -996,6 +996,50 @@ export class PendingActionStore {
     return this.update(id, { status: 'cancelled' }, nowMs);
   }
 
+  cancelActiveForAssistantUser(
+    input: {
+      agentId: string;
+      userId: string;
+      channel?: string;
+      surfaceId?: string;
+      codeSessionId?: string;
+    },
+    nowMs: number = this.now(),
+  ): PendingActionRecord[] {
+    const agentId = input.agentId.trim();
+    const userId = input.userId.trim();
+    const channel = input.channel?.trim();
+    const surfaceId = input.surfaceId?.trim();
+    const codeSessionId = input.codeSessionId?.trim();
+    if (!agentId || !userId) return [];
+    const records = this.listStoredRecordsForAssistantUser(agentId, userId, nowMs)
+      .filter((record) => isPendingActionActive(record.status))
+      .filter((record) => !channel || record.scope.channel === channel)
+      .filter((record) => !surfaceId || record.scope.surfaceId === surfaceId)
+      .filter((record) => !codeSessionId || record.codeSessionId === codeSessionId);
+    return records
+      .map((record) => this.cancel(record.id, nowMs))
+      .filter((record): record is PendingActionRecord => !!record);
+  }
+
+  cancelActiveForCodeSession(
+    input: {
+      agentId: string;
+      codeSessionId: string;
+    },
+    nowMs: number = this.now(),
+  ): PendingActionRecord[] {
+    const agentId = input.agentId.trim();
+    const codeSessionId = input.codeSessionId.trim();
+    if (!agentId || !codeSessionId) return [];
+    return this.listAllRecords(nowMs)
+      .filter((record) => isPendingActionActive(record.status))
+      .filter((record) => record.scope.agentId === agentId)
+      .filter((record) => record.codeSessionId === codeSessionId || record.scope.userId.includes(codeSessionId))
+      .map((record) => this.cancel(record.id, nowMs))
+      .filter((record): record is PendingActionRecord => !!record);
+  }
+
   findActiveByApprovalId(approvalId: string, nowMs: number = this.now()): PendingActionRecord | null {
     return this.listActiveByApprovalId(approvalId, nowMs)[0] ?? null;
   }

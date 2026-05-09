@@ -19,6 +19,7 @@ import {
   formatDelegatedStepIds,
   isDelegatedAnswerSynthesisRetry,
   isSameDelegatedExecutionProfile,
+  isDelegatedRuntimeEvidenceRetry,
   isDelegatedToolEvidenceRetry,
   runDelegatedGroundedAnswerSynthesisRetry,
   selectDelegatedRetryExecutionProfile,
@@ -171,7 +172,7 @@ describe('delegated worker retry graph policy', () => {
     });
   });
 
-  it('selects retry profiles through graph policy without Runtime access', () => {
+  it('keeps the first runtime-proof retry on the managed-cloud profile after the app execution step is missed', () => {
     const envelope = delegatedEnvelope({
       taskContract: taskContract({
         steps: [
@@ -180,6 +181,57 @@ describe('delegated worker retry graph policy', () => {
             kind: 'tool_call',
             summary: 'Collect delegated tool evidence.',
             expectedToolCategories: ['runtime_evidence'],
+          },
+          { stepId: 'answer', kind: 'answer', summary: 'Answer from delegated evidence.' },
+        ],
+      }),
+    });
+    const failure = buildDelegatedRetryableFailure({
+      decision: 'insufficient',
+      reasons: ['Delegated worker stopped before satisfying the evidence step.'],
+      retryable: true,
+      missingEvidenceKinds: ['tool_call'],
+      unsatisfiedStepIds: ['evidence', 'answer'],
+      requiredNextAction: 'Complete the evidence step and answer.',
+    }, envelope);
+    const currentProfile = managedCloudCodingProfile();
+
+    const selected = shouldUseSameProfileDelegatedRetry(failure!, currentProfile)
+      ? currentProfile
+      : selectDelegatedRetryExecutionProfile({
+      config: retryProfileConfig(),
+      orchestration: {
+        role: 'explorer',
+        label: 'Workspace Explorer',
+        lenses: ['coding-workspace'],
+      },
+      intentDecision: gatewayDecision(),
+      currentProfile,
+      insufficiency: failure,
+    });
+
+    expect(isDelegatedRuntimeEvidenceRetry(failure!)).toBe(true);
+    expect(shouldUseSameProfileDelegatedRetry(failure!, currentProfile)).toBe(true);
+    expect(selected).toMatchObject({
+      providerName: 'ollama-cloud-coding',
+      providerTier: 'managed_cloud',
+    });
+    expect(selectDelegatedRetryExecutionProfile({
+      config: null,
+      currentProfile,
+      insufficiency: failure,
+    })).toBe(currentProfile);
+  });
+
+  it('can still use a managed-cloud sibling for generic delegated tool-evidence retries', () => {
+    const envelope = delegatedEnvelope({
+      taskContract: taskContract({
+        steps: [
+          {
+            stepId: 'evidence',
+            kind: 'tool_call',
+            summary: 'Collect delegated tool evidence.',
+            expectedToolCategories: ['repo_evidence'],
           },
           { stepId: 'answer', kind: 'answer', summary: 'Answer from delegated evidence.' },
         ],
@@ -207,16 +259,12 @@ describe('delegated worker retry graph policy', () => {
       insufficiency: failure,
     });
 
+    expect(isDelegatedRuntimeEvidenceRetry(failure!)).toBe(false);
     expect(selected).toMatchObject({
       providerName: 'ollama-cloud-tools',
       providerTier: 'managed_cloud',
       selectionSource: 'delegated_role',
     });
-    expect(selectDelegatedRetryExecutionProfile({
-      config: null,
-      currentProfile,
-      insufficiency: failure,
-    })).toBe(currentProfile);
   });
 
   it('escalates coding-workspace quality retries to frontier when managed-cloud output lacks requested file references', () => {
@@ -586,7 +634,7 @@ describe('delegated worker retry graph policy', () => {
     })).toBe(false);
   });
 
-  it('uses a same-profile corrective pass for managed-cloud missing tool-evidence failures', () => {
+  it('marks missing runtime-proof evidence as a same-profile tool retry before escalation', () => {
     const envelope = delegatedEnvelope({
       taskContract: taskContract({
         steps: [
@@ -615,7 +663,16 @@ describe('delegated worker retry graph policy', () => {
 
     expect(shouldRetryDelegatedCorrectivePassOnSameProfile(failure!, executionProfile())).toBe(true);
     expect(isDelegatedToolEvidenceRetry(failure!)).toBe(true);
-    expect(shouldUseSameProfileDelegatedRetry(failure!, executionProfile())).toBe(false);
+    expect(isDelegatedRuntimeEvidenceRetry(failure!)).toBe(true);
+    expect(shouldUseSameProfileDelegatedRetry(failure!, executionProfile())).toBe(true);
+    const retrySection = appendDelegatedRetrySection([], failure!)[0]?.content ?? '';
+    expect(retrySection).toContain('This retry is a runtime-proof retry.');
+    expect(retrySection).toContain('file reads, file listings, and file writes do not satisfy');
+    expect(retrySection).toContain('your next tool action must target runtime proof');
+    expect(retrySection).toContain('If the app is not yet runnable because a referenced asset, server entrypoint, or package verification script is missing');
+    expect(retrySection).toContain('find_tools with the exact query "coding_backend_run code_build code_test code_remote_exec shell_safe browser_navigate"');
+    expect(retrySection).toContain('shell_safe');
+    expect(retrySection).toContain('local URL');
     expect(shouldRetryDelegatedCorrectivePassOnSameProfile(failure!, {
       ...executionProfile(),
       providerTier: 'frontier',

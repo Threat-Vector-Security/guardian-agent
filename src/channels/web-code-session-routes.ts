@@ -279,11 +279,24 @@ export async function handleWebCodeSessionRoutes(
       return true;
     }
     const sessionId = decodeURIComponent(codeSessionResetMatch[1]);
-    await readBody(req, context.maxBodyBytes);
+    const rawBody = await readBody(req, context.maxBodyBytes);
+    let parsed: Record<string, unknown> | undefined;
+    try {
+      parsed = rawBody.trim()
+        ? asRecord(JSON.parse(rawBody) as unknown)
+        : undefined;
+    } catch {
+      sendJSON(res, 400, { error: 'Invalid JSON body' });
+      return true;
+    }
+    const principal = context.resolveRequestPrincipal(req);
     const result = dashboard.onCodeSessionResetConversation({
       sessionId,
-      userId: WEB_CODE_USER_ID,
-      channel: WEB_CODE_CHANNEL,
+      userId: trimOptionalString(parsed?.userId) ?? WEB_CODE_USER_ID,
+      channel: trimOptionalString(parsed?.channel) ?? WEB_CODE_CHANNEL,
+      agentId: trimOptionalString(parsed?.agentId),
+      principalId: principal.principalId,
+      surfaceId: resolveWebSurfaceId(trimOptionalString(parsed?.surfaceId)),
     });
     sendJSON(res, 200, result);
     return true;

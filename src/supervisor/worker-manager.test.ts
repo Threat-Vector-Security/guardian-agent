@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -21,10 +21,11 @@ import {
   findAnswerStepId,
   matchPlannedStepForTool,
 } from '../runtime/execution/task-plan.js';
+import type { DelegatedResultEnvelope } from '../runtime/execution/types.js';
 import { buildDelegatedTaskContract } from '../runtime/execution/verifier.js';
 import { APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY } from '../runtime/approval-continuations.js';
 import { requestNeedsExactFileReferences } from '../runtime/intent/request-patterns.js';
-import { attachPreRoutedIntentGatewayMetadata, readPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.js';
+import { attachPreRoutedIntentGatewayMetadata, readPreRoutedIntentGatewayMetadata, type IntentGatewayDecision } from '../runtime/intent-gateway.js';
 import { PendingActionStore, type PendingActionRecord } from '../runtime/pending-actions.js';
 import {
   attachWorkerSuspensionMetadata,
@@ -1342,6 +1343,217 @@ describe('WorkerManager', () => {
       { stepId: 'step_2', status: 'satisfied' },
       { stepId: 'step_3', status: 'satisfied' },
     ]);
+
+    manager.shutdown();
+  });
+
+  it('does not hold a delegated app build for redundant approval once runtime evidence is already satisfied', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const decision: IntentGatewayDecision = {
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Build and verify a simple local music app.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'write', summary: 'Create the app files.', expectedToolCategories: ['repo_mutation'], required: true },
+        { kind: 'tool_call', summary: 'Start or exercise the app locally and collect runtime evidence before answering.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1'] },
+        { kind: 'answer', summary: 'Tell the user the local URL and what was verified.', required: true, dependsOn: ['step_2'] },
+      ],
+      entities: {},
+    };
+    const taskContract = buildDelegatedTaskContract(decision);
+    const writeReceipt = {
+      receiptId: 'receipt-write-server',
+      sourceType: 'tool_call' as const,
+      toolName: 'fs_write',
+      status: 'succeeded' as const,
+      refs: ['S:\\Development\\MusicApp\\server.js'],
+      summary: 'Wrote server.js for the MusicApp.',
+      startedAt: 1,
+      endedAt: 2,
+    };
+    const runtimeReceipt = {
+      receiptId: 'receipt-runtime-check',
+      sourceType: 'tool_call' as const,
+      toolName: 'code_build',
+      status: 'succeeded' as const,
+      refs: [],
+      summary: 'Verified the app locally with node --check server.js.',
+      startedAt: 3,
+      endedAt: 4,
+    };
+    const interruption = {
+      interruptionId: 'approval-extra-run',
+      kind: 'approval' as const,
+      prompt: 'Waiting for approval to run code_remote_exec.',
+      approvalSummaries: [
+        { id: 'approval-extra-run', toolName: 'code_remote_exec', argsPreview: '{"command":"node server.js &"}' },
+      ],
+    };
+    const stepReceipts = buildStepReceipts({
+      plannedTask: taskContract.plan,
+      evidenceReceipts: [writeReceipt, runtimeReceipt],
+      toolReceiptStepIds: new Map([
+        [writeReceipt.receiptId, 'step_1'],
+        [runtimeReceipt.receiptId, 'step_2'],
+      ]),
+      interruptions: [interruption],
+    });
+    const suspendedEnvelope = {
+      taskContract,
+      runStatus: 'suspended' as const,
+      stopReason: 'approval_required' as const,
+      stepReceipts,
+      operatorSummary: 'Waiting for approval to run an extra command after local verification.',
+      claims: [],
+      evidenceReceipts: [writeReceipt, runtimeReceipt],
+      interruptions: [interruption],
+      artifacts: [],
+      events: [],
+    };
+    const finalAnswer = 'Created the MusicApp in S:\\Development\\MusicApp, verified `node --check server.js`, and the local URL is http://localhost:3000.';
+    const dispatchModes: string[] = [];
+
+    workerMessageHandler = (params) => {
+      const groundedSynthesis = !!params.groundedSynthesis;
+      dispatchModes.push(groundedSynthesis ? 'synthesis' : 'delegated');
+      if (groundedSynthesis) {
+        const synthesisMessages = params.groundedSynthesis as { messages?: Array<{ content?: string }> };
+        const combinedPrompt = synthesisMessages.messages?.map((message) => message.content ?? '').join('\n') ?? '';
+        expect(combinedPrompt).toContain('receipt-runtime-check');
+        expect(combinedPrompt).toContain('No tools are available');
+        return {
+          content: finalAnswer,
+          metadata: {
+            skipTestDelegatedEnvelope: true,
+            workerExecution: {
+              lifecycle: 'completed',
+              source: 'tool_loop',
+              completionReason: 'model_response',
+              responseQuality: 'final',
+              terminationReason: 'clean_exit',
+            },
+          },
+        };
+      }
+      return {
+        content: '',
+        metadata: {
+          ...buildDelegatedExecutionMetadata(suspendedEnvelope),
+          ...approvalPendingActionMetadata([
+            { id: 'approval-extra-run', toolName: 'code_remote_exec', argsPreview: '{"command":"node server.js &"}' },
+          ]),
+        },
+      };
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Guardian Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'implementer',
+                    label: 'Workspace Implementer',
+                    lenses: ['coding-workspace'],
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-redundant-approval-after-runtime',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Build a simple music app from scratch in the attached repo and verify it runs locally.',
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'test-model',
+          latencyMs: 1,
+          decision,
+        }),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerModel: 'glm-5.1',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'high',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+        reason: 'delegated coding role selected managed-cloud coding profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-redundant-approval-after-runtime',
+        originChannel: 'web',
+        codeSessionId: 'music-session',
+      },
+    });
+
+    expect(dispatchModes).toEqual(['delegated', 'synthesis']);
+    expect(result.content).toBe(finalAnswer);
+    expect(result.content).not.toContain('approval required');
+    expect(result.metadata?.pendingAction).toBeUndefined();
+    expect(result.metadata?.continueConversationAfterApproval).toBeUndefined();
+    expect(result.metadata?.delegatedHandoff).toMatchObject({
+      reportingMode: 'inline_response',
+    });
+    expect((result.metadata?.delegatedHandoff as { unresolvedBlockerKind?: string } | undefined)?.unresolvedBlockerKind).toBeUndefined();
+    const envelope = readDelegatedResultEnvelope(result.metadata);
+    expect(envelope?.verification).toMatchObject({ decision: 'satisfied' });
+    expect(envelope?.interruptions).toEqual([]);
 
     manager.shutdown();
   });
@@ -3325,6 +3537,1382 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
+  it('recovers worker dispatch budget aborts into verified incomplete delegated results when tool evidence exists', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const abortController = new AbortController();
+    workerMessageHandler = () => {
+      setTimeout(() => abortController.abort(new Error('budget elapsed')), 0);
+      return new Promise(() => undefined);
+    };
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+      ingestExecutionGraphEvent: vi.fn(),
+    };
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        listJobs: vi.fn(() => [
+          {
+            id: 'job-app-package',
+            toolName: 'fs_write',
+            status: 'succeeded',
+            requestId: 'm-app-build-timeout',
+            argsPreview: '{"path":"package.json"}',
+            resultPreview: '{"path":"package.json","bytesWritten":260}',
+            createdAt: 10,
+            startedAt: 20,
+            completedAt: 30,
+          },
+        ]),
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Guardian Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'implementer',
+                    label: 'Workspace Implementer',
+                    lenses: ['coding-workspace'],
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        runTimeline,
+        now: () => 777_000,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-app-build-timeout',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Build a simple music app from scratch in the attached repo and verify it runs locally.',
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'test-model',
+          latencyMs: 1,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'create',
+            summary: 'Build and verify a simple local music app.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'repo_grounded',
+            preferredTier: 'external',
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            expectedContextPressure: 'high',
+            preferredAnswerPath: 'tool_loop',
+            plannedSteps: [
+              { kind: 'write', summary: 'Create the app files.', expectedToolCategories: ['fs_write'], required: true },
+              { kind: 'tool_call', summary: 'Run or otherwise verify the app locally.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1'] },
+              { kind: 'answer', summary: 'Tell the user the local URL and what was verified.', required: true, dependsOn: ['step_2'] },
+            ],
+            entities: {},
+          },
+        }),
+        abortSignal: abortController.signal,
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'openai_frontier',
+        providerName: 'openai',
+        providerType: 'openai',
+        providerModel: 'gpt-4o',
+        providerLocality: 'external',
+        providerTier: 'frontier',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'high',
+        contextBudget: 128_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: [],
+        reason: 'delegated coding role selected frontier profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-app-build-timeout',
+        executionId: 'exec-app-build-timeout',
+        rootExecutionId: 'exec-app-build-root',
+        originChannel: 'web',
+        originSurfaceId: 'web-guardian-chat',
+        codeSessionId: 'music-session',
+        orchestration: {
+          role: 'implementer',
+          label: 'Workspace Implementer',
+          lenses: ['coding-workspace'],
+        },
+      },
+    });
+
+    expect(result.content).toContain('Delegated work failed.');
+    expect(result.content).toContain('Delegated worker ran out of turns before satisfying every required step.');
+    expect(result.content).not.toContain('Worker message dispatch canceled');
+    expect(result.metadata?.delegatedSufficiencyFailure).toMatchObject({
+      decision: 'insufficient',
+    });
+    expect(result.metadata?.responseSource).toMatchObject({
+      providerName: 'openai',
+      providerTier: 'frontier',
+    });
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual(expect.arrayContaining([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_worker_retrying',
+      'delegated_worker_contract_reconciled',
+      'delegated_verification_decided',
+      'delegated_worker_failed',
+    ]));
+    expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls.map(([event]) => event.kind)).toEqual([
+      'started',
+      'running',
+      'running',
+      'failed',
+    ]);
+
+    manager.shutdown();
+  });
+
+  it('recovers delegated retry dispatch timeouts into verified delegated failures', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(777_000);
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    let manager: InstanceType<typeof WorkerManager> | undefined;
+    try {
+      let dispatchCount = 0;
+      workerMessageHandler = () => {
+        dispatchCount += 1;
+        if (dispatchCount === 1) {
+          return {
+            content: 'I need to continue implementing and verifying the app.',
+            metadata: {
+              workerExecution: {
+                lifecycle: 'failed',
+                source: 'tool_loop',
+                completionReason: 'intermediate_response',
+                responseQuality: 'intermediate',
+                terminationReason: 'max_rounds',
+                roundCount: 3,
+                toolCallCount: 0,
+                toolResultCount: 0,
+                successfulToolResultCount: 0,
+              },
+            },
+          };
+        }
+        return new Promise(() => undefined);
+      };
+
+      const intentRoutingTrace = {
+        record: vi.fn(),
+      };
+      manager = new WorkerManager(
+        {
+          listAlwaysLoadedDefinitions: () => [],
+          listJobs: vi.fn(() => []),
+        } as never,
+        {
+          getFallbackProviderConfig: () => undefined,
+          getConfigSnapshot: () => createExecutionProfileTestConfig(),
+          auditLog: { record: vi.fn() },
+          registry: {
+            get: (agentId: string) => agentId === 'local'
+              ? {
+                  agent: { name: 'Guardian Agent' },
+                  definition: {
+                    orchestration: {
+                      role: 'implementer',
+                      label: 'Workspace Implementer',
+                      lenses: ['coding-workspace'],
+                    },
+                  },
+                }
+              : undefined,
+          },
+        } as never,
+        {
+          workerEntryPoint: 'src/worker/worker-entry.ts',
+          workerMaxMemoryMb: 2048,
+          workerIdleTimeoutMs: 300_000,
+          workerShutdownGracePeriodMs: 10,
+          capabilityTokenTtlMs: 600_000,
+          capabilityTokenMaxToolCalls: 0,
+        } as never,
+        undefined,
+        {
+          intentRoutingTrace,
+          now: () => Date.now(),
+        },
+      );
+
+      const resultPromise = manager.handleMessage({
+        sessionId: 'tester:web',
+        agentId: 'local',
+        userId: 'tester',
+        grantedCapabilities: [],
+        message: {
+          id: 'm-app-build-retry-timeout',
+          userId: 'tester',
+          channel: 'web',
+          content: 'Build a simple music app from scratch in the attached repo and verify it runs locally.',
+          metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+            mode: 'primary',
+            available: true,
+            model: 'test-model',
+            latencyMs: 1,
+            decision: {
+              route: 'coding_task',
+              confidence: 'high',
+              operation: 'create',
+              summary: 'Build and verify a simple local music app.',
+              turnRelation: 'new_request',
+              resolution: 'ready',
+              missingFields: [],
+              executionClass: 'repo_grounded',
+              preferredTier: 'external',
+              requiresRepoGrounding: true,
+              requiresToolSynthesis: true,
+              expectedContextPressure: 'high',
+              preferredAnswerPath: 'tool_loop',
+              plannedSteps: [
+                { kind: 'write', summary: 'Create the app files.', expectedToolCategories: ['repo_mutation'], required: true },
+                { kind: 'tool_call', summary: 'Run or otherwise verify the app locally.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1'] },
+                { kind: 'answer', summary: 'Tell the user the local URL and what was verified.', required: true, dependsOn: ['step_2'] },
+              ],
+              entities: {},
+            },
+          }),
+          timestamp: Date.now(),
+        },
+        systemPrompt: 'system',
+        history: [],
+        knowledgeBases: [],
+        activeSkills: [],
+        additionalSections: [],
+        toolContext: '',
+        runtimeNotices: [],
+        executionProfile: {
+          id: 'managed_cloud_tool',
+          providerName: 'ollama-cloud-coding',
+          providerType: 'ollama_cloud',
+          providerModel: 'glm-5.1',
+          providerLocality: 'external',
+          providerTier: 'managed_cloud',
+          requestedTier: 'external',
+          preferredAnswerPath: 'tool_loop',
+          expectedContextPressure: 'high',
+          contextBudget: 32_000,
+          toolContextMode: 'tight',
+          maxAdditionalSections: 2,
+          maxRuntimeNotices: 2,
+          fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+          reason: 'delegated coding role selected managed-cloud coding profile',
+          routingMode: 'auto',
+          selectionSource: 'delegated_role',
+        },
+        delegation: {
+          requestId: 'm-app-build-retry-timeout',
+          executionId: 'exec-app-build-retry-timeout',
+          rootExecutionId: 'exec-app-build-retry-timeout-root',
+          originChannel: 'web',
+          originSurfaceId: 'web-guardian-chat',
+          codeSessionId: 'music-session',
+          orchestration: {
+            role: 'implementer',
+            label: 'Workspace Implementer',
+            lenses: ['coding-workspace'],
+          },
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(330_000);
+      const result = await resultPromise;
+
+      expect(dispatchCount).toBe(2);
+      expect(result.content).toContain('Delegated work failed.');
+      expect(result.content).not.toContain('exceeded budget timeout');
+      expect(result.metadata?.delegatedSufficiencyFailure).toMatchObject({
+        decision: expect.stringMatching(/insufficient|contradicted/),
+      });
+      expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual(expect.arrayContaining([
+        'delegated_worker_retrying',
+        'delegated_worker_failed',
+      ]));
+      expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).not.toContain('recovery_advisor_started');
+    } finally {
+      manager?.shutdown();
+      vi.useRealTimers();
+    }
+  });
+
+  it('runs delegated runtime-evidence recovery locally when a dependency-free app missed runtime proof', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const workspaceRoot = resolve(mkdtempSync(join(tmpdir(), 'ga-runtime-recovery-')));
+    const requestId = 'm-runtime-recovery-local';
+    let runtimeProofRecorded = false;
+    let manager: InstanceType<typeof WorkerManager> | undefined;
+    try {
+      writeFileSync(join(workspaceRoot, 'server.js'), [
+        'const http = require(\'http\');',
+        'http.createServer((_, res) => res.end(\'ok\')).listen(3000);',
+        '',
+      ].join('\n'));
+
+      const decision: IntentGatewayDecision = {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'create',
+        summary: 'Build and verify a simple local music app.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          { kind: 'write', summary: 'Create the app files.', expectedToolCategories: ['repo_mutation'], required: true },
+          { kind: 'tool_call', summary: 'Run or otherwise verify the app locally.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1'] },
+          { kind: 'answer', summary: 'Tell the user the local URL and what was verified.', required: true, dependsOn: ['step_2'] },
+        ],
+        entities: {},
+      };
+      const taskContract = buildDelegatedTaskContract(decision);
+      const workerAnswer = 'Created a dependency-free Node music app at http://localhost:3000.';
+      workerMessageHandler = () => {
+        const writeReceipt = {
+          receiptId: 'receipt-write-server',
+          sourceType: 'tool_call' as const,
+          toolName: 'fs_write',
+          status: 'succeeded' as const,
+          refs: [join(workspaceRoot, 'server.js')],
+          summary: 'Wrote server.js.',
+          startedAt: 1,
+          endedAt: 2,
+        };
+        const answerReceipt = {
+          receiptId: 'receipt-answer',
+          sourceType: 'model_answer' as const,
+          status: 'succeeded' as const,
+          refs: [] as string[],
+          summary: workerAnswer,
+          startedAt: 3,
+          endedAt: 3,
+        };
+        const toolReceiptStepIds = new Map<string, string>([
+          [writeReceipt.receiptId, 'step_1'],
+          [answerReceipt.receiptId, 'step_3'],
+        ]);
+        const evidenceReceipts = [writeReceipt, answerReceipt];
+        const stepReceipts = buildStepReceipts({
+          plannedTask: taskContract.plan,
+          evidenceReceipts,
+          toolReceiptStepIds,
+          finalAnswerReceiptId: answerReceipt.receiptId,
+          interruptions: [],
+        });
+        const runStatus = computeWorkerRunStatus(taskContract.plan, stepReceipts, [], 'end_turn');
+        return {
+          content: workerAnswer,
+          metadata: buildDelegatedExecutionMetadata({
+            taskContract,
+            runStatus,
+            stopReason: 'end_turn',
+            stepReceipts,
+            finalUserAnswer: workerAnswer,
+            operatorSummary: workerAnswer,
+            claims: [],
+            evidenceReceipts,
+            interruptions: [],
+            artifacts: [],
+            events: [],
+          }),
+        };
+      };
+
+      const jobs = [
+        {
+          id: 'job-write-server',
+          toolName: 'fs_write',
+          status: 'succeeded',
+          requestId,
+          argsPreview: JSON.stringify({ path: join(workspaceRoot, 'server.js') }),
+          resultPreview: JSON.stringify({ path: join(workspaceRoot, 'server.js'), bytesWritten: 80 }),
+          createdAt: 1,
+          startedAt: 1,
+          completedAt: 2,
+        },
+      ];
+      const runTool = vi.fn(async (request) => {
+        runtimeProofRecorded = true;
+        jobs.push({
+          id: 'job-runtime-check',
+          toolName: 'code_build',
+          status: 'succeeded',
+          requestId,
+          argsPreview: JSON.stringify(request.args),
+          resultPreview: JSON.stringify({
+            success: true,
+            verificationStatus: 'verified',
+            verificationEvidence: 'Local build check passed.',
+          }),
+          createdAt: 4,
+          startedAt: 4,
+          completedAt: 5,
+        });
+        return {
+          success: true,
+          message: 'Local build check passed.',
+          verificationStatus: 'verified',
+        };
+      });
+      const intentRoutingTrace = { record: vi.fn() };
+      manager = new WorkerManager(
+        {
+          listAlwaysLoadedDefinitions: () => [],
+          listJobs: vi.fn(() => runtimeProofRecorded ? jobs : jobs.slice(0, 1)),
+          runTool,
+        } as never,
+        {
+          getFallbackProviderConfig: () => undefined,
+          getConfigSnapshot: () => createExecutionProfileTestConfig(),
+          auditLog: { record: vi.fn() },
+          registry: {
+            get: (agentId: string) => agentId === 'local'
+              ? {
+                  agent: { name: 'Guardian Agent' },
+                  definition: {
+                    orchestration: {
+                      role: 'implementer',
+                      label: 'Workspace Implementer',
+                      lenses: ['coding-workspace'],
+                    },
+                  },
+                }
+              : undefined,
+          },
+        } as never,
+        {
+          workerEntryPoint: 'src/worker/worker-entry.ts',
+          workerMaxMemoryMb: 2048,
+          workerIdleTimeoutMs: 300_000,
+          workerShutdownGracePeriodMs: 10,
+          capabilityTokenTtlMs: 600_000,
+          capabilityTokenMaxToolCalls: 0,
+        } as never,
+        undefined,
+        {
+          intentRoutingTrace,
+          now: () => 777_300,
+        },
+      );
+
+      const result = await manager.handleMessage({
+        sessionId: 'tester:web',
+        agentId: 'local',
+        userId: 'tester',
+        grantedCapabilities: [],
+        message: {
+          id: requestId,
+          userId: 'tester',
+          channel: 'web',
+          content: 'Build a simple music app from scratch in the attached repo and verify it runs locally.',
+          metadata: attachPreRoutedIntentGatewayMetadata({
+            codeContext: {
+              workspaceRoot,
+              sessionId: 'music-session',
+            },
+          }, {
+            mode: 'primary',
+            available: true,
+            model: 'test-model',
+            latencyMs: 1,
+            decision,
+          }),
+          timestamp: Date.now(),
+        },
+        systemPrompt: 'system',
+        history: [],
+        knowledgeBases: [],
+        activeSkills: [],
+        additionalSections: [],
+        toolContext: '',
+        runtimeNotices: [],
+        executionProfile: {
+          id: 'managed_cloud_tool',
+          providerName: 'ollama-cloud-coding',
+          providerType: 'ollama_cloud',
+          providerModel: 'glm-5.1',
+          providerLocality: 'external',
+          providerTier: 'managed_cloud',
+          requestedTier: 'external',
+          preferredAnswerPath: 'tool_loop',
+          expectedContextPressure: 'high',
+          contextBudget: 32_000,
+          toolContextMode: 'tight',
+          maxAdditionalSections: 2,
+          maxRuntimeNotices: 2,
+          fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+          reason: 'delegated coding role selected managed-cloud coding profile',
+          routingMode: 'auto',
+          selectionSource: 'delegated_role',
+        },
+        delegation: {
+          requestId,
+          executionId: 'exec-runtime-recovery-local',
+          rootExecutionId: 'exec-runtime-recovery-root',
+          originChannel: 'web',
+          originSurfaceId: 'web-guardian-chat',
+          codeSessionId: 'music-session',
+          orchestration: {
+            role: 'implementer',
+            label: 'Workspace Implementer',
+            lenses: ['coding-workspace'],
+          },
+        },
+      });
+
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'code_build',
+        args: {
+          cwd: workspaceRoot,
+          command: 'node --check server.js',
+          timeoutMs: 30_000,
+          isolation: 'local',
+        },
+        codeContext: {
+          workspaceRoot,
+          sessionId: 'music-session',
+        },
+      }));
+      expect(result.content).not.toContain('Delegated work failed.');
+      expect(readDelegatedResultEnvelope(result.metadata)?.verification).toMatchObject({
+        decision: 'satisfied',
+      });
+      expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual(expect.arrayContaining([
+        'delegated_worker_retrying',
+        'delegated_worker_completed',
+      ]));
+    } finally {
+      manager?.shutdown();
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('diagnoses partial static apps and runs static runtime recovery after retry fills missing assets', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const workspaceRoot = resolve(mkdtempSync(join(tmpdir(), 'ga-static-runtime-recovery-')));
+    const requestId = 'm-static-runtime-recovery';
+    let manager: InstanceType<typeof WorkerManager> | undefined;
+    let dispatchCount = 0;
+    let retryDiagnostic = '';
+    let runtimeCommand = '';
+    let runtimeProofRecorded = false;
+    try {
+      const decision: IntentGatewayDecision = {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'create',
+        summary: 'Build and verify a simple local music app.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          { kind: 'write', summary: 'Create the app files.', expectedToolCategories: ['repo_mutation'], required: true },
+          { kind: 'tool_call', summary: 'Run or otherwise verify the app locally.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1'] },
+          { kind: 'answer', summary: 'Tell the user the local URL and what was verified.', required: true, dependsOn: ['step_2'] },
+        ],
+        entities: {},
+      };
+      const taskContract = buildDelegatedTaskContract(decision);
+      const buildResponse = (
+        content: string,
+        evidenceReceipts: ReturnType<typeof readDelegatedResultEnvelope> extends infer _T
+          ? Array<{
+              receiptId: string;
+              sourceType: 'tool_call';
+              toolName: string;
+              status: 'succeeded';
+              refs: string[];
+              summary: string;
+              startedAt: number;
+              endedAt: number;
+            }>
+          : never,
+      ) => {
+        const answerReceipt = {
+          receiptId: `receipt-answer-${dispatchCount}`,
+          sourceType: 'model_answer' as const,
+          status: 'succeeded' as const,
+          refs: [] as string[],
+          summary: content,
+          startedAt: 10 + dispatchCount,
+          endedAt: 10 + dispatchCount,
+        };
+        const toolReceiptStepIds = new Map<string, string>();
+        for (const receipt of evidenceReceipts) {
+          toolReceiptStepIds.set(receipt.receiptId, 'step_1');
+        }
+        toolReceiptStepIds.set(answerReceipt.receiptId, 'step_3');
+        const allReceipts = [...evidenceReceipts, answerReceipt];
+        const stepReceipts = buildStepReceipts({
+          plannedTask: taskContract.plan,
+          evidenceReceipts: allReceipts,
+          toolReceiptStepIds,
+          finalAnswerReceiptId: answerReceipt.receiptId,
+          interruptions: [],
+        });
+        return {
+          content,
+          metadata: buildDelegatedExecutionMetadata({
+            taskContract,
+            runStatus: computeWorkerRunStatus(taskContract.plan, stepReceipts, [], 'end_turn'),
+            stopReason: 'end_turn',
+            stepReceipts,
+            operatorSummary: content,
+            finalUserAnswer: content,
+            claims: [],
+            evidenceReceipts: allReceipts,
+            interruptions: [],
+            artifacts: [],
+            events: [],
+          }),
+        };
+      };
+
+      workerMessageHandler = (params) => {
+        dispatchCount += 1;
+        if (dispatchCount === 1) {
+          writeFileSync(join(workspaceRoot, 'index.html'), [
+            '<!doctype html>',
+            '<html>',
+            '<head><link rel="stylesheet" href="styles.css"></head>',
+            '<body><main id="app"><h1>SoundWave</h1><div id="song-list"></div></main><script src="app.js"></script></body>',
+            '</html>',
+            '',
+          ].join('\n'));
+          writeFileSync(join(workspaceRoot, 'styles.css'), 'body { font-family: sans-serif; }\n');
+          return buildResponse('Created index.html and styles.css; app.js and runtime verification remain.', [
+            {
+              receiptId: 'receipt-write-index',
+              sourceType: 'tool_call',
+              toolName: 'fs_write',
+              status: 'succeeded',
+              refs: [join(workspaceRoot, 'index.html')],
+              summary: 'Wrote index.html.',
+              startedAt: 1,
+              endedAt: 2,
+            },
+            {
+              receiptId: 'receipt-write-css',
+              sourceType: 'tool_call',
+              toolName: 'fs_write',
+              status: 'succeeded',
+              refs: [join(workspaceRoot, 'styles.css')],
+              summary: 'Wrote styles.css.',
+              startedAt: 3,
+              endedAt: 4,
+            },
+          ]);
+        }
+
+        const sections = Array.isArray(params.additionalSections)
+          ? params.additionalSections as Array<{ section?: string; content?: string }>
+          : [];
+        retryDiagnostic = sections.find((section) => section.section === 'Runtime Evidence Workspace Check')?.content ?? '';
+        writeFileSync(join(workspaceRoot, 'app.js'), [
+          'const songs = [{ title: "Midnight Drive", artist: "Ari Lane" }];',
+          'document.getElementById("song-list").textContent = songs.map((song) => `${song.title} - ${song.artist}`).join("\\n");',
+          '',
+        ].join('\n'));
+        return buildResponse('Created the missing app.js and the app is ready for local static runtime verification.', [
+          {
+            receiptId: 'receipt-write-app',
+            sourceType: 'tool_call',
+            toolName: 'fs_write',
+            status: 'succeeded',
+            refs: [join(workspaceRoot, 'app.js')],
+            summary: 'Wrote app.js.',
+            startedAt: 20,
+            endedAt: 21,
+          },
+        ]);
+      };
+
+      const jobs: Array<{
+        id: string;
+        toolName: string;
+        status: string;
+        requestId: string;
+        argsPreview?: string;
+        resultPreview?: string;
+        createdAt: number;
+        startedAt: number;
+        completedAt: number;
+      }> = [];
+      const runTool = vi.fn(async (request) => {
+        const args = request.args as { command?: string };
+        runtimeCommand = args.command ?? '';
+        const runtimeScript = runtimeCommand.replace(/^node\s+/u, '');
+        expect(runtimeScript).toMatch(/^\.guardian-runtime-check-[a-f0-9-]+\.mjs$/u);
+        expect(existsSync(join(workspaceRoot, runtimeScript))).toBe(true);
+        runtimeProofRecorded = true;
+        jobs.push({
+          id: 'job-static-runtime-check',
+          toolName: 'code_build',
+          status: 'succeeded',
+          requestId,
+          argsPreview: JSON.stringify(request.args),
+          resultPreview: JSON.stringify({
+            success: true,
+            output: { stdout: 'Static app runtime check passed at http://127.0.0.1:41001/ with 2 linked asset(s).' },
+            verificationStatus: 'verified',
+          }),
+          createdAt: 30,
+          startedAt: 30,
+          completedAt: 31,
+        });
+        return {
+          success: true,
+          message: 'Static app runtime check passed at http://127.0.0.1:41001/ with 2 linked asset(s).',
+          verificationStatus: 'verified',
+        };
+      });
+      const intentRoutingTrace = { record: vi.fn() };
+      manager = new WorkerManager(
+        {
+          listAlwaysLoadedDefinitions: () => [],
+          listJobs: vi.fn(() => runtimeProofRecorded ? jobs : []),
+          runTool,
+        } as never,
+        {
+          getFallbackProviderConfig: () => undefined,
+          getConfigSnapshot: () => createExecutionProfileTestConfig(),
+          auditLog: { record: vi.fn() },
+          registry: {
+            get: (agentId: string) => agentId === 'local'
+              ? {
+                  agent: { name: 'Guardian Agent' },
+                  definition: {
+                    orchestration: {
+                      role: 'implementer',
+                      label: 'Workspace Implementer',
+                      lenses: ['coding-workspace'],
+                    },
+                  },
+                }
+              : undefined,
+          },
+        } as never,
+        {
+          workerEntryPoint: 'src/worker/worker-entry.ts',
+          workerMaxMemoryMb: 2048,
+          workerIdleTimeoutMs: 300_000,
+          workerShutdownGracePeriodMs: 10,
+          capabilityTokenTtlMs: 600_000,
+          capabilityTokenMaxToolCalls: 0,
+        } as never,
+        undefined,
+        {
+          intentRoutingTrace,
+          now: () => 778_000,
+        },
+      );
+
+      const result = await manager.handleMessage({
+        sessionId: 'tester:web',
+        agentId: 'local',
+        userId: 'tester',
+        grantedCapabilities: [],
+        message: {
+          id: requestId,
+          userId: 'tester',
+          channel: 'web',
+          content: 'Build a simple music app from scratch in the attached repo and verify it runs locally.',
+          metadata: attachPreRoutedIntentGatewayMetadata({
+            codeContext: {
+              workspaceRoot,
+              sessionId: 'music-session',
+            },
+          }, {
+            mode: 'primary',
+            available: true,
+            model: 'test-model',
+            latencyMs: 1,
+            decision,
+          }),
+          timestamp: Date.now(),
+        },
+        systemPrompt: 'system',
+        history: [],
+        knowledgeBases: [],
+        activeSkills: [],
+        additionalSections: [],
+        toolContext: '',
+        runtimeNotices: [],
+        executionProfile: {
+          id: 'managed_cloud_tool',
+          providerName: 'ollama-cloud-coding',
+          providerType: 'ollama_cloud',
+          providerModel: 'glm-5.1',
+          providerLocality: 'external',
+          providerTier: 'managed_cloud',
+          requestedTier: 'external',
+          preferredAnswerPath: 'tool_loop',
+          expectedContextPressure: 'high',
+          contextBudget: 32_000,
+          toolContextMode: 'tight',
+          maxAdditionalSections: 2,
+          maxRuntimeNotices: 2,
+          fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+          reason: 'delegated coding role selected managed-cloud coding profile',
+          routingMode: 'auto',
+          selectionSource: 'delegated_role',
+        },
+        delegation: {
+          requestId,
+          executionId: 'exec-static-runtime-recovery',
+          rootExecutionId: 'exec-static-runtime-recovery-root',
+          originChannel: 'web',
+          originSurfaceId: 'web-guardian-chat',
+          codeSessionId: 'music-session',
+          orchestration: {
+            role: 'implementer',
+            label: 'Workspace Implementer',
+            lenses: ['coding-workspace'],
+          },
+        },
+      });
+
+      expect(dispatchCount).toBe(2);
+      expect(retryDiagnostic).toContain('Missing linked assets that must be created before runtime proof: app.js.');
+      expect(retryDiagnostic).toContain('No server.js entrypoint was found.');
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'code_build',
+        args: expect.objectContaining({
+          cwd: workspaceRoot,
+          command: expect.stringMatching(/^node \.guardian-runtime-check-[a-f0-9-]+\.mjs$/u),
+          isolation: 'local',
+        }),
+      }));
+      expect(existsSync(join(workspaceRoot, runtimeCommand.replace(/^node\s+/u, '')))).toBe(false);
+      expect(result.content).not.toContain('Delegated work failed.');
+      expect(result.content).toContain('Verified: Static app runtime check passed');
+      expect(readDelegatedResultEnvelope(result.metadata)?.verification).toMatchObject({
+        decision: 'satisfied',
+      });
+      expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual(expect.arrayContaining([
+        'delegated_worker_retrying',
+        'delegated_worker_completed',
+      ]));
+    } finally {
+      manager?.shutdown();
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('uses supervisor static-app completion when delegated retries only reread missing assets', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const workspaceRoot = resolve(mkdtempSync(join(tmpdir(), 'ga-static-second-retry-')));
+    const publicRoot = join(workspaceRoot, 'public');
+    const requestId = 'm-static-second-retry';
+    let manager: InstanceType<typeof WorkerManager> | undefined;
+    let dispatchCount = 0;
+    let runtimeProofRecorded = false;
+    try {
+      const decision: IntentGatewayDecision = {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'create',
+        summary: 'Build and verify a simple local music app.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          { kind: 'write', summary: 'Create the app files.', expectedToolCategories: ['repo_mutation'], required: true },
+          { kind: 'tool_call', summary: 'Run or otherwise verify the app locally.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1'] },
+          { kind: 'answer', summary: 'Tell the user the local URL and what was verified.', required: true, dependsOn: ['step_2'] },
+        ],
+        entities: {},
+      };
+      const taskContract = buildDelegatedTaskContract(decision);
+      const responseWithReceipts = (
+        content: string,
+        receipts: DelegatedResultEnvelope['evidenceReceipts'],
+      ) => {
+        const answerReceipt = {
+          receiptId: `receipt-answer-${dispatchCount}`,
+          sourceType: 'model_answer' as const,
+          status: 'succeeded' as const,
+          refs: [] as string[],
+          summary: content,
+          startedAt: 100 + dispatchCount,
+          endedAt: 100 + dispatchCount,
+        };
+        const toolReceiptStepIds = new Map<string, string>();
+        for (const receipt of receipts) {
+          const matched = matchPlannedStepForTool({
+            plannedTask: taskContract.plan,
+            toolName: receipt.toolName ?? 'tool_call',
+            args: { path: receipt.refs[0] },
+            previouslyMatchedStepIds: new Set(toolReceiptStepIds.values()),
+          });
+          if (matched) toolReceiptStepIds.set(receipt.receiptId, matched);
+        }
+        toolReceiptStepIds.set(answerReceipt.receiptId, 'step_3');
+        const evidenceReceipts = [...receipts, answerReceipt];
+        const stepReceipts = buildStepReceipts({
+          plannedTask: taskContract.plan,
+          evidenceReceipts,
+          toolReceiptStepIds,
+          finalAnswerReceiptId: answerReceipt.receiptId,
+          interruptions: [],
+        });
+        return {
+          content,
+          metadata: buildDelegatedExecutionMetadata({
+            taskContract,
+            runStatus: computeWorkerRunStatus(taskContract.plan, stepReceipts, [], 'end_turn'),
+            stopReason: 'end_turn',
+            stepReceipts,
+            operatorSummary: content,
+            finalUserAnswer: content,
+            claims: [],
+            evidenceReceipts,
+            interruptions: [],
+            artifacts: [],
+            events: [],
+          }),
+        };
+      };
+
+      const jobs: Array<{
+        id: string;
+        toolName: string;
+        status: string;
+        requestId: string;
+        argsPreview?: string;
+        resultPreview?: string;
+        createdAt: number;
+        startedAt: number;
+        completedAt: number;
+      }> = [];
+      workerMessageHandler = (params) => {
+        dispatchCount += 1;
+        if (dispatchCount === 1) {
+          mkdirSync(publicRoot, { recursive: true });
+          writeFileSync(join(workspaceRoot, 'package.json'), JSON.stringify({
+            scripts: {
+              verify: 'node verify.js',
+            },
+          }, null, 2));
+          writeFileSync(join(workspaceRoot, 'verify.js'), [
+            'const { existsSync } = require("node:fs");',
+            'const required = ["public/index.html", "public/styles.css", "public/app.js"];',
+            'const missing = required.filter((file) => !existsSync(file));',
+            'if (missing.length) {',
+            '  console.error(`MISSING: ${missing.join(", ")}`);',
+            '  process.exit(1);',
+            '}',
+            'console.log("Verify passed.");',
+            '',
+          ].join('\n'));
+          writeFileSync(join(publicRoot, 'index.html'), [
+            '<!doctype html>',
+            '<html><head><link rel="stylesheet" href="styles.css"></head>',
+            '<body><div id="song-list"></div><button id="btn-play">Play</button><script src="app.js"></script></body></html>',
+            '',
+          ].join('\n'));
+          writeFileSync(join(publicRoot, 'styles.css'), 'body { font-family: sans-serif; }\n');
+          jobs.push(
+            {
+              id: 'job-write-package-second',
+              toolName: 'fs_write',
+              status: 'succeeded',
+              requestId,
+              argsPreview: JSON.stringify({ path: join(workspaceRoot, 'package.json') }),
+              resultPreview: JSON.stringify({ path: join(workspaceRoot, 'package.json'), size: 48 }),
+              createdAt: 1,
+              startedAt: 1,
+              completedAt: 2,
+            },
+            {
+              id: 'job-write-verify-second',
+              toolName: 'fs_write',
+              status: 'succeeded',
+              requestId,
+              argsPreview: JSON.stringify({ path: join(workspaceRoot, 'verify.js') }),
+              resultPreview: JSON.stringify({ path: join(workspaceRoot, 'verify.js'), size: 250 }),
+              createdAt: 3,
+              startedAt: 3,
+              completedAt: 4,
+            },
+            {
+              id: 'job-write-index-second',
+              toolName: 'fs_write',
+              status: 'succeeded',
+              requestId,
+              argsPreview: JSON.stringify({ path: join(publicRoot, 'index.html') }),
+              resultPreview: JSON.stringify({ path: join(publicRoot, 'index.html'), size: 180 }),
+              createdAt: 5,
+              startedAt: 5,
+              completedAt: 6,
+            },
+            {
+              id: 'job-write-css-second',
+              toolName: 'fs_write',
+              status: 'succeeded',
+              requestId,
+              argsPreview: JSON.stringify({ path: join(publicRoot, 'styles.css') }),
+              resultPreview: JSON.stringify({ path: join(publicRoot, 'styles.css'), size: 32 }),
+              createdAt: 7,
+              startedAt: 7,
+              completedAt: 8,
+            },
+          );
+          return responseWithReceipts('Created public/index.html and public/styles.css; runtime remains.', [
+            {
+              receiptId: 'receipt-write-package-second',
+              sourceType: 'tool_call',
+              toolName: 'fs_write',
+              status: 'succeeded',
+              refs: [join(workspaceRoot, 'package.json')],
+              summary: 'Wrote package.json.',
+              startedAt: 1,
+              endedAt: 2,
+            },
+            {
+              receiptId: 'receipt-write-verify-second',
+              sourceType: 'tool_call',
+              toolName: 'fs_write',
+              status: 'succeeded',
+              refs: [join(workspaceRoot, 'verify.js')],
+              summary: 'Wrote verify.js.',
+              startedAt: 3,
+              endedAt: 4,
+            },
+            {
+              receiptId: 'receipt-write-index-second',
+              sourceType: 'tool_call',
+              toolName: 'fs_write',
+              status: 'succeeded',
+              refs: [join(publicRoot, 'index.html')],
+              summary: 'Wrote public/index.html.',
+              startedAt: 5,
+              endedAt: 6,
+            },
+            {
+              receiptId: 'receipt-write-css-second',
+              sourceType: 'tool_call',
+              toolName: 'fs_write',
+              status: 'succeeded',
+              refs: [join(publicRoot, 'styles.css')],
+              summary: 'Wrote public/styles.css.',
+              startedAt: 7,
+              endedAt: 8,
+            },
+          ]);
+        }
+
+        const sections = Array.isArray(params.additionalSections)
+          ? params.additionalSections as Array<{ section?: string; content?: string }>
+          : [];
+        if (dispatchCount === 2) {
+          const diagnostic = sections.find((section) => section.section === 'Runtime Evidence Workspace Check')?.content;
+          expect(diagnostic).toContain('package.json scripts found: verify.');
+          expect(diagnostic).toContain('Static entrypoint(s) found: public/index.html.');
+          expect(diagnostic).toContain('Missing linked assets that must be created before runtime proof: public/app.js.');
+          return responseWithReceipts('I could not generate a final response for that request.', [
+            {
+              receiptId: 'receipt-read-index-second',
+              sourceType: 'tool_call',
+              toolName: 'fs_read',
+              status: 'succeeded',
+              refs: [join(publicRoot, 'index.html')],
+              summary: 'Read public/index.html.',
+              startedAt: 10,
+              endedAt: 11,
+            },
+          ]);
+        }
+
+        return responseWithReceipts('I could not generate a final response for that request.', [
+          {
+            receiptId: 'receipt-read-index-static',
+            sourceType: 'tool_call',
+            toolName: 'fs_read',
+            status: 'succeeded',
+            refs: [join(publicRoot, 'index.html')],
+            summary: 'Read public/index.html again.',
+            startedAt: 20,
+            endedAt: 21,
+          },
+        ]);
+      };
+
+      const runTool = vi.fn(async (request) => {
+        if (request.toolName === 'fs_write') {
+          const args = request.args as { path: string; content: string };
+          writeFileSync(args.path, args.content, 'utf8');
+          jobs.push({
+            id: 'job-supervisor-static-write',
+            toolName: 'fs_write',
+            status: 'succeeded',
+            requestId,
+            argsPreview: JSON.stringify({ path: args.path }),
+            resultPreview: JSON.stringify({ path: args.path, size: args.content.length }),
+            createdAt: 22,
+            startedAt: 22,
+            completedAt: 23,
+          });
+          return {
+            success: true,
+            message: 'Wrote missing static app asset.',
+            verificationStatus: 'verified',
+          };
+        }
+        if (request.toolName === 'code_build') {
+          const appScriptPath = join(publicRoot, 'app.js');
+          const appScriptExists = existsSync(appScriptPath);
+          jobs.push({
+            id: appScriptExists ? 'job-static-runtime-second-success' : 'job-static-runtime-second-failed',
+            toolName: 'code_build',
+            status: appScriptExists ? 'succeeded' : 'failed',
+            requestId,
+            argsPreview: JSON.stringify(request.args),
+            resultPreview: appScriptExists
+              ? JSON.stringify({
+                  success: true,
+                  output: { stdout: 'Verify passed.' },
+                  verificationStatus: 'verified',
+                })
+              : JSON.stringify({
+                  success: false,
+                  output: { stderr: 'MISSING: public/app.js' },
+                  verificationStatus: 'failed',
+                }),
+            createdAt: 30,
+            startedAt: 30,
+            completedAt: appScriptExists ? 41 : 31,
+          });
+          runtimeProofRecorded = appScriptExists;
+          if (!appScriptExists) {
+            return {
+              success: false,
+              message: 'MISSING: public/app.js',
+              verificationStatus: 'failed',
+            };
+          }
+          return {
+            success: true,
+            message: 'Verify passed.',
+            verificationStatus: 'verified',
+          };
+        }
+        return {
+          success: false,
+          message: `Unexpected tool ${request.toolName}`,
+        };
+      });
+      manager = new WorkerManager(
+        {
+          listAlwaysLoadedDefinitions: () => [],
+          listJobs: vi.fn(() => runtimeProofRecorded ? jobs : jobs.filter((job) => job.toolName !== 'code_build')),
+          runTool,
+        } as never,
+        {
+          getFallbackProviderConfig: () => undefined,
+          getConfigSnapshot: () => createExecutionProfileTestConfig(),
+          auditLog: { record: vi.fn() },
+          registry: {
+            get: (agentId: string) => agentId === 'local'
+              ? {
+                  agent: { name: 'Guardian Agent' },
+                  definition: {
+                    orchestration: {
+                      role: 'implementer',
+                      label: 'Workspace Implementer',
+                      lenses: ['coding-workspace'],
+                    },
+                  },
+                }
+              : undefined,
+          },
+        } as never,
+        {
+          workerEntryPoint: 'src/worker/worker-entry.ts',
+          workerMaxMemoryMb: 2048,
+          workerIdleTimeoutMs: 300_000,
+          workerShutdownGracePeriodMs: 10,
+          capabilityTokenTtlMs: 600_000,
+          capabilityTokenMaxToolCalls: 0,
+        } as never,
+      );
+
+      const result = await manager.handleMessage({
+        sessionId: 'tester:web',
+        agentId: 'local',
+        userId: 'tester',
+        grantedCapabilities: [],
+        message: {
+          id: requestId,
+          userId: 'tester',
+          channel: 'web',
+          content: 'Build a simple music app from scratch in the attached repo and verify it runs locally.',
+          metadata: attachPreRoutedIntentGatewayMetadata({
+            codeContext: {
+              workspaceRoot,
+              sessionId: 'music-session',
+            },
+          }, {
+            mode: 'primary',
+            available: true,
+            model: 'test-model',
+            latencyMs: 1,
+            decision,
+          }),
+          timestamp: Date.now(),
+        },
+        systemPrompt: 'system',
+        history: [],
+        knowledgeBases: [],
+        activeSkills: [],
+        additionalSections: [],
+        toolContext: '',
+        runtimeNotices: [],
+        executionProfile: {
+          id: 'managed_cloud_tool',
+          providerName: 'ollama-cloud-coding',
+          providerType: 'ollama_cloud',
+          providerModel: 'glm-5.1',
+          providerLocality: 'external',
+          providerTier: 'managed_cloud',
+          requestedTier: 'external',
+          preferredAnswerPath: 'tool_loop',
+          expectedContextPressure: 'high',
+          contextBudget: 32_000,
+          toolContextMode: 'tight',
+          maxAdditionalSections: 2,
+          maxRuntimeNotices: 2,
+          fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+          reason: 'delegated coding role selected managed-cloud coding profile',
+          routingMode: 'auto',
+          selectionSource: 'delegated_role',
+        },
+        delegation: {
+          requestId,
+          executionId: 'exec-static-second-retry',
+          rootExecutionId: 'exec-static-second-retry-root',
+          originChannel: 'web',
+          originSurfaceId: 'web-guardian-chat',
+          codeSessionId: 'music-session',
+          orchestration: {
+            role: 'implementer',
+            label: 'Workspace Implementer',
+            lenses: ['coding-workspace'],
+          },
+        },
+      });
+
+      expect(dispatchCount).toBe(2);
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'fs_write',
+        args: expect.objectContaining({
+          path: join(publicRoot, 'app.js'),
+          content: expect.stringContaining('Midnight Drive'),
+        }),
+      }));
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'fs_write',
+        args: expect.objectContaining({
+          content: expect.stringContaining('renderSongList("song-list"'),
+        }),
+      }));
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'fs_write',
+        args: expect.objectContaining({
+          content: expect.stringContaining('byId("play-btn")'),
+        }),
+      }));
+      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'code_build',
+        args: expect.objectContaining({
+          cwd: workspaceRoot,
+          command: 'npm run verify',
+        }),
+      }));
+      expect(result.content).toContain('Local URL:');
+      expect(result.content).toContain('public/index.html');
+      expect(result.content).toContain('Verified: Verify passed');
+      expect(result.content).not.toContain('Delegated work failed.');
+      expect(readDelegatedResultEnvelope(result.metadata)?.verification).toMatchObject({
+        decision: 'satisfied',
+      });
+    } finally {
+      manager?.shutdown();
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it('waits for in-flight delegated evidence jobs before failing a missing non-answer step', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -4876,6 +6464,10 @@ describe('WorkerManager', () => {
     expect(dispatchProfiles).toEqual(['ollama-cloud-coding', 'openai-frontier']);
     expect(result.content).toContain('src/supervisor/worker-manager.ts');
     expect(result.content).toContain('web/public/js/chat-panel.js');
+    expect(result.metadata?.responseSource).toMatchObject({
+      providerName: 'openai',
+      providerTier: 'frontier',
+    });
     expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
       'delegated_worker_started',
       'delegated_worker_running',

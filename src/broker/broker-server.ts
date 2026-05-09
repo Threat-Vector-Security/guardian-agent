@@ -292,6 +292,9 @@ export class BrokerServer {
           const requestedProviderName = typeof request.params.providerName === 'string' && request.params.providerName.trim()
             ? request.params.providerName.trim()
             : undefined;
+          const requestedTimeoutMs = typeof request.params.timeoutMs === 'number' && Number.isFinite(request.params.timeoutMs)
+            ? Math.max(1_000, Math.min(600_000, request.params.timeoutMs))
+            : undefined;
           const requestedFallbackOrder = Array.isArray(request.params.fallbackProviderOrder)
             ? request.params.fallbackProviderOrder
               .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
@@ -328,6 +331,7 @@ export class BrokerServer {
                 providerName: name,
                 messages: chatMessages,
                 options: chatOptions,
+                ...(requestedTimeoutMs ? { timeoutMs: requestedTimeoutMs } : {}),
               });
               provider = candidateProvider;
               providerProfileName = name;

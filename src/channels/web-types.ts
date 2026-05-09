@@ -1424,6 +1424,8 @@ export interface DashboardCallbacks {
     agentId: string;
     userId: string;
     channel: string;
+    principalId?: string;
+    surfaceId?: string;
   }) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
   onCodeSessionsList?: (args: {
     userId: string;
@@ -1576,6 +1578,9 @@ export interface DashboardCallbacks {
     sessionId: string;
     userId: string;
     channel: string;
+    agentId?: string;
+    principalId?: string;
+    surfaceId?: string;
   }) => { success: boolean; message: string };
   onConversationSessions?: (args: {
     userId: string;

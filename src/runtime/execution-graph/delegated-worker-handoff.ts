@@ -22,7 +22,9 @@ export interface DelegatedInsufficientResultHandoffInput {
 export interface DelegatedWorkerRunClassPolicyInput {
   requestedRunClass?: unknown;
   originChannel?: string;
+  originSurfaceId?: string;
   codeSessionId?: string;
+  activeExecutionRefs?: string[];
   orchestration?: OrchestrationRoleDescriptor;
   directReasoning?: boolean;
 }
@@ -65,7 +67,7 @@ export function buildDelegatedHandoff(
     ?? buildDelegatedSuccessSummary(content, metadata, verification)
     ?? truncateDelegatedHandoffText(content, 220)
     ?? (lifecycle === 'failed' ? 'Delegated worker failed.' : 'Delegated worker completed.');
-  const approvalCount = readApprovalSummaryCount(metadata);
+  const approvalCount = verification?.decision === 'satisfied' ? 0 : readApprovalSummaryCount(metadata);
   const runClass = normalizeDelegatedWorkerRunClass(runClassInput);
   const followUpPolicy = resolveDelegatedWorkerFollowUpPolicy({
     runClass,
@@ -184,6 +186,15 @@ export function resolveDelegatedWorkerRunClass(
     return 'in_invocation';
   }
 
+  if (
+    originChannel === 'code-session'
+    && normalizeRunClassPolicyText(input.originSurfaceId)
+    && hasCodingWorkspaceContext
+    && !hasBackgroundDelegationSignal(input.activeExecutionRefs)
+  ) {
+    return 'in_invocation';
+  }
+
   if (hasCodingWorkspaceContext) {
     return 'long_running';
   }
@@ -273,6 +284,13 @@ function hasDelegatedOrchestrationLens(
   lens: string,
 ): boolean {
   return (orchestration?.lenses ?? []).some((value) => normalizeRunClassPolicyText(value) === lens);
+}
+
+function hasBackgroundDelegationSignal(activeExecutionRefs: string[] | undefined): boolean {
+  return (activeExecutionRefs ?? []).some((value) => {
+    const normalized = normalizeRunClassPolicyText(value)?.toLowerCase();
+    return normalized?.startsWith('delegated:') || normalized?.startsWith('background:');
+  });
 }
 
 function normalizeRunClassPolicyText(value: unknown): string | undefined {
@@ -532,6 +550,9 @@ function resolveDelegatedBlockedKind(
   metadata: Record<string, unknown> | undefined,
   verification?: VerificationDecision,
 ): string | undefined {
+  if (verification?.decision === 'satisfied') {
+    return undefined;
+  }
   if (verification?.decision === 'policy_blocked') {
     return 'policy_blocked';
   }

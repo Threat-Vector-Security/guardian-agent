@@ -4,6 +4,7 @@ import {
   deriveAnswerConstraints,
   isExplicitComplexPlanningRequest,
   isExplicitCodingSessionControlRequest,
+  isExplicitWorkspaceAppBuildRequest,
   isExplicitRepoInspectionRequest,
   isExplicitWorkspaceScopedRepoWorkRequest,
   isConversationTranscriptReferenceRequest,
@@ -87,6 +88,18 @@ describe('request-patterns', () => {
     )).toBe(false);
     expect(isExplicitWorkspaceScopedRepoWorkRequest(
       'Search the workspace for SPECIAL_INDEXED_MATCH. Tell me the highest-numbered matching file, then append WEBUI_SEARCH_TEST_OK to that file.',
+    )).toBe(false);
+  });
+
+  it('recognizes greenfield app-build requests only when they are scoped to a workspace', () => {
+    const appBuild = 'In the currently attached empty music app repo, build a simple music app from scratch. Create whatever files are needed, make it runnable locally, add playback controls, start the app, and report the local URL.';
+    expect(isExplicitWorkspaceAppBuildRequest(appBuild)).toBe(true);
+    expect(isExplicitWorkspaceScopedRepoWorkRequest(appBuild)).toBe(true);
+    expect(isExplicitWorkspaceAppBuildRequest(
+      'Build a simple music app from scratch.',
+    )).toBe(false);
+    expect(isExplicitWorkspaceAppBuildRequest(
+      'In this repo, build a design document for the music app.',
     )).toBe(false);
   });
 

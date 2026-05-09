@@ -91,6 +91,24 @@ describe('ContinuityThreadStore', () => {
     expect(record?.focusSummary).toBe('Original focus.');
   });
 
+  it('resets continuity state for a conversation scope', () => {
+    const store = createStore();
+    const scope = createScope();
+    store.upsert(scope, {
+      touchSurface: { channel: 'web', surfaceId: 'web-guardian-chat' },
+      focusSummary: 'Continue the app-build task.',
+      activeExecutionRefs: [{ kind: 'execution', id: 'exec-1' }],
+      continuationState: {
+        kind: 'retry_after_failure',
+        payload: { source: 'runtime_proof' },
+      },
+    });
+
+    expect(store.reset(scope)).toBe(true);
+    expect(store.get(scope)).toBeNull();
+    expect(store.reset(scope)).toBe(false);
+  });
+
   it('summarizes continuity for gateway, clients, and prompt assembly', () => {
     const store = createStore();
     const scope = createScope();

@@ -570,7 +570,7 @@ function synthesizeDelegatedEvidenceReceiptsFromJobs(
       plannedTask: taskContract.plan,
       previouslyMatchedStepIds,
     });
-    if (matchedStepId) {
+    if (matchedStepId && receiptStatus === 'succeeded') {
       previouslyMatchedStepIds.add(matchedStepId);
     }
     const receiptId = `job:${snapshot.id}`;

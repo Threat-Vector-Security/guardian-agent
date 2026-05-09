@@ -2765,6 +2765,117 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(systemMessages).toContain('When the user asks where behavior is implemented, prefer non-test source files that contain the implementation logic, not files that only import, test, document, or quote that behavior.');
   });
 
+  it('adds local app-build guidance when coding tasks require writes and runtime evidence', async () => {
+    const llmChat = vi.fn(async (_messages, options) => {
+      if (options?.tools?.[0]?.name === 'route_intent') {
+        throw new Error('Pre-routed delegated coding turns should not reclassify the turn.');
+      }
+      return {
+        content: 'I created and verified the app.',
+        model: 'test-model',
+        finishReason: 'stop',
+        toolCalls: [],
+        providerLocality: 'external',
+        providerName: 'ollama-cloud-coding',
+      } satisfies ChatResponse;
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'coding_backend_run',
+          description: 'Run a coding backend in the attached workspace.',
+          parameters: { type: 'object', properties: {} },
+        },
+        {
+          name: 'fs_write',
+          description: 'Write a file.',
+          parameters: { type: 'object', properties: {} },
+        },
+        {
+          name: 'code_build',
+          description: 'Build the app.',
+          parameters: { type: 'object', properties: {} },
+        },
+      ],
+      llmChat,
+      callTool: vi.fn(),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerModel: 'glm-5.1',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'high',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: [],
+        reason: 'test app-build guidance',
+      },
+      message: {
+        id: 'msg-app-build-guidance',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Build a simple music app from scratch, make it runnable locally, start it, and tell me the URL.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'create',
+            summary: 'Build and verify a local music app.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'repo_grounded',
+            preferredTier: 'external',
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            expectedContextPressure: 'high',
+            preferredAnswerPath: 'tool_loop',
+            plannedSteps: [
+              { kind: 'write', summary: 'Create the app files.', expectedToolCategories: ['repo_mutation'], required: true },
+              { kind: 'tool_call', summary: 'Start or exercise the app locally and collect runtime evidence before answering.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1'] },
+              { kind: 'answer', summary: 'Report the local URL and verification result.', required: true, dependsOn: ['step_1', 'step_2'] },
+            ],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    const firstToolLoopCall = llmChat.mock.calls.find((call) => Array.isArray(call[1]?.tools) && call[1]?.tools.some((tool: { name: string }) => tool.name === 'coding_backend_run'));
+    const systemMessages = (firstToolLoopCall?.[0] ?? [])
+      .filter((message: { role?: string; content?: string }) => message.role === 'system')
+      .map((message: { content?: string }) => message.content ?? '')
+      .join('\n\n');
+    expect(systemMessages).toContain('Local app build rule:');
+    expect(systemMessages).toContain('prefer it as the main implementation tool for broad app builds');
+    expect(systemMessages).toContain('Prefer dependency-free static HTML/CSS/JS or a built-in Node http server');
+    expect(systemMessages).toContain('Do not call package_install for a simple app before first trying a dependency-free implementation path.');
+    expect(systemMessages).toContain('Runtime evidence must come from an execution-capable tool receipt');
+    expect(systemMessages).toContain('A final answer or file write alone does not satisfy runtime_evidence.');
+    expect(systemMessages).toContain('find_tools with the exact query "coding_backend_run code_build code_test code_remote_exec shell_safe browser_navigate"');
+  });
+
   it('adds catalog grounding guidance for mixed automation and routine evidence plans', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;
@@ -3485,6 +3596,7 @@ describe('BrokeredWorkerSession automation control', () => {
 
     await expect(result).rejects.toThrow('Ollama Cloud API error 503: Service Temporarily Unavailable');
     expect(llmChat.mock.calls.some((call) => call[2]?.useFallback === true)).toBe(false);
+    expect(llmChat.mock.calls.some((call) => Array.isArray(call[2]?.fallbackProviderOrder))).toBe(false);
   });
 
   it('resumes approval-blocked remote runs with the original request text so follow-up remote steps keep the same profile', async () => {

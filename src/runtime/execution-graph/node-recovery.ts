@@ -424,8 +424,15 @@ export async function runRecoveryAdvisorInvocation(
     missingEvidenceKinds: input.verification.missingEvidenceKinds,
   });
 
-  const advisorResult = await input.dispatchAdvisor(advisorRequest);
-  const proposal = readRecoveryAdvisorProposal(advisorResult.metadata);
+  let advisorResult: { metadata?: Record<string, unknown> } | null = null;
+  try {
+    advisorResult = await input.dispatchAdvisor(advisorRequest);
+  } catch (error) {
+    recordTrace('recovery_advisor_rejected', {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const proposal = readRecoveryAdvisorProposal(advisorResult?.metadata);
   let advice = validateRecoveryAdvisorProposal(proposal, advisorRequest);
   let adviceSource: RecoveryAdvisorInvocationResult['adviceSource'] = 'llm';
   if (!advice) {

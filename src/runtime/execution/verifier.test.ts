@@ -406,6 +406,278 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('rejects completed envelopes whose answer receipt is a fallback even when finalUserAnswer is absent', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Build and verify a simple local music app.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'write', summary: 'Create the app files.', expectedToolCategories: ['repo_mutation'], required: true },
+        { kind: 'tool_call', summary: 'Run or otherwise verify the app locally.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1'] },
+        { kind: 'answer', summary: 'Tell the user the local URL and what was verified.', required: true, dependsOn: ['step_2'] },
+      ],
+      entities: {},
+    });
+    const fallbackAnswer = 'I could not generate a final response for that request.';
+    const evidenceReceipts: EvidenceReceipt[] = [
+      {
+        receiptId: 'receipt-write',
+        sourceType: 'tool_call',
+        toolName: 'fs_write',
+        status: 'succeeded',
+        refs: ['server.js'],
+        summary: 'Wrote server.js.',
+        startedAt: 1,
+        endedAt: 1,
+      },
+      {
+        receiptId: 'receipt-runtime',
+        sourceType: 'tool_call',
+        toolName: 'code_build',
+        status: 'succeeded',
+        refs: [],
+        summary: 'Local syntax check passed.',
+        startedAt: 2,
+        endedAt: 2,
+      },
+      {
+        receiptId: 'receipt-answer',
+        sourceType: 'model_answer',
+        status: 'succeeded',
+        refs: [],
+        summary: fallbackAnswer,
+        startedAt: 3,
+        endedAt: 3,
+      },
+    ];
+    const stepReceipts: StepReceipt[] = [
+      {
+        stepId: 'step_1',
+        status: 'satisfied',
+        evidenceReceiptIds: ['receipt-write'],
+        summary: 'Wrote server.js.',
+        startedAt: 1,
+        endedAt: 1,
+      },
+      {
+        stepId: 'step_2',
+        status: 'satisfied',
+        evidenceReceiptIds: ['receipt-runtime'],
+        summary: 'Local syntax check passed.',
+        startedAt: 2,
+        endedAt: 2,
+      },
+      {
+        stepId: 'step_3',
+        status: 'satisfied',
+        evidenceReceiptIds: ['receipt-answer'],
+        summary: fallbackAnswer,
+        startedAt: 3,
+        endedAt: 3,
+      },
+    ];
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        stepReceipts,
+        evidenceReceipts,
+        finalUserAnswer: '',
+        operatorSummary: fallbackAnswer,
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['step_3'],
+    });
+  });
+
+  it('synthesizes the answer instead of blocking on redundant approval after required runtime evidence', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Build and verify a simple local music app.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'write', summary: 'Create the app files.', expectedToolCategories: ['repo_mutation'], required: true },
+        { kind: 'tool_call', summary: 'Run or otherwise verify the app locally.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1'] },
+        { kind: 'answer', summary: 'Tell the user the local URL and what was verified.', required: true, dependsOn: ['step_2'] },
+      ],
+      entities: {},
+    });
+    const evidenceReceipts: EvidenceReceipt[] = [
+      {
+        receiptId: 'receipt-write',
+        sourceType: 'tool_call',
+        toolName: 'fs_write',
+        status: 'succeeded',
+        refs: ['server.js'],
+        summary: 'Wrote server.js.',
+        startedAt: 1,
+        endedAt: 1,
+      },
+      {
+        receiptId: 'receipt-runtime',
+        sourceType: 'tool_call',
+        toolName: 'code_build',
+        status: 'succeeded',
+        refs: [],
+        summary: 'Local syntax check passed.',
+        startedAt: 2,
+        endedAt: 2,
+      },
+    ];
+    const interruption: Interruption = {
+      interruptionId: 'approval-extra-run',
+      kind: 'approval',
+      prompt: 'Waiting for approval to run code_remote_exec.',
+      approvalSummaries: [{ id: 'approval-extra-run', toolName: 'code_remote_exec', argsPreview: '{}' }],
+    };
+    const stepReceipts = buildStepReceipts({
+      plannedTask: taskContract.plan,
+      evidenceReceipts,
+      toolReceiptStepIds: new Map([
+        ['receipt-write', 'step_1'],
+        ['receipt-runtime', 'step_2'],
+      ]),
+      interruptions: [interruption],
+    });
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'suspended',
+        stopReason: 'approval_required',
+        stepReceipts,
+        evidenceReceipts,
+        interruptions: [interruption],
+        operatorSummary: 'Waiting for approval to start the server.',
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['step_3'],
+    });
+    expect(decision.reasons.join(' ')).toContain('required evidence');
+  });
+
+  it('does not let approval-only follow-up block a contract that already has evidence and an answer', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Build and verify a simple local music app.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'write', summary: 'Create the app files.', expectedToolCategories: ['repo_mutation'], required: true },
+        { kind: 'tool_call', summary: 'Run or otherwise verify the app locally.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1'] },
+        { kind: 'answer', summary: 'Tell the user the local URL and what was verified.', required: true, dependsOn: ['step_2'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = 'Created the MusicApp and verified `node --check server.js`; run it at http://localhost:3000.';
+    const evidenceReceipts: EvidenceReceipt[] = [
+      {
+        receiptId: 'receipt-write',
+        sourceType: 'tool_call',
+        toolName: 'fs_write',
+        status: 'succeeded',
+        refs: ['server.js'],
+        summary: 'Wrote server.js.',
+        startedAt: 1,
+        endedAt: 1,
+      },
+      {
+        receiptId: 'receipt-runtime',
+        sourceType: 'tool_call',
+        toolName: 'code_build',
+        status: 'succeeded',
+        refs: [],
+        summary: 'Local syntax check passed.',
+        startedAt: 2,
+        endedAt: 2,
+      },
+      {
+        receiptId: 'receipt-answer',
+        sourceType: 'model_answer',
+        status: 'succeeded',
+        refs: [],
+        summary: finalAnswer,
+        startedAt: 3,
+        endedAt: 3,
+      },
+    ];
+    const interruption: Interruption = {
+      interruptionId: 'approval-extra-run',
+      kind: 'approval',
+      prompt: 'Waiting for approval to run code_remote_exec.',
+      approvalSummaries: [{ id: 'approval-extra-run', toolName: 'code_remote_exec', argsPreview: '{}' }],
+    };
+    const stepReceipts = buildStepReceipts({
+      plannedTask: taskContract.plan,
+      evidenceReceipts,
+      toolReceiptStepIds: new Map([
+        ['receipt-write', 'step_1'],
+        ['receipt-runtime', 'step_2'],
+        ['receipt-answer', 'step_3'],
+      ]),
+      finalAnswerReceiptId: 'receipt-answer',
+      interruptions: [interruption],
+    });
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'suspended',
+        stopReason: 'approval_required',
+        stepReceipts,
+        evidenceReceipts,
+        finalUserAnswer: finalAnswer,
+        interruptions: [interruption],
+        operatorSummary: finalAnswer,
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'satisfied',
+      retryable: false,
+    });
+  });
+
   it('rejects completed envelopes whose final answer promises another search before synthesis', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'general_assistant',
