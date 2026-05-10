@@ -956,15 +956,15 @@ const STATIC_APP_RUNTIME_CHECK_SCRIPT = [
   '  if (musicSignals < 3) return \'\';',
   '  const ids = htmlIds(htmlSource);',
   '  const issues = [];',
-  '  assertMusicTarget(\'song list\', ids, jsSource, [\'song-list\', \'recent-songs\', \'browse-results\', \'all-songs\', \'recently-played\', \'content-area\'], issues);',
-  '  assertMusicTarget(\'playlist list\', ids, jsSource, [\'playlist-list\', \'playlist-grid\', \'sidebar-playlist-list\', \'content-area\'], issues);',
-  '  assertMusicTarget(\'artist list\', ids, jsSource, [\'artist-list\', \'artist-grid\', \'popular-artists\', \'content-area\'], issues);',
+  '  assertMusicTarget(\'song list\', ids, jsSource, [\'song-list\', \'recent-songs\', \'browse-results\', \'all-songs\', \'recently-played\', \'content-area\', \'main-content\'], issues);',
+  '  assertMusicTarget(\'playlist list\', ids, jsSource, [\'playlist-list\', \'playlist-grid\', \'sidebar-playlist-list\', \'content-area\', \'main-content\'], issues);',
+  '  assertMusicTarget(\'artist list\', ids, jsSource, [\'artist-list\', \'artist-grid\', \'popular-artists\', \'content-area\', \'main-content\'], issues);',
   '  assertMusicTarget(\'player title\', ids, jsSource, [\'player-title\', \'player-song\', \'player-song-title\'], issues);',
   '  assertMusicTarget(\'player artist\', ids, jsSource, [\'player-artist\', \'player-song-artist\'], issues);',
   '  assertMusicTarget(\'play control\', ids, jsSource, [\'btn-play\', \'play-btn\'], issues);',
   '  assertMusicTarget(\'next control\', ids, jsSource, [\'btn-next\', \'next-btn\'], issues);',
   '  assertMusicTarget(\'previous control\', ids, jsSource, [\'btn-prev\', \'prev-btn\'], issues);',
-  '  assertMusicTarget(\'progress control\', ids, jsSource, [\'progress-bar\'], issues);',
+  '  assertMusicTarget(\'progress control\', ids, jsSource, [\'progress-bar\', \'player-progress\'], issues);',
   '  assertIfPresent(\'playlist detail view\', ids, jsSource, [\'playlist-detail-view\', \'playlist-detail\'], issues);',
   '  assertIfPresent(\'artist detail view\', ids, jsSource, [\'artist-detail-view\', \'artist-detail\'], issues);',
   '  assertAdvancedMusicBehavior(ids, jsSource, issues);',
@@ -1092,6 +1092,7 @@ const STATIC_MUSIC_APP_COMPLETION_SCRIPT = [
   '  let isPlaying = false;',
   '  let elapsed = 0;',
   '  let timer = null;',
+  '  let recentlyPlayed = [];',
   '',
   '  const byId = (id) => document.getElementById(id);',
   '  const all = (selector, root = document) => Array.from(root.querySelectorAll(selector));',
@@ -1136,8 +1137,7 @@ const STATIC_MUSIC_APP_COMPLETION_SCRIPT = [
   '',
   '  function renderHome(query = "") {',
   '    renderSongList("song-list", matchingSongs(query));',
-  '    renderSongList("recent-songs", songs.slice(0, 4));',
-  '    renderSongList("recently-played", songs.slice(0, 4));',
+  '    renderRecentlyPlayed();',
   '    const madeForYou = byId("made-for-you");',
   '    if (madeForYou) {',
   '      clear(madeForYou);',
@@ -1155,6 +1155,12 @@ const STATIC_MUSIC_APP_COMPLETION_SCRIPT = [
   '    renderSongList("browse-results", filtered);',
   '    renderSongList("all-songs", filtered);',
   '    if (!byId("browse-results")) renderSongList("song-list", filtered);',
+  '  }',
+  '',
+  '  function renderRecentlyPlayed() {',
+  '    const recentSongs = (recentlyPlayed.length ? recentlyPlayed.map((index) => songs[index]).filter(Boolean) : songs.slice(0, 4));',
+  '    renderSongList("recent-songs", recentSongs);',
+  '    renderSongList("recently-played", recentSongs);',
   '  }',
   '',
   '  function renderPlaylists() {',
@@ -1234,17 +1240,18 @@ const STATIC_MUSIC_APP_COMPLETION_SCRIPT = [
   '  }',
   '',
   '  function ensureMusicShell() {',
-  '    const shell = byId("content-area");',
+  '    const shell = firstById("content-area", "main-content");',
   '    if (!shell || byId("song-list")) return;',
   '    shell.innerHTML = `',
-  '      <section id="view-library" class="view active">',
+  '      <section id="view-home" class="view active">',
   '        <div class="section"><h2>Recently Played</h2><div class="song-list" id="recently-played"></div></div>',
   '        <div class="section"><h2>All Songs</h2><div class="song-list" id="song-list"></div></div>',
   '        <div class="section"><h2>Made For You</h2><div class="card-grid" id="made-for-you"></div></div>',
   '        <div class="section"><h2>Popular Artists</h2><div class="card-grid" id="popular-artists"></div></div>',
   '      </section>',
+  '      <section id="view-browse" class="view"><div class="song-list" id="all-songs"></div></section>',
+  '      <section id="view-playlists" class="view"><div class="card-grid" id="playlist-list"></div></section>',
   '      <section id="view-artists" class="view"><div class="card-grid" id="artist-grid"></div></section>',
-  '      <section id="view-albums" class="view"><div class="song-list" id="all-songs"></div></section>',
   '      <section id="playlist-detail" class="view"><div class="playlist-header" id="playlist-header"></div><div class="song-list" id="playlist-songs"></div></section>',
   '      <section id="artist-detail" class="view"><div class="artist-header" id="artist-header"></div><div class="song-list" id="artist-songs"></div></section>',
   '    `;',
@@ -1265,7 +1272,7 @@ const STATIC_MUSIC_APP_COMPLETION_SCRIPT = [
   '    if (title) title.textContent = song.title;',
   '    if (artist) artist.textContent = song.artist;',
   '    if (art) art.style.background = song.color;',
-  '    playButtons.forEach((button) => { button.textContent = isPlaying ? "Pause" : "Play"; });',
+  '    playButtons.forEach((button) => { button.textContent = isPlaying ? "⏸" : "▶"; button.setAttribute("aria-label", isPlaying ? "Pause" : "Play"); button.title = isPlaying ? "Pause" : "Play"; });',
   '    if (current) current.textContent = formatTime(elapsed);',
   '    if (total) total.textContent = formatTime(song.duration);',
   '    if (fill) fill.style.width = `${Math.min(100, (elapsed / song.duration) * 100)}%`;',
@@ -1290,6 +1297,8 @@ const STATIC_MUSIC_APP_COMPLETION_SCRIPT = [
   '  function playSong(index) {',
   '    currentIndex = Math.max(0, index);',
   '    elapsed = 0;',
+  '    recentlyPlayed = [currentIndex, ...recentlyPlayed.filter((item) => item !== currentIndex)].slice(0, 8);',
+  '    renderRecentlyPlayed();',
   '    setPlaying(true);',
   '  }',
   '',
@@ -1303,7 +1312,7 @@ const STATIC_MUSIC_APP_COMPLETION_SCRIPT = [
   '    byId("search-input")?.addEventListener("input", (event) => renderBrowse(event.target.value));',
   '    byId("song-search")?.addEventListener("input", (event) => renderHome(event.target.value));',
   '    byId("artist-search")?.addEventListener("input", (event) => renderArtists(event.target.value));',
-  '    byId("progress-bar")?.addEventListener("click", (event) => { const rect = event.currentTarget.getBoundingClientRect(); const song = songs[currentIndex]; elapsed = Math.round(((event.clientX - rect.left) / rect.width) * song.duration); syncPlayer(); });',
+  '    firstById("progress-bar", "player-progress")?.addEventListener("click", (event) => { const rect = event.currentTarget.getBoundingClientRect(); const song = songs[currentIndex]; elapsed = Math.round(((event.clientX - rect.left) / rect.width) * song.duration); syncPlayer(); });',
   '    byId("volume-slider")?.addEventListener("input", (event) => { event.currentTarget.title = `Volume ${event.currentTarget.value}%`; });',
   '  }',
   '',
@@ -1453,6 +1462,37 @@ function readDelegatedPendingApprovalMetadata(metadata: Record<string, unknown> 
       ? summaries
       : approvalIds.map((id) => ({ id, toolName: 'unknown', argsPreview: '' })),
     prompt: prompt || 'Approval required for the pending delegated action.',
+  };
+}
+
+function shouldPreserveDelegatedApprovalPause(
+  metadata: Record<string, unknown> | undefined,
+  approvalMetadata: ReturnType<typeof readDelegatedPendingApprovalMetadata>,
+): boolean {
+  if (!approvalMetadata) return false;
+  if (!readWorkerSuspensionMetadata(metadata)) return false;
+  const workerExecution = readWorkerExecutionMetadata(metadata);
+  return workerExecution?.completionReason === 'approval_pending'
+    || workerExecution?.lifecycle === 'blocked'
+    || workerExecution?.blockerKind === 'approval'
+    || (workerExecution?.pendingApprovalCount ?? 0) > 0;
+}
+
+function buildApprovalPauseVerificationDecision(
+  decision: VerificationDecision,
+): VerificationDecision {
+  const reasons = [
+    'Delegated worker is waiting for approval before final verification can complete.',
+    ...decision.reasons,
+  ].filter((reason, index, values) => reason.trim().length > 0 && values.indexOf(reason) === index);
+  return {
+    decision: 'blocked',
+    reasons,
+    retryable: true,
+    requiredNextAction: 'Resolve the pending approval(s) to continue the delegated run, then rerun verification before answering.',
+    ...(decision.missingEvidenceKinds?.length ? { missingEvidenceKinds: [...decision.missingEvidenceKinds] } : {}),
+    ...(decision.unsatisfiedStepIds?.length ? { unsatisfiedStepIds: [...decision.unsatisfiedStepIds] } : {}),
+    ...(decision.qualityNotes?.length ? { qualityNotes: [...decision.qualityNotes] } : {}),
   };
 }
 
@@ -3242,16 +3282,25 @@ export class WorkerManager {
           };
         }
       }
+      const preFinalApprovalMetadata = readDelegatedPendingApprovalMetadata(result.metadata);
+      const preserveApprovalPause = !!insufficiency
+        && shouldPreserveDelegatedApprovalPause(result.metadata, preFinalApprovalMetadata);
+      const verificationDecisionForFinalization = preserveApprovalPause
+        ? buildApprovalPauseVerificationDecision(verifiedResult.decision)
+        : verifiedResult.decision;
       const verificationFinalization = finalizeDelegatedWorkerVerification({
         taskContract: effectiveTaskContract,
-        verifiedResult,
+        verifiedResult: {
+          ...verifiedResult,
+          decision: verificationDecisionForFinalization,
+        },
         timestamp: this.observability.now?.() ?? Date.now(),
       });
       const verifiedEnvelope = verificationFinalization.verifiedEnvelope;
       this.recordDelegatedWorkerTrace('delegated_worker_contract_reconciled', effectiveInput, delegatedTarget, {
         requestId,
         taskRunId: delegatedTaskRunId,
-        lifecycle: insufficiency ? 'failed' : 'completed',
+        lifecycle: preserveApprovalPause ? 'blocked' : insufficiency ? 'failed' : 'completed',
         taskContract: verificationFinalization.traceTaskContract,
         reason: verificationFinalization.traceReason,
       });
@@ -3272,7 +3321,8 @@ export class WorkerManager {
         metadata: verifiedMetadata,
       };
       const handoffRunClass = resolveDelegationRunClass(effectiveInput, delegatedTarget);
-      const handoff = insufficiency
+      const delegatedPendingApprovalMetadata = readDelegatedPendingApprovalMetadata(verifiedMetadata);
+      const handoff = insufficiency && !preserveApprovalPause
         ? buildDelegatedInsufficientResultHandoff(
           insufficiency,
           handoffRunClass,
@@ -3281,16 +3331,18 @@ export class WorkerManager {
           result.content,
           verifiedMetadata,
           handoffRunClass,
-          verifiedResult.decision,
+          verificationDecisionForFinalization,
         );
-      const lifecycle = insufficiency
+      const lifecycle = preserveApprovalPause
+        ? 'blocked'
+        : insufficiency
         ? 'failed'
         : resolveDelegatedWorkerLifecycle(
           verifiedMetadata,
           handoff.unresolvedBlockerKind,
-          verifiedResult.decision,
+          verificationDecisionForFinalization,
         );
-      const normalizedResult = insufficiency
+      const normalizedResult = insufficiency && !preserveApprovalPause
         ? {
             content: formatFailedDelegatedMessage(handoff),
             metadata: {
@@ -3303,13 +3355,22 @@ export class WorkerManager {
               },
             },
           }
-        : applyDelegatedFollowUpPolicy(verifiedResultPayload, handoff, verifiedResult.decision);
-      const delegatedPendingApprovalMetadata = readDelegatedPendingApprovalMetadata(normalizedResult.metadata);
+        : applyDelegatedFollowUpPolicy(verifiedResultPayload, handoff, verificationDecisionForFinalization);
+      if (insufficiency && preserveApprovalPause) {
+        normalizedResult.metadata = {
+          ...(normalizedResult.metadata ?? {}),
+          delegatedSufficiencyFailure: {
+            decision: insufficiency.decision.decision,
+            reason: insufficiency.retryReason,
+            reasons: insufficiency.decision.reasons,
+          },
+        };
+      }
       const executionGraphCompletion = this.completeDelegatedWorkerGraph(delegatedGraphRun, {
         lifecycle,
         handoff,
         taskContract: effectiveTaskContract,
-        verification: verifiedResult.decision,
+        verification: verificationDecisionForFinalization,
         workerId: worker.id,
         ...(delegatedPendingApprovalMetadata ? { approvalMetadata: delegatedPendingApprovalMetadata } : {}),
       });

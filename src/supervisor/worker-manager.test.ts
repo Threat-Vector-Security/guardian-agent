@@ -4885,7 +4885,7 @@ describe('WorkerManager', () => {
       expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
         toolName: 'fs_write',
         args: expect.objectContaining({
-          content: expect.stringContaining('byId("content-area")'),
+          content: expect.stringContaining('firstById("content-area", "main-content")'),
         }),
       }));
       expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
@@ -5341,6 +5341,270 @@ describe('WorkerManager', () => {
         'delegated_worker_retrying',
         'delegated_worker_completed',
       ]));
+    } finally {
+      manager?.shutdown();
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps static-app proof failures resumable when the delegated worker is approval-paused', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const workspaceRoot = resolve(mkdtempSync(join(tmpdir(), 'ga-static-approval-pause-')));
+    const pendingActionStore = createMemoryPendingActionStore(() => 990_000);
+    const executionGraphStore = new ExecutionGraphStore({
+      now: () => 990_000,
+    });
+    let manager: InstanceType<typeof WorkerManager> | undefined;
+    let runtimeProofAttempts = 0;
+    try {
+      writeFileSync(join(workspaceRoot, 'index.html'), [
+        '<!doctype html>',
+        '<html>',
+        '<head><link rel="stylesheet" href="styles.css"></head>',
+        '<body>',
+        '<main id="main-content"></main>',
+        '<footer id="player-bar"><div id="player-title"></div><div id="player-artist"></div><button id="btn-prev">Prev</button><button id="btn-play">Play</button><button id="btn-next">Next</button><div id="player-progress"></div></footer>',
+        '<script src="app.js"></script>',
+        '</body>',
+        '</html>',
+        '',
+      ].join('\n'));
+      writeFileSync(join(workspaceRoot, 'styles.css'), 'body { font-family: sans-serif; }\n');
+      writeFileSync(join(workspaceRoot, 'app.js'), 'console.log("incomplete music app");\n');
+
+      const decision: IntentGatewayDecision = {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'create',
+        summary: 'Build and verify a static music app.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          { kind: 'write', summary: 'Create the static app files.', expectedToolCategories: ['repo_mutation'], required: true },
+          { kind: 'tool_call', summary: 'Exercise the app locally.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1'] },
+          { kind: 'answer', summary: 'Report the URL and verification result.', required: true, dependsOn: ['step_2'] },
+        ],
+        entities: {},
+      };
+
+      workerMessageHandler = (params) => {
+        const message = params.message as {
+          id: string;
+          userId: string;
+          principalId?: string;
+          principalRole?: 'owner' | 'delegate' | 'system';
+          channel: string;
+          surfaceId?: string;
+          content: string;
+          metadata?: Record<string, unknown>;
+          timestamp?: number;
+        };
+        return {
+          content: 'Waiting for approval to write the local static server before rerunning the app proof.',
+          metadata: attachWorkerSuspensionMetadata({
+            ...approvalPendingActionMetadata([
+              {
+                id: 'approval-static-server',
+                toolName: 'fs_write',
+                argsPreview: '{"path":"server.js"}',
+              },
+            ]),
+            workerExecution: {
+              lifecycle: 'blocked',
+              source: 'tool_loop',
+              completionReason: 'approval_pending',
+              responseQuality: 'final',
+              blockerKind: 'approval',
+              toolCallCount: 1,
+              toolResultCount: 1,
+              successfulToolResultCount: 0,
+              pendingApprovalCount: 1,
+            },
+          }, {
+            version: WORKER_SUSPENSION_SCHEMA_VERSION,
+            kind: 'tool_loop',
+            llmMessages: [
+              {
+                role: 'assistant',
+                content: '',
+                toolCalls: [{ id: 'call-static-server', name: 'fs_write', args: '{}' }],
+              },
+            ],
+            pendingTools: [{
+              approvalId: 'approval-static-server',
+              toolCallId: 'call-static-server',
+              jobId: 'job-static-server',
+              name: 'fs_write',
+            }],
+            originalMessage: {
+              id: message.id,
+              userId: message.userId,
+              principalId: message.principalId ?? message.userId,
+              principalRole: message.principalRole ?? 'owner',
+              channel: message.channel,
+              ...(message.surfaceId ? { surfaceId: message.surfaceId } : {}),
+              content: message.content,
+              metadata: message.metadata,
+              timestamp: message.timestamp ?? Date.now(),
+            },
+            createdAt: 990_000,
+            expiresAt: 990_000 + 30 * 60_000,
+          }),
+        };
+      };
+
+      const runTool = vi.fn(async () => {
+        runtimeProofAttempts += 1;
+        return {
+          success: false,
+          status: 'failed',
+          message: 'Static app semantic check failed: song list container is missing from index.html',
+          output: {
+            stderr: 'Static app semantic check failed: song list container is missing from index.html',
+          },
+          verificationStatus: 'failed',
+        };
+      });
+
+      manager = new WorkerManager(
+        {
+          listAlwaysLoadedDefinitions: () => [],
+          listJobs: vi.fn(() => []),
+          runTool,
+        } as never,
+        {
+          getFallbackProviderConfig: () => undefined,
+          getConfigSnapshot: () => createExecutionProfileTestConfig(),
+          auditLog: { record: vi.fn() },
+          registry: {
+            get: (agentId: string) => agentId === 'local'
+              ? {
+                  agent: { name: 'Guardian Agent' },
+                  definition: {
+                    orchestration: {
+                      role: 'implementer',
+                      label: 'Workspace Implementer',
+                      lenses: ['coding-workspace'],
+                    },
+                  },
+                }
+              : undefined,
+          },
+        } as never,
+        {
+          workerEntryPoint: 'src/worker/worker-entry.ts',
+          workerMaxMemoryMb: 2048,
+          workerIdleTimeoutMs: 300_000,
+          workerShutdownGracePeriodMs: 10,
+          capabilityTokenTtlMs: 600_000,
+          capabilityTokenMaxToolCalls: 0,
+        } as never,
+        undefined,
+        {
+          pendingActionStore,
+          executionGraphStore,
+          now: () => 990_000,
+        },
+      );
+
+      const result = await manager.handleMessage({
+        sessionId: 'tester:web',
+        agentId: 'local',
+        userId: 'tester',
+        grantedCapabilities: [],
+        message: {
+          id: 'm-static-approval-pause',
+          userId: 'tester',
+          principalId: 'tester',
+          principalRole: 'owner',
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+          content: 'Build a static MusicApp and verify it locally.',
+          metadata: attachPreRoutedIntentGatewayMetadata({
+            codeContext: {
+              workspaceRoot,
+              sessionId: 'music-session',
+            },
+          }, {
+            mode: 'primary',
+            available: true,
+            model: 'test-model',
+            latencyMs: 1,
+            decision,
+          }),
+          timestamp: Date.now(),
+        },
+        systemPrompt: 'system',
+        history: [],
+        knowledgeBases: [],
+        activeSkills: [],
+        additionalSections: [],
+        toolContext: '',
+        runtimeNotices: [],
+        executionProfile: {
+          id: 'managed_cloud_tool',
+          providerName: 'ollama-cloud-coding',
+          providerType: 'ollama_cloud',
+          providerModel: 'glm-5.1',
+          providerLocality: 'external',
+          providerTier: 'managed_cloud',
+          requestedTier: 'external',
+          preferredAnswerPath: 'tool_loop',
+          expectedContextPressure: 'medium',
+          contextBudget: 32_000,
+          toolContextMode: 'tight',
+          maxAdditionalSections: 2,
+          maxRuntimeNotices: 2,
+          fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+          reason: 'delegated coding role selected managed-cloud coding profile',
+          routingMode: 'auto',
+          selectionSource: 'delegated_role',
+        },
+        delegation: {
+          requestId: 'm-static-approval-pause',
+          executionId: 'exec-static-approval-pause',
+          rootExecutionId: 'exec-static-approval-root',
+          originChannel: 'web',
+          originSurfaceId: 'web-guardian-chat',
+          codeSessionId: 'music-session',
+          orchestration: {
+            role: 'implementer',
+            label: 'Workspace Implementer',
+            lenses: ['coding-workspace'],
+          },
+        },
+      });
+
+      expect(runtimeProofAttempts).toBeGreaterThan(0);
+      expect(result.content).toContain('Delegated work is paused: approval required.');
+      expect(result.content).not.toContain('Delegated work failed.');
+      expect(result.metadata?.delegatedHandoff).toMatchObject({
+        unresolvedBlockerKind: 'approval',
+        reportingMode: 'held_for_approval',
+      });
+      expect(result.metadata?.pendingAction).toMatchObject({
+        blocker: {
+          approvalSummaries: [
+            expect.objectContaining({
+              id: 'approval-static-server',
+              toolName: 'fs_write',
+            }),
+          ],
+        },
+      });
+      expect(result.metadata?.executionGraph).toMatchObject({
+        status: 'awaiting_approval',
+        lifecycle: 'blocked',
+      });
+      expect(pendingActionStore.findActiveByApprovalId('approval-static-server')).toBeTruthy();
     } finally {
       manager?.shutdown();
       rmSync(workspaceRoot, { recursive: true, force: true });
