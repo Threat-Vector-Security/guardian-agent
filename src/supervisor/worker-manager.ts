@@ -251,7 +251,7 @@ function buildStaticAppRuntimeProofFailure(
     decision: 'contradicted',
     reasons: [reason],
     retryable: true,
-    requiredNextAction: 'Fix the static app runtime or semantic wiring issue, then rerun the local app proof before answering.',
+    requiredNextAction: 'Fix the static app runtime or worker-owned verification issue, then rerun the local app proof before answering.',
     missingEvidenceKinds: ['runtime_evidence'],
     ...(unsatisfiedStepIds.length > 0 ? { unsatisfiedStepIds } : {}),
   };
@@ -299,17 +299,6 @@ type RuntimeEvidenceRecoveryTool = {
   args: Record<string, unknown>;
   detail: string;
   cleanup?: () => void;
-};
-
-type StaticAppAssetCompletion = {
-  relativePath: string;
-  absolutePath: string;
-  content: string;
-};
-
-type StaticAppCompletionRecovery = {
-  detail: string;
-  assets: StaticAppAssetCompletion[];
 };
 
 function resolveCodeContextFromMessage(input: WorkerMessageRequest): ToolExecutionRequest['codeContext'] | undefined {
@@ -396,7 +385,7 @@ function buildRuntimeEvidenceWorkspaceDiagnosticSection(
   };
 }
 
-function buildStaticAppCompletionRecoverySection(
+function buildMissingStaticAssetRecoverySection(
   codeContext: ToolExecutionRequest['codeContext'],
 ): PromptAssemblyAdditionalSection | null {
   if (!codeContext?.workspaceRoot) return null;
@@ -404,78 +393,18 @@ function buildStaticAppCompletionRecoverySection(
   const missing = readMissingStaticAssetRefs(workspaceRoot);
   if (missing.length === 0) return null;
   return {
-    section: 'Static App Completion Recovery',
+    section: 'Missing Static Asset Recovery',
     mode: 'plain',
     content: [
       'The delegated retry still cannot collect runtime evidence because index.html links to local static assets that do not exist yet.',
       `Missing linked assets: ${missing.map((asset) => asset.relativePath).join(', ')}.`,
       'Your next tool action must be a mutation for the missing asset file(s), preferably fs_write. Do not read index.html or styles.css again unless a missing asset path is unclear.',
-      'For a missing JavaScript asset, implement the existing page controls and sample data using the DOM ids already present in index.html, keep it dependency-free, and avoid adding package installation steps.',
+      'For a missing JavaScript asset, implement the requested app behavior using the DOM ids and files already present in the workspace, keep it dependency-free unless the repo already has a local setup, and avoid adding package installation steps.',
+      'Guardian will not synthesize application source for you; the implementation and any app-specific verification script must come from your worker tool actions.',
       'After the missing asset file(s) exist, immediately call an execution-capable tool such as code_build, code_test, shell_safe, coding_backend_run, code_remote_exec, or a browser tool for runtime proof.',
       'Do not answer until the runtime/build/browser proof succeeds.',
     ].join('\n'),
   };
-}
-
-function resolveStaticAppCompletionRecovery(
-  codeContext: ToolExecutionRequest['codeContext'],
-): StaticAppCompletionRecovery | null {
-  if (!codeContext?.workspaceRoot) return null;
-  const workspaceRoot = resolve(codeContext.workspaceRoot);
-  const missing = readMissingStaticAssetRefs(workspaceRoot);
-  if (missing.length === 0) return null;
-  let html = '';
-  for (const candidate of listStaticIndexCandidates(workspaceRoot)) {
-    try {
-      html += `\n${readFileSync(candidate.indexPath, 'utf8')}`;
-    } catch {
-      // Ignore unreadable static entrypoints; missing assets remain authoritative.
-    }
-  }
-  if (!html.trim()) {
-    return null;
-  }
-
-  const assets: StaticAppAssetCompletion[] = [];
-  for (const asset of missing) {
-    const content = buildStaticAppAssetCompletionContent(asset, html);
-    if (content === null) {
-      return null;
-    }
-    assets.push({
-      relativePath: asset.relativePath,
-      absolutePath: asset.absolutePath,
-      content,
-    });
-  }
-  if (assets.length === 0) return null;
-  return {
-    detail: `Completing missing linked static asset(s): ${assets.map((asset) => asset.relativePath).join(', ')}.`,
-    assets,
-  };
-}
-
-function buildStaticAppAssetCompletionContent(asset: StaticAssetRef, html: string): string | null {
-  const extension = extname(asset.relativePath).toLowerCase();
-  if (extension === '.css') {
-    return STATIC_APP_COMPLETION_CSS;
-  }
-  if (extension !== '.js' && extension !== '.mjs') {
-    return null;
-  }
-  if (looksLikeMusicStaticAppHtml(html)) {
-    return STATIC_MUSIC_APP_COMPLETION_SCRIPT;
-  }
-  return null;
-}
-
-function looksLikeMusicStaticAppHtml(html: string): boolean {
-  const normalized = html.toLowerCase();
-  if (!normalized.includes('song')) {
-    return false;
-  }
-  const supportingMarkers = ['playlist', 'artist', 'player', 'album', 'music', 'btn-play', 'play'];
-  return supportingMarkers.some((marker) => normalized.includes(marker));
 }
 
 function buildRuntimeEvidenceWorkspaceDiagnosticLines(workspaceRoot: string): string[] {
@@ -767,8 +696,7 @@ function summarizeRuntimeEvidenceJob(jobSnapshots: DelegatedJobSnapshot[]): stri
       && isSuccessfulDelegatedJobSnapshot(snapshot)
       && isStaticAppRuntimeCheckSnapshot(snapshot)
     ) {
-      const text = snapshot.resultPreview ? extractRuntimePreviewText(snapshot.resultPreview) : '';
-      return summarizeStaticAppRuntimeCheckText(text);
+      return summarizeStaticAppRuntimeCheckText();
     }
     const text = [
       snapshot.resultPreview ? extractRuntimePreviewText(snapshot.resultPreview) : '',
@@ -776,18 +704,15 @@ function summarizeRuntimeEvidenceJob(jobSnapshots: DelegatedJobSnapshot[]): stri
     ].filter((line) => line.trim().length > 0).join(' ').trim();
     if (!text) continue;
     if (snapshot.toolName === 'code_build' && text.includes('Static app runtime check passed')) {
-      return summarizeStaticAppRuntimeCheckText(text);
+      return summarizeStaticAppRuntimeCheckText();
     }
     return text.slice(0, 500);
   }
   return null;
 }
 
-function summarizeStaticAppRuntimeCheckText(text: string): string {
-  const semantic = text.includes('Music app semantic smoke passed')
-    ? ' Music app semantic smoke also passed: linked JavaScript targets visible song, playlist, artist, player, and playback-control elements.'
-    : '';
-  return `Static app runtime check passed: index.html and all linked local assets loaded through a temporary localhost server, and linked JavaScript passed syntax validation.${semantic}`;
+function summarizeStaticAppRuntimeCheckText(): string {
+  return 'Static app runtime check passed: index.html and all linked local assets loaded through a temporary localhost server, and linked JavaScript passed syntax validation.';
 }
 
 function isSuccessfulDelegatedJobSnapshot(snapshot: DelegatedJobSnapshot): boolean {
@@ -896,109 +821,6 @@ const STATIC_APP_RUNTIME_CHECK_SCRIPT = [
   '  }',
   '  return [...refs.values()];',
   '}',
-  '',
-  'function htmlIds(source) {',
-  '  const ids = new Set();',
-  "  const pattern = /\\bid\\s*=\\s*[\"']([^\"']+)[\"']/giu;",
-  '  for (const match of source.matchAll(pattern)) ids.add(match[1]);',
-  '  return ids;',
-  '}',
-  '',
-  'function scriptTargetsId(source, id) {',
-  '  return source.includes(`"${id}"`)',
-  "    || source.includes(\"'\" + id + \"'\")",
-  '    || source.includes(`#${id}`);',
-  '}',
-  '',
-  'function assertMusicTarget(label, ids, jsSource, candidates, issues) {',
-  '  const present = candidates.filter((id) => ids.has(id));',
-  '  if (!present.length) {',
-  '    issues.push(`${label} container is missing from index.html`);',
-  '    return;',
-  '  }',
-  '  if (!present.some((id) => scriptTargetsId(jsSource, id))) {',
-  '    issues.push(`${label} container exists but linked JavaScript does not target ${present.join(\', \')}`);',
-  '  }',
-  '}',
-  '',
-  'function assertIfPresent(label, ids, jsSource, candidates, issues) {',
-  '  const present = candidates.filter((id) => ids.has(id));',
-  '  if (present.length && !present.some((id) => scriptTargetsId(jsSource, id))) {',
-  '    issues.push(`${label} exists in index.html but linked JavaScript does not target ${present.join(\', \')}`);',
-  '  }',
-  '}',
-  '',
-  'function assertDetailTarget(label, ids, jsSource, viewCandidates, contentCandidates, issues) {',
-  '  const present = [...viewCandidates, ...contentCandidates].filter((id) => ids.has(id));',
-  '  if (!present.length) return;',
-  '  if (!present.some((id) => scriptTargetsId(jsSource, id))) {',
-  '    issues.push(`${label} exists in index.html but linked JavaScript does not target the visible detail container(s): ${present.join(\', \')}`);',
-  '  }',
-  '}',
-  '',
-  'function assertSearchBehavior(ids, jsSource, issues) {',
-  '  if (!ids.has(\'search-input\')) return;',
-  '  const searchTargets = [\'view-search\', \'search-view\', \'search-results\', \'home-search-results\', \'search-songs-list\', \'search-playlists-list\', \'search-artists-list\'].filter((id) => ids.has(id));',
-  '  if (searchTargets.length && !searchTargets.some((id) => scriptTargetsId(jsSource, id))) {',
-  '    issues.push(`search input exists but linked JavaScript does not target visible search result container(s): ${searchTargets.join(\', \')}`);',
-  '  }',
-  '  for (const id of [\'search-songs-list\', \'search-playlists-list\', \'search-artists-list\']) {',
-  '    if (ids.has(id) && !scriptTargetsId(jsSource, id)) {',
-  '      issues.push(`${id} exists in index.html but linked JavaScript does not render into it`);',
-  '    }',
-  '  }',
-  '}',
-  '',
-  'function assertAdvancedMusicBehavior(ids, jsSource, issues) {',
-  '  const advancedShell = ids.has(\'home-search-input\')',
-  '    || ids.has(\'home-search-results\')',
-  '    || ids.has(\'search-input\')',
-  '    || ids.has(\'view-search\')',
-  '    || ids.has(\'search-view\')',
-  '    || ids.has(\'songs-view\')',
-  '    || ids.has(\'view-browse\')',
-  '    || ids.has(\'view-playlist-detail\')',
-  '    || ids.has(\'view-artist-detail\');',
-  '  if (!advancedShell) return;',
-  '  assertIfPresent(\'home search input\', ids, jsSource, [\'home-search-input\'], issues);',
-  '  assertIfPresent(\'home search results\', ids, jsSource, [\'home-search-results\'], issues);',
-  '  assertIfPresent(\'search results\', ids, jsSource, [\'search-results\'], issues);',
-  '  assertSearchBehavior(ids, jsSource, issues);',
-  '  const hasRecentlyPlayedState = /\\brecentlyPlayed\\b|\\brecentHistory\\b|\\bplayHistory\\b/u.test(jsSource);',
-  '  const rendersStaticRecentlyPlayed = /recently-played[\\s\\S]{0,80}songs\\.slice\\(\\s*0\\s*,\\s*4\\s*\\)/u.test(jsSource);',
-  '  if (ids.has(\'recently-played\') && !hasRecentlyPlayedState && rendersStaticRecentlyPlayed) {',
-  '    issues.push(\'recently played is rendered from a fixed song slice instead of playback state\');',
-  '  }',
-  '  const normalizedJs = jsSource.replace(/\\s+/gu, \' \');',
-  '  const usesWordOnlyPlayPause = normalizedJs.includes(\'textContent = isPlaying ? "Pause" : "Play"\')',
-  '    || normalizedJs.includes("textContent = isPlaying ? \'Pause\' : \'Play\'");',
-  '  if (ids.has(\'btn-play\') && usesWordOnlyPlayPause) {',
-  '    issues.push(\'play control updates to word-only Play/Pause text instead of a polished visible player state\');',
-  '  }',
-  '}',
-  '',
-  'function runStaticSemanticChecks(htmlSource, jsSource) {',
-  '  const lower = htmlSource.toLowerCase();',
-  '  const musicSignals = [\'song\', \'playlist\', \'artist\', \'player\', \'music\'].filter((signal) => lower.includes(signal)).length;',
-  '  if (musicSignals < 3) return \'\';',
-  '  const ids = htmlIds(htmlSource);',
-  '  const issues = [];',
-  '  assertMusicTarget(\'song list\', ids, jsSource, [\'song-list\', \'recent-songs\', \'browse-results\', \'all-songs\', \'recently-played\', \'content-area\', \'main-content\'], issues);',
-  '  assertMusicTarget(\'playlist list\', ids, jsSource, [\'playlist-list\', \'playlist-grid\', \'sidebar-playlist-list\', \'content-area\', \'main-content\'], issues);',
-  '  assertMusicTarget(\'artist list\', ids, jsSource, [\'artist-list\', \'artist-grid\', \'popular-artists\', \'content-area\', \'main-content\'], issues);',
-  '  assertMusicTarget(\'player title\', ids, jsSource, [\'player-title\', \'player-song\', \'player-song-title\'], issues);',
-  '  assertMusicTarget(\'player artist\', ids, jsSource, [\'player-artist\', \'player-song-artist\'], issues);',
-  '  assertMusicTarget(\'play control\', ids, jsSource, [\'btn-play\', \'play-btn\'], issues);',
-  '  assertMusicTarget(\'next control\', ids, jsSource, [\'btn-next\', \'next-btn\'], issues);',
-  '  assertMusicTarget(\'previous control\', ids, jsSource, [\'btn-prev\', \'prev-btn\'], issues);',
-  '  assertMusicTarget(\'progress control\', ids, jsSource, [\'progress-bar\', \'player-progress\', \'progress-control\'], issues);',
-  '  assertDetailTarget(\'playlist detail view\', ids, jsSource, [\'playlist-detail-view\', \'playlist-detail\', \'view-playlist-detail\'], [\'playlist-detail-content\', \'playlist-header\', \'playlist-songs\', \'playlist-song-list\'], issues);',
-  '  assertDetailTarget(\'artist detail view\', ids, jsSource, [\'artist-detail-view\', \'artist-detail\', \'view-artist-detail\'], [\'artist-detail-content\', \'artist-header\', \'artist-songs\', \'artist-song-list\'], issues);',
-  '  assertAdvancedMusicBehavior(ids, jsSource, issues);',
-  '  if (issues.length) throw new Error(`Static app semantic check failed: ${issues.join(\'; \')}`);',
-  '  return \'Music app semantic smoke passed: linked JavaScript targets visible song, playlist, artist, player, and playback-control elements.\';',
-  '}',
-  '',
   'function contentType(filePath) {',
   '  switch (extname(filePath).toLowerCase()) {',
   '    case \'.html\': return \'text/html; charset=utf-8\';',
@@ -1074,328 +896,10 @@ const STATIC_APP_RUNTIME_CHECK_SCRIPT = [
   '    const assetResponse = await requestText(localUrl + asset.route.replace(/^\\/+/, \'\'));',
   '    if (assetResponse.status !== 200) throw new Error(`Linked asset failed to load: ${asset.ref}`);',
   '  }',
-  '  const semanticSummary = runStaticSemanticChecks(html, jsSources.join(\'\\n\'));',
-  '  console.log(`Static app runtime check passed at ${localUrl} with ${assets.length} linked asset(s).${semanticSummary ? \' \' + semanticSummary : \'\'}`);',
+  '  console.log(`Static app runtime check passed at ${localUrl} with ${assets.length} linked asset(s).`);',
   '} finally {',
   '  await new Promise((resolveClose) => server.close(resolveClose));',
   '}',
-  '',
-].join('\n');
-
-const STATIC_APP_COMPLETION_CSS = [
-  '/* Guardian Agent completed this missing linked stylesheet so the static app can run locally. */',
-  ':root { color-scheme: light dark; }',
-  'body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }',
-  'button, input { font: inherit; }',
-  '.hidden { display: none !important; }',
-  '',
-].join('\n');
-
-const STATIC_MUSIC_APP_COMPLETION_SCRIPT = [
-  '(() => {',
-  '  if (window.__guardianStaticMusicAppReady) return;',
-  '  window.__guardianStaticMusicAppReady = true;',
-  '',
-  '  const songs = [',
-  '    { title: "Midnight Drive", artist: "Ari Lane", album: "After Hours", duration: 213, mood: "Synth pop", color: "#4f46e5" },',
-  '    { title: "Golden Hour", artist: "Sable Rivers", album: "Sunset Letters", duration: 198, mood: "Indie pop", color: "#f59e0b" },',
-  '    { title: "Neon Pulse", artist: "Kira Volt", album: "Night Market", duration: 221, mood: "Electro", color: "#7c3aed" },',
-  '    { title: "Harbor Lights", artist: "Nia Vale", album: "Blue Room", duration: 188, mood: "Indie soul", color: "#0891b2" },',
-  '    { title: "Paper Moon", artist: "June Atelier", album: "Small Hours", duration: 204, mood: "Dream pop", color: "#be185d" },',
-  '    { title: "Southbound", artist: "Miles Rowan", album: "Open Roads", duration: 226, mood: "Folk", color: "#15803d" },',
-  '    { title: "Velvet Circuit", artist: "The Velvet Keys", album: "Signal Fire", duration: 241, mood: "Alt rock", color: "#ca8a04" },',
-  '    { title: "Quiet Gravity", artist: "Luna Frost", album: "Low Orbit", duration: 216, mood: "Ambient pop", color: "#0f766e" },',
-  '  ];',
-  '',
-  '  const playlists = [',
-  '    { name: "Chill Vibes", description: "Soft songs for slow afternoons.", songIndexes: [1, 3, 4, 7] },',
-  '    { name: "Late Night Drive", description: "Neon roads and low lights.", songIndexes: [0, 2, 6] },',
-  '    { name: "Feel Good Hits", description: "Bright tracks with a pulse.", songIndexes: [1, 2, 5] },',
-  '    { name: "Indie Essentials", description: "Warm guitars and honest hooks.", songIndexes: [3, 4, 5, 6] },',
-  '  ];',
-  '',
-  '  const artists = Array.from(new Map(songs.map((song) => [song.artist, { name: song.artist, songs: songs.filter((item) => item.artist === song.artist) }])).values());',
-  '  let currentIndex = 0;',
-  '  let isPlaying = false;',
-  '  let elapsed = 0;',
-  '  let timer = null;',
-  '  let recentlyPlayed = [];',
-  '',
-  '  const byId = (id) => document.getElementById(id);',
-  '  const all = (selector, root = document) => Array.from(root.querySelectorAll(selector));',
-  '  const firstById = (...ids) => ids.map(byId).find(Boolean) || null;',
-  '  const clear = (node) => { if (node) node.replaceChildren(); };',
-  '  const formatTime = (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;',
-  '  const make = (tag, className, text) => {',
-  '    const node = document.createElement(tag);',
-  '    if (className) node.className = className;',
-  '    if (text !== undefined) node.textContent = text;',
-  '    return node;',
-  '  };',
-  '',
-  '  function songButton(song, index) {',
-  '    const button = make("button", "song-row", "");',
-  '    button.type = "button";',
-  '    button.dataset.index = String(index);',
-  '    button.innerHTML = `<span class="song-num">${index + 1}</span><span class="song-title">${song.title}<br><small>${song.album}</small></span><span class="song-artist">${song.artist}</span><span class="song-duration">${formatTime(song.duration)}</span>`;',
-  '    button.addEventListener("click", () => playSong(index));',
-  '    return button;',
-  '  }',
-  '',
-  '  function card(title, subtitle, action, icon = "Music") {',
-  '    const button = make("button", "card music-card", "");',
-  '    button.type = "button";',
-  '    button.innerHTML = `<div class="card-icon">${icon}</div><div class="card-title">${title}</div><div class="card-sub">${subtitle}</div>`;',
-  '    button.addEventListener("click", action);',
-  '    return button;',
-  '  }',
-  '',
-  '  function renderSongList(containerId, list = songs) {',
-  '    const container = byId(containerId);',
-  '    if (!container) return;',
-  '    clear(container);',
-  '    list.forEach((song) => container.append(songButton(song, songs.indexOf(song))));',
-  '  }',
-  '',
-  '  function matchingSongs(query = "") {',
-  '    const normalized = query.trim().toLowerCase();',
-  '    return songs.filter((song) => [song.title, song.artist, song.album, song.mood].some((value) => value.toLowerCase().includes(normalized)));',
-  '  }',
-  '',
-  '  function renderHome(query = "") {',
-  '    renderSongList("song-list", matchingSongs(query));',
-  '    renderRecentlyPlayed();',
-  '    const madeForYou = byId("made-for-you");',
-  '    if (madeForYou) {',
-  '      clear(madeForYou);',
-  '      playlists.forEach((playlist, index) => madeForYou.append(card(playlist.name, playlist.description, () => showPlaylist(index), "List")));',
-  '    }',
-  '    const popularArtists = byId("popular-artists");',
-  '    if (popularArtists) {',
-  '      clear(popularArtists);',
-  '      artists.slice(0, 6).forEach((artist, index) => popularArtists.append(card(artist.name, `${artist.songs.length} song${artist.songs.length === 1 ? "" : "s"}`, () => showArtist(index), "Artist")));',
-  '    }',
-  '  }',
-  '',
-  '  function renderBrowse(query = "") {',
-  '    const filtered = matchingSongs(query);',
-  '    renderSongList("browse-results", filtered);',
-  '    renderSongList("all-songs", filtered);',
-  '    if (!byId("browse-results")) renderSongList("song-list", filtered);',
-  '  }',
-  '',
-  '  function renderSearchResults(query = "") {',
-  '    const normalized = query.trim().toLowerCase();',
-  '    const filteredSongs = matchingSongs(query);',
-  '    renderSongList("home-search-results", filteredSongs);',
-  '    renderSongList("search-results", filteredSongs);',
-  '    renderSongList("search-songs-list", filteredSongs);',
-  '    const playlistTargets = [byId("search-playlists-list")].filter(Boolean);',
-  '    playlistTargets.forEach((target) => {',
-  '      clear(target);',
-  '      playlists.filter((playlist) => [playlist.name, playlist.description].some((value) => value.toLowerCase().includes(normalized))).forEach((playlist) => {',
-  '        const index = playlists.indexOf(playlist);',
-  '        target.append(card(playlist.name, `${playlist.songIndexes.length} songs`, () => showPlaylist(index), "List"));',
-  '      });',
-  '    });',
-  '    const artistTargets = [byId("search-artists-list")].filter(Boolean);',
-  '    artistTargets.forEach((target) => {',
-  '      clear(target);',
-  '      artists.filter((artist) => artist.name.toLowerCase().includes(normalized) || artist.songs.some((song) => [song.title, song.album, song.mood].some((value) => value.toLowerCase().includes(normalized)))).forEach((artist) => {',
-  '        const index = artists.indexOf(artist);',
-  '        target.append(card(artist.name, `${artist.songs.length} song${artist.songs.length === 1 ? "" : "s"}`, () => showArtist(index), "Artist"));',
-  '      });',
-  '    });',
-  '  }',
-  '',
-  '  function renderRecentlyPlayed() {',
-  '    const recentSongs = (recentlyPlayed.length ? recentlyPlayed.map((index) => songs[index]).filter(Boolean) : songs.slice(0, 4));',
-  '    renderSongList("recent-songs", recentSongs);',
-  '    renderSongList("recently-played", recentSongs);',
-  '  }',
-  '',
-  '  function renderPlaylists() {',
-  '    const targets = [byId("playlist-list"), byId("playlist-grid")].filter(Boolean);',
-  '    targets.forEach((list) => {',
-  '      clear(list);',
-  '      playlists.forEach((playlist, index) => list.append(card(playlist.name, `${playlist.songIndexes.length} songs`, () => showPlaylist(index), "List")));',
-  '    });',
-  '    const sidebar = byId("sidebar-playlist-list");',
-  '    if (sidebar) {',
-  '      clear(sidebar);',
-  '      playlists.forEach((playlist, index) => {',
-  '        const item = make("li", "", playlist.name);',
-  '        item.tabIndex = 0;',
-  '        item.addEventListener("click", () => showPlaylist(index));',
-  '        item.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") showPlaylist(index); });',
-  '        sidebar.append(item);',
-  '      });',
-  '    }',
-  '  }',
-  '',
-  '  function activateView(view) {',
-  '    all("[data-view]").forEach((link) => link.classList.toggle("active", link.getAttribute("data-view") === view));',
-  '    all(".view").forEach((section) => {',
-  '      const active = section.id === `${view}-view` || section.id === `view-${view}`;',
-  '      section.classList.toggle("active", active);',
-  '      if (active) section.classList.remove("hidden");',
-  '    });',
-  '  }',
-  '',
-  '  function showPlaylist(index) {',
-  '    const playlist = playlists[index];',
-  '    if (!playlist) return;',
-  '    const detail = firstById("playlist-detail-view", "playlist-detail", "view-playlist-detail", "playlist-detail-content");',
-  '    if (detail) {',
-  '      all(".view").forEach((section) => section.classList.remove("active"));',
-  '      detail.classList.add("active");',
-  '      detail.classList.remove("hidden");',
-  '    }',
-  '    const detailContent = byId("playlist-detail-content");',
-  '    if (detailContent) detailContent.innerHTML = `<div class="playlist-header" id="playlist-header"></div><div class="song-list" id="playlist-songs"></div>`;',
-  '    const title = byId("playlist-detail-title");',
-  '    if (title) title.textContent = playlist.name;',
-  '    const desc = byId("playlist-detail-desc");',
-  '    if (desc) desc.textContent = playlist.description;',
-  '    const header = byId("playlist-header");',
-  '    if (header) header.innerHTML = `<div class="playlist-cover">List</div><div class="playlist-info"><h1>${playlist.name}</h1><p>${playlist.description}</p></div>`;',
-  '    const playlistSongs = playlist.songIndexes.map((songIndex) => songs[songIndex]).filter(Boolean);',
-  '    renderSongList("playlist-song-list", playlistSongs);',
-  '    renderSongList("playlist-songs", playlistSongs);',
-  '    const playAll = byId("play-playlist-btn");',
-  '    if (playAll) playAll.onclick = () => playSong(playlist.songIndexes[0] ?? 0);',
-  '  }',
-  '',
-  '  function renderArtists(query = "") {',
-  '    const normalized = query.trim().toLowerCase();',
-  '    const filtered = artists.filter((artist) => artist.name.toLowerCase().includes(normalized));',
-  '    [byId("artist-list"), byId("artist-grid")].filter(Boolean).forEach((list) => {',
-  '      clear(list);',
-  '      filtered.forEach((artist, index) => list.append(card(artist.name, `${artist.songs.length} song${artist.songs.length === 1 ? "" : "s"}`, () => showArtist(artists.indexOf(artist)), "Artist")));',
-  '    });',
-  '  }',
-  '',
-  '  function showArtist(index) {',
-  '    const artist = artists[index];',
-  '    if (!artist) return;',
-  '    const detail = firstById("artist-detail-view", "artist-detail", "view-artist-detail", "artist-detail-content");',
-  '    if (detail) {',
-  '      all(".view").forEach((section) => section.classList.remove("active"));',
-  '      detail.classList.add("active");',
-  '      detail.classList.remove("hidden");',
-  '    }',
-  '    const detailContent = byId("artist-detail-content");',
-  '    if (detailContent) detailContent.innerHTML = `<div class="artist-header" id="artist-header"></div><div class="song-list" id="artist-songs"></div>`;',
-  '    const title = firstById("artist-detail-name");',
-  '    if (title) title.textContent = artist.name;',
-  '    const header = byId("artist-header");',
-  '    if (header) header.innerHTML = `<div class="artist-avatar">${artist.name.slice(0, 1)}</div><div class="artist-info"><h2>${artist.name}</h2><p>${artist.songs.length} song${artist.songs.length === 1 ? "" : "s"}</p></div>`;',
-  '    renderSongList("artist-song-list", artist.songs);',
-  '    renderSongList("artist-songs", artist.songs);',
-  '  }',
-  '',
-  '  function ensureMusicShell() {',
-  '    const shell = firstById("content-area", "main-content");',
-  '    if (!shell || byId("song-list")) return;',
-  '    shell.innerHTML = `',
-  '      <section id="view-home" class="view active">',
-  '        <div class="section"><h2>Recently Played</h2><div class="song-list" id="recently-played"></div></div>',
-  '        <div class="section"><h2>All Songs</h2><div class="song-list" id="song-list"></div></div>',
-  '        <div class="section"><h2>Made For You</h2><div class="card-grid" id="made-for-you"></div></div>',
-  '        <div class="section"><h2>Popular Artists</h2><div class="card-grid" id="popular-artists"></div></div>',
-  '      </section>',
-  '      <section id="view-browse" class="view"><div class="song-list" id="all-songs"></div></section>',
-  '      <section id="view-playlists" class="view"><div class="card-grid" id="playlist-list"></div></section>',
-  '      <section id="view-artists" class="view"><div class="card-grid" id="artist-grid"></div></section>',
-  '      <section id="playlist-detail" class="view"><div class="playlist-header" id="playlist-header"></div><div class="song-list" id="playlist-songs"></div></section>',
-  '      <section id="artist-detail" class="view"><div class="artist-header" id="artist-header"></div><div class="song-list" id="artist-songs"></div></section>',
-  '    `;',
-  '  }',
-  '',
-  '  function syncPlayer() {',
-  '    const song = songs[currentIndex];',
-  '    if (!song) return;',
-  '    const title = firstById("player-title", "player-song", "player-song-title");',
-  '    const artist = firstById("player-artist", "player-song-artist");',
-  '    const art = firstById("player-art", "player-album-art");',
-  '    const playButtons = [byId("btn-play"), byId("play-btn")].filter(Boolean);',
-  '    const current = firstById("player-time-current", "player-time", "time-current");',
-  '    const total = firstById("player-time-total", "player-duration", "time-total");',
-  '    const fill = firstById("progress-fill", "player-progress");',
-  '    const bar = byId("player-bar");',
-  '    if (bar) bar.classList.remove("hidden");',
-  '    if (title) title.textContent = song.title;',
-  '    if (artist) artist.textContent = song.artist;',
-  '    if (art) art.style.background = song.color;',
-  '    playButtons.forEach((button) => { button.textContent = isPlaying ? "⏸" : "▶"; button.setAttribute("aria-label", isPlaying ? "Pause" : "Play"); button.title = isPlaying ? "Pause" : "Play"; });',
-  '    if (current) current.textContent = formatTime(elapsed);',
-  '    if (total) total.textContent = formatTime(song.duration);',
-  '    if (fill) fill.style.width = `${Math.min(100, (elapsed / song.duration) * 100)}%`;',
-  '    all(".song-row").forEach((row) => row.classList.toggle("playing", Number(row.dataset.index) === currentIndex));',
-  '  }',
-  '',
-  '  function setPlaying(next) {',
-  '    isPlaying = next;',
-  '    if (timer) clearInterval(timer);',
-  '    timer = null;',
-  '    if (isPlaying) {',
-  '      timer = setInterval(() => {',
-  '        const song = songs[currentIndex];',
-  '        elapsed = song && elapsed >= song.duration ? 0 : elapsed + 1;',
-  '        if (song && elapsed === 0) currentIndex = (currentIndex + 1) % songs.length;',
-  '        syncPlayer();',
-  '      }, 1000);',
-  '    }',
-  '    syncPlayer();',
-  '  }',
-  '',
-  '  function playSong(index) {',
-  '    currentIndex = Math.max(0, index);',
-  '    elapsed = 0;',
-  '    recentlyPlayed = [currentIndex, ...recentlyPlayed.filter((item) => item !== currentIndex)].slice(0, 8);',
-  '    renderRecentlyPlayed();',
-  '    setPlaying(true);',
-  '  }',
-  '',
-  '  function wireControls() {',
-  '    [byId("btn-play"), byId("play-btn")].filter(Boolean).forEach((button) => button.addEventListener("click", () => setPlaying(!isPlaying)));',
-  '    [byId("btn-prev"), byId("prev-btn")].filter(Boolean).forEach((button) => button.addEventListener("click", () => { currentIndex = (currentIndex + songs.length - 1) % songs.length; elapsed = 0; syncPlayer(); }));',
-  '    [byId("btn-next"), byId("next-btn")].filter(Boolean).forEach((button) => button.addEventListener("click", () => { currentIndex = (currentIndex + 1) % songs.length; elapsed = 0; syncPlayer(); }));',
-  '    [byId("shuffle-btn"), byId("btn-shuffle")].filter(Boolean).forEach((button) => button.addEventListener("click", () => playSong(Math.floor(Math.random() * songs.length))));',
-  '    byId("back-to-playlists")?.addEventListener("click", () => activateView("playlists"));',
-  '    byId("back-to-artists")?.addEventListener("click", () => activateView("artists"));',
-  '    byId("search-input")?.addEventListener("input", (event) => { renderBrowse(event.target.value); renderSearchResults(event.target.value); if (byId("view-search") && event.target.value.trim()) activateView("search"); });',
-  '    byId("song-search")?.addEventListener("input", (event) => { renderHome(event.target.value); renderSearchResults(event.target.value); });',
-  '    byId("artist-search")?.addEventListener("input", (event) => renderArtists(event.target.value));',
-  '    firstById("progress-bar", "player-progress", "progress-control")?.addEventListener("click", (event) => { const rect = event.currentTarget.getBoundingClientRect(); const song = songs[currentIndex]; elapsed = Math.round(((event.clientX - rect.left) / rect.width) * song.duration); syncPlayer(); });',
-  '    byId("volume-slider")?.addEventListener("input", (event) => { event.currentTarget.title = `Volume ${event.currentTarget.value}%`; });',
-  '  }',
-  '',
-  '  function wireNavigation() {',
-  '    all("[data-view]").forEach((item) => {',
-  '      item.addEventListener("click", () => {',
-  '        const view = item.getAttribute("data-view") || "songs";',
-  '        activateView(view);',
-  '      });',
-  '    });',
-  '  }',
-  '',
-  '  function init() {',
-  '    ensureMusicShell();',
-  '    renderHome();',
-  '    renderBrowse();',
-  '    renderSearchResults();',
-  '    renderPlaylists();',
-  '    renderArtists();',
-  '    wireNavigation();',
-  '    wireControls();',
-  '    syncPlayer();',
-  '    if (!all(".view.active").length) activateView(byId("song-list") ? "songs" : "home");',
-  '  }',
-  '',
-  '  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init, { once: true });',
-  '  else init();',
-  '})();',
   '',
 ].join('\n');
 
@@ -2675,7 +2179,6 @@ export class WorkerManager {
       const workerManager = this;
       let answerSynthesisFallback = buildAnswerSynthesisFallback();
       if (!answerSynthesisFallback) {
-        await tryStaticAppCompletionRecovery();
         await tryRuntimeEvidenceRecovery();
         await tryStaticAppRuntimeProof();
       }
@@ -3018,81 +2521,15 @@ export class WorkerManager {
         }
         return true;
       }
-      async function tryStaticAppCompletionRecovery(): Promise<boolean> {
-        if (!(insufficiency && hasMissingRuntimeEvidence(insufficiency))) {
-          return false;
-        }
-        const codeContext = resolveCodeContextFromMessage(effectiveInput);
-        const staticRecovery = resolveStaticAppCompletionRecovery(codeContext);
-        const runTool = (workerManager.tools as { runTool?: unknown }).runTool;
-        if (!staticRecovery || typeof runTool !== 'function') {
-          return false;
-        }
-        workerManager.recordDelegatedWorkerTrace('delegated_worker_retrying', effectiveInput, delegatedTarget, {
-          requestId,
-          taskRunId: delegatedTaskRunId,
-          lifecycle: 'running',
-          ...(worker?.id ? { workerId: worker.id } : {}),
-          taskContract: effectiveTaskContract,
-          reason: staticRecovery.detail,
-        });
-        workerManager.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
-          id: `delegated-worker:${delegatedJob.id}:static-app-asset-completion`,
-          kind: 'running',
-          requestId,
-          taskRunId: delegatedTaskRunId,
-          ...(worker?.id ? { workerId: worker.id } : {}),
-          detail: staticRecovery.detail,
-        });
-        for (const asset of staticRecovery.assets) {
-          await workerManager.tools.runTool({
-            toolName: 'fs_write',
-            args: {
-              path: asset.absolutePath,
-              content: asset.content,
-            },
-            origin: 'assistant',
-            agentId: effectiveInput.agentId,
-            userId: effectiveInput.userId,
-            surfaceId: effectiveInput.message.surfaceId,
-            principalId: effectiveInput.message.principalId ?? effectiveInput.userId,
-            principalRole: (effectiveInput.message.principalRole as ToolExecutionRequest['principalRole']) ?? 'owner',
-            channel: effectiveInput.message.channel,
-            requestId,
-            ...(codeContext ? { codeContext } : {}),
-          });
-        }
-        const staticCompletionDrain = await drainDelegatedJobs();
-        verificationCycle = await runDelegatedWorkerVerificationCycle({
-          requestId,
-          taskRunId: delegatedTaskRunId,
-          metadata: result.metadata,
-          intentDecision: effectiveIntentDecision ?? undefined,
-          executionProfile: effectiveExecutionProfile,
-          taskContract: effectiveTaskContract,
-          jobSnapshots: staticCompletionDrain.snapshots,
-          attemptLabel: 'static_app_asset_completion_recovery',
-          drainPendingJobs: drainDelegatedJobs,
-          trace: (event) => workerManager.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
-        });
-        jobSnapshots = verificationCycle.jobSnapshots;
-        verifiedResult = verificationCycle.verifiedResult;
-        insufficiency = verificationCycle.insufficiency;
-        effectiveTaskContract = verificationCycle.taskContract;
-        answerSynthesisFallback = buildAnswerSynthesisFallback();
-        await tryRuntimeEvidenceRecovery();
-        return true;
-      }
-      await tryStaticAppCompletionRecovery();
       await tryRuntimeEvidenceRecovery();
       await tryStaticAppRuntimeProof();
       if (insufficiency && hasMissingRuntimeEvidence(insufficiency) && !answerSynthesisFallback) {
         const codeContext = resolveCodeContextFromMessage(effectiveInput);
-        const staticCompletionSection = codeContext
-          ? buildStaticAppCompletionRecoverySection(codeContext)
+        const missingAssetSection = codeContext
+          ? buildMissingStaticAssetRecoverySection(codeContext)
           : null;
-        if (staticCompletionSection) {
-          const staticCompletionRetry = await runDelegatedWorkerRetryInvocation({
+        if (missingAssetSection) {
+          const missingAssetRetry = await runDelegatedWorkerRetryInvocation({
             requestId,
             taskRunId: delegatedTaskRunId,
             targetLabel: describeDelegatedTarget(delegatedTarget),
@@ -3107,7 +2544,7 @@ export class WorkerManager {
             codeSessionId: effectiveInput.delegation?.codeSessionId,
             baseSections: [
               ...baseDispatchParams.additionalSections,
-              staticCompletionSection,
+              missingAssetSection,
             ],
             allowSameProfileRetry: true,
             buildRetryRequest: ({ currentRequest, retryProfile, retryPlan }) => ({
@@ -3154,7 +2591,7 @@ export class WorkerManager {
               executionProfile: retryProfile,
               taskContract,
               jobSnapshots: jobDrain.snapshots,
-              attemptLabel: 'static_app_completion_recovery',
+              attemptLabel: 'missing_static_asset_recovery',
               drainPendingJobs: drainDelegatedJobs,
               trace: (event) => this.recordDelegatedWorkerTrace(
                 event.stage,
@@ -3174,7 +2611,7 @@ export class WorkerManager {
                 reason: retryPlan.detail,
               });
               this.publishDelegatedWorkerProgress(request, delegatedTarget, {
-                id: `delegated-worker:${delegatedJob.id}:static-app-completion`,
+                id: `delegated-worker:${delegatedJob.id}:missing-static-assets`,
                 kind: 'running',
                 requestId,
                 taskRunId: delegatedTaskRunId,
@@ -3189,7 +2626,7 @@ export class WorkerManager {
                 channel: input.message.channel,
                 controller: 'WorkerManager',
                 details: buildDelegatedAuditDetails(request, delegatedTarget, requestId, {
-                  actionType: 'delegated_worker_static_app_completion_retrying',
+                  actionType: 'delegated_worker_missing_static_assets_retrying',
                   reason: retryInsufficiency.retryReason,
                 }),
               });
@@ -3200,15 +2637,15 @@ export class WorkerManager {
                 taskRunId: delegatedTaskRunId,
                 lifecycle: 'running',
                 taskContract,
-                reason: `${jobDrain.inFlightRemaining} delegated job(s) remained in flight after ${jobDrain.waitedMs}ms drain (static app completion recovery)`,
+                reason: `${jobDrain.inFlightRemaining} delegated job(s) remained in flight after ${jobDrain.waitedMs}ms drain (missing static asset recovery)`,
               });
             },
           });
-          if (staticCompletionRetry) {
-            effectiveInput = staticCompletionRetry.request;
-            effectiveExecutionProfile = staticCompletionRetry.retryProfile;
-            result = staticCompletionRetry.result;
-            verificationCycle = staticCompletionRetry.verificationCycle;
+          if (missingAssetRetry) {
+            effectiveInput = missingAssetRetry.request;
+            effectiveExecutionProfile = missingAssetRetry.retryProfile;
+            result = missingAssetRetry.result;
+            verificationCycle = missingAssetRetry.verificationCycle;
             jobSnapshots = verificationCycle.jobSnapshots;
             verifiedResult = verificationCycle.verifiedResult;
             insufficiency = verificationCycle.insufficiency;
@@ -3218,7 +2655,6 @@ export class WorkerManager {
           }
         }
       }
-      await tryStaticAppCompletionRecovery();
       await tryStaticAppRuntimeProof();
       if (insufficiency && answerSynthesisFallback) {
         const synthesisWorker = await ensureReadyDelegatedWorker();

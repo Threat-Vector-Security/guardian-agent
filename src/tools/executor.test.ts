@@ -7258,6 +7258,91 @@ describe('ToolExecutor', () => {
     expect(approved.message).toBe('OpenAI Codex CLI completed.');
   });
 
+  it('reports duplicate coding backend approvals as already running while the first execution continues', async () => {
+    const root = createExecutorRoot();
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Long Running Backend Session',
+      workspaceRoot: root,
+    });
+    let markBackendStarted!: () => void;
+    let releaseBackend!: () => void;
+    const backendStarted = new Promise<void>((resolve) => {
+      markBackendStarted = resolve;
+    });
+    const backendReleased = new Promise<void>((resolve) => {
+      releaseBackend = resolve;
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      codeSessionStore,
+      codingBackendService: {
+        listBackends: () => [],
+        getStatus: () => [],
+        run: async () => {
+          markBackendStarted();
+          await backendReleased;
+          return {
+            success: true,
+            backendId: 'codex',
+            backendName: 'OpenAI Codex CLI',
+            task: 'Build app',
+            status: 'succeeded',
+            durationMs: 250,
+            assistantResponse: 'Built the app.',
+            output: 'Built the app.',
+            terminalTabId: 'term-running',
+          };
+        },
+      },
+    });
+
+    const run = await executor.runTool({
+      toolName: 'coding_backend_run',
+      args: { task: 'Build app', backend: 'codex' },
+      origin: 'web',
+      userId: 'tester',
+      principalId: 'tester',
+      channel: 'web',
+      codeContext: {
+        sessionId: session.id,
+        workspaceRoot: root,
+      },
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+
+    const firstDecision = executor.decideApproval(run.approvalId!, 'approved', 'tester');
+    await backendStarted;
+
+    const duplicateDecision = await executor.decideApproval(run.approvalId!, 'approved', 'tester');
+    expect(duplicateDecision.success).toBe(true);
+    expect(duplicateDecision.approved).toBe(true);
+    expect(duplicateDecision.executionSucceeded).toBeUndefined();
+    expect(duplicateDecision.job?.status).toBe('running');
+    expect(duplicateDecision.message).toContain('already approved');
+    expect(duplicateDecision.message).toContain('still running');
+    expect(duplicateDecision.message).not.toContain('execution context is no longer available');
+
+    releaseBackend();
+    const completedDecision = await firstDecision;
+    expect(completedDecision.success).toBe(true);
+    expect(completedDecision.executionSucceeded).toBe(true);
+    expect(completedDecision.message).toBe('OpenAI Codex CLI completed.');
+  });
+
   it('keeps approved coding backend decisions approved even when backend execution fails', async () => {
     const root = createExecutorRoot();
     const codeSessionStore = new CodeSessionStore({

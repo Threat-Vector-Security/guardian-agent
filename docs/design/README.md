@@ -43,3 +43,7 @@ Reserve `spec` for the smaller set of documents that truly need normative contra
 ## Documentation Rule
 
 Keep `docs/design/` limited to current design/as-built contracts. If a file is only a future direction, move it to `docs/proposals/`. If it is retained only for historical context, move it to `docs/archive/` and leave the current replacement linked from the archive file when useful.
+
+## Current Guardrail Contracts
+
+- `CODING-ASSISTANT-VERIFICATION-DESIGN.md`: coding-assistant verification ownership, static-app proof limits, and the rule that Guardian orchestration must never synthesize user-requested app deliverables or canned test-passing output.

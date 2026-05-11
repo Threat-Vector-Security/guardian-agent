@@ -333,4 +333,45 @@ describe('direct coding backend delegation', () => {
       },
     });
   });
+
+  it('shows the resolved workspace root in pending approval copy when the session root is relative', async () => {
+    const response = await tryDirectCodingBackendDelegation(
+      {
+        message: makeMessage('Ask Codex to build the current app.'),
+        ctx: TEST_CONTEXT,
+        userKey: 'user-1:web',
+        decision: makeDecision(),
+        codeContext: {
+          sessionId: 'code-1',
+          workspaceRoot: 'S:/Development/GuardianAgent',
+        },
+      },
+      makeDeps({
+        tools: {
+          isEnabled: () => true,
+          executeModelTool: async () => ({
+            success: false,
+            status: 'pending_approval',
+            approvalId: 'approval-1',
+          }),
+          getApprovalSummaries: () => new Map(),
+        } as DirectCodingBackendDeps['tools'],
+        codeSessionStore: {
+          getSession: () => ({
+            id: 'code-1',
+            title: 'Pantry Planner',
+            ownerUserId: 'user-1',
+            workspaceRoot: '.',
+            resolvedRoot: 'S:/Development/GuardianAgent',
+            createdAt: 1,
+            updatedAt: 1,
+            lastAttachedAt: 1,
+          }),
+        } as DirectCodingBackendDeps['codeSessionStore'],
+      }),
+    );
+
+    expect(response?.content).toContain('CURRENT: Pantry Planner — S:/Development/GuardianAgent');
+    expect(response?.content).not.toContain('CURRENT: Pantry Planner — .');
+  });
 });

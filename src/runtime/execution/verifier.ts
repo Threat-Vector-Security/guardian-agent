@@ -578,15 +578,35 @@ function buildBaseDelegatedTaskContract(
 function resolveDelegatedTaskSummary(
   decision: IntentGatewayDecision | null | undefined,
 ): string | undefined {
+  const resolvedContent = decision?.resolvedContent?.trim();
   const normalizedSummary = normalizeUserFacingIntentGatewaySummary(decision?.summary);
+  if (
+    resolvedContent
+    && normalizedSummary
+    && shouldPreferResolvedContentForDelegatedTaskSummary(normalizedSummary, resolvedContent)
+  ) {
+    return resolvedContent;
+  }
   if (normalizedSummary) {
     return normalizedSummary;
   }
-  const resolvedContent = decision?.resolvedContent?.trim();
   if (resolvedContent) {
     return resolvedContent;
   }
   return undefined;
+}
+
+function shouldPreferResolvedContentForDelegatedTaskSummary(
+  summary: string,
+  resolvedContent: string,
+): boolean {
+  if (resolvedContent.length <= summary.length) {
+    return false;
+  }
+  const normalized = summary.trim().toLowerCase();
+  return normalized.startsWith('continue the requested edit in the active coding workspace')
+    || normalized.startsWith('run the explicit coding workspace request against the attached code session')
+    || normalized.startsWith('continue the active coding workspace request from execution state');
 }
 
 function verifyProviderSelection(

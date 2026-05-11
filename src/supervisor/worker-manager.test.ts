@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -4240,7 +4240,7 @@ describe('WorkerManager', () => {
             '<!doctype html>',
             '<html>',
             '<head><link rel="stylesheet" href="styles.css"></head>',
-            '<body><main id="app"><h1>SoundWave</h1><div id="song-list"></div></main><script src="app.js"></script></body>',
+            '<body><main id="app"><h1>Static App</h1><div id="item-list"></div></main><script src="app.js"></script></body>',
             '</html>',
             '',
           ].join('\n'));
@@ -4274,8 +4274,8 @@ describe('WorkerManager', () => {
           : [];
         retryDiagnostic = sections.find((section) => section.section === 'Runtime Evidence Workspace Check')?.content ?? '';
         writeFileSync(join(workspaceRoot, 'app.js'), [
-          'const songs = [{ title: "Midnight Drive", artist: "Ari Lane" }];',
-          'document.getElementById("song-list").textContent = songs.map((song) => `${song.title} - ${song.artist}`).join("\\n");',
+          'const items = [{ title: "Example Item", owner: "Demo User" }];',
+          'document.getElementById("item-list").textContent = items.map((item) => `${item.title} - ${item.owner}`).join("\\n");',
           '',
         ].join('\n'));
         return buildResponse('Created the missing app.js and the app is ready for local static runtime verification.', [
@@ -4464,21 +4464,20 @@ describe('WorkerManager', () => {
     }
   });
 
-  it('uses supervisor static-app completion before delegated retry when missing assets are deterministic', async () => {
+  it('does not synthesize missing linked static app assets before delegated retry', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
-    const workspaceRoot = resolve(mkdtempSync(join(tmpdir(), 'ga-static-second-retry-')));
+    const workspaceRoot = resolve(mkdtempSync(join(tmpdir(), 'ga-static-worker-owned-retry-')));
     const publicRoot = join(workspaceRoot, 'public');
-    const requestId = 'm-static-second-retry';
+    const requestId = 'm-static-worker-owned-retry';
     let manager: InstanceType<typeof WorkerManager> | undefined;
     let dispatchCount = 0;
-    let runtimeProofRecorded = false;
     try {
       const decision: IntentGatewayDecision = {
         route: 'coding_task',
         confidence: 'high',
         operation: 'create',
-        summary: 'Build and verify a simple local music app.',
+        summary: 'Build and verify a simple local app.',
         turnRelation: 'new_request',
         resolution: 'ready',
         missingFields: [],
@@ -4561,115 +4560,57 @@ describe('WorkerManager', () => {
         dispatchCount += 1;
         if (dispatchCount === 1) {
           mkdirSync(publicRoot, { recursive: true });
-          writeFileSync(join(workspaceRoot, 'package.json'), JSON.stringify({
-            scripts: {
-              verify: 'node verify.js',
-            },
-          }, null, 2));
-          writeFileSync(join(workspaceRoot, 'verify.js'), [
-            'const { existsSync } = require("node:fs");',
-            'const required = ["public/index.html", "public/styles.css", "public/app.js"];',
-            'const missing = required.filter((file) => !existsSync(file));',
-            'if (missing.length) {',
-            '  console.error(`MISSING: ${missing.join(", ")}`);',
-            '  process.exit(1);',
-            '}',
-            'console.log("Verify passed.");',
-            '',
-          ].join('\n'));
           writeFileSync(join(publicRoot, 'index.html'), [
             '<!doctype html>',
             '<html><head><link rel="stylesheet" href="styles.css"></head>',
-            '<body><div id="song-list"></div><button id="btn-play">Play</button><script src="app.js"></script></body></html>',
+            '<body><main id="app"><button id="play">Play</button></main><script src="app.js"></script></body></html>',
             '',
           ].join('\n'));
           writeFileSync(join(publicRoot, 'styles.css'), 'body { font-family: sans-serif; }\n');
           jobs.push(
             {
-              id: 'job-write-package-second',
-              toolName: 'fs_write',
-              status: 'succeeded',
-              requestId,
-              argsPreview: JSON.stringify({ path: join(workspaceRoot, 'package.json') }),
-              resultPreview: JSON.stringify({ path: join(workspaceRoot, 'package.json'), size: 48 }),
-              createdAt: 1,
-              startedAt: 1,
-              completedAt: 2,
-            },
-            {
-              id: 'job-write-verify-second',
-              toolName: 'fs_write',
-              status: 'succeeded',
-              requestId,
-              argsPreview: JSON.stringify({ path: join(workspaceRoot, 'verify.js') }),
-              resultPreview: JSON.stringify({ path: join(workspaceRoot, 'verify.js'), size: 250 }),
-              createdAt: 3,
-              startedAt: 3,
-              completedAt: 4,
-            },
-            {
-              id: 'job-write-index-second',
+              id: 'job-write-index-worker-owned',
               toolName: 'fs_write',
               status: 'succeeded',
               requestId,
               argsPreview: JSON.stringify({ path: join(publicRoot, 'index.html') }),
               resultPreview: JSON.stringify({ path: join(publicRoot, 'index.html'), size: 180 }),
-              createdAt: 5,
-              startedAt: 5,
-              completedAt: 6,
+              createdAt: 1,
+              startedAt: 1,
+              completedAt: 2,
             },
             {
-              id: 'job-write-css-second',
+              id: 'job-write-css-worker-owned',
               toolName: 'fs_write',
               status: 'succeeded',
               requestId,
               argsPreview: JSON.stringify({ path: join(publicRoot, 'styles.css') }),
               resultPreview: JSON.stringify({ path: join(publicRoot, 'styles.css'), size: 32 }),
-              createdAt: 7,
-              startedAt: 7,
-              completedAt: 8,
+              createdAt: 3,
+              startedAt: 3,
+              completedAt: 4,
             },
           );
-          return responseWithReceipts('Created public/index.html and public/styles.css; runtime remains.', [
+          return responseWithReceipts('Created public/index.html and public/styles.css; app.js still needs to be created.', [
             {
-              receiptId: 'receipt-write-package-second',
-              sourceType: 'tool_call',
-              toolName: 'fs_write',
-              status: 'succeeded',
-              refs: [join(workspaceRoot, 'package.json')],
-              summary: 'Wrote package.json.',
-              startedAt: 1,
-              endedAt: 2,
-            },
-            {
-              receiptId: 'receipt-write-verify-second',
-              sourceType: 'tool_call',
-              toolName: 'fs_write',
-              status: 'succeeded',
-              refs: [join(workspaceRoot, 'verify.js')],
-              summary: 'Wrote verify.js.',
-              startedAt: 3,
-              endedAt: 4,
-            },
-            {
-              receiptId: 'receipt-write-index-second',
+              receiptId: 'receipt-write-index-worker-owned',
               sourceType: 'tool_call',
               toolName: 'fs_write',
               status: 'succeeded',
               refs: [join(publicRoot, 'index.html')],
               summary: 'Wrote public/index.html.',
-              startedAt: 5,
-              endedAt: 6,
+              startedAt: 1,
+              endedAt: 2,
             },
             {
-              receiptId: 'receipt-write-css-second',
+              receiptId: 'receipt-write-css-worker-owned',
               sourceType: 'tool_call',
               toolName: 'fs_write',
               status: 'succeeded',
               refs: [join(publicRoot, 'styles.css')],
               summary: 'Wrote public/styles.css.',
-              startedAt: 7,
-              endedAt: 8,
+              startedAt: 3,
+              endedAt: 4,
             },
           ]);
         }
@@ -4677,95 +4618,54 @@ describe('WorkerManager', () => {
         const sections = Array.isArray(params.additionalSections)
           ? params.additionalSections as Array<{ section?: string; content?: string }>
           : [];
-        if (dispatchCount === 2) {
-          const diagnostic = sections.find((section) => section.section === 'Runtime Evidence Workspace Check')?.content;
-          expect(diagnostic).toContain('package.json scripts found: verify.');
-          expect(diagnostic).toContain('Static entrypoint(s) found: public/index.html.');
-          expect(diagnostic).toContain('Missing linked assets that must be created before runtime proof: public/app.js.');
-          return responseWithReceipts('I could not generate a final response for that request.', [
-            {
-              receiptId: 'receipt-read-index-second',
-              sourceType: 'tool_call',
-              toolName: 'fs_read',
-              status: 'succeeded',
-              refs: [join(publicRoot, 'index.html')],
-              summary: 'Read public/index.html.',
-              startedAt: 10,
-              endedAt: 11,
-            },
-          ]);
-        }
-
-        return responseWithReceipts('I could not generate a final response for that request.', [
+        const diagnostic = sections.find((section) => section.section === 'Runtime Evidence Workspace Check')?.content ?? '';
+        expect(diagnostic).toContain('Missing linked assets that must be created before runtime proof: public/app.js.');
+        writeFileSync(join(publicRoot, 'app.js'), 'document.getElementById("play").textContent = "worker-owned app";\n');
+        jobs.push({
+          id: 'job-write-app-worker-owned',
+          toolName: 'fs_write',
+          status: 'succeeded',
+          requestId,
+          argsPreview: JSON.stringify({ path: join(publicRoot, 'app.js') }),
+          resultPreview: JSON.stringify({ path: join(publicRoot, 'app.js'), size: 64 }),
+          createdAt: 10,
+          startedAt: 10,
+          completedAt: 11,
+        });
+        return responseWithReceipts('Created public/app.js; runtime proof remains.', [
           {
-            receiptId: 'receipt-read-index-static',
+            receiptId: 'receipt-write-app-worker-owned',
             sourceType: 'tool_call',
-            toolName: 'fs_read',
+            toolName: 'fs_write',
             status: 'succeeded',
-            refs: [join(publicRoot, 'index.html')],
-            summary: 'Read public/index.html again.',
-            startedAt: 20,
-            endedAt: 21,
+            refs: [join(publicRoot, 'app.js')],
+            summary: 'Wrote public/app.js.',
+            startedAt: 10,
+            endedAt: 11,
           },
         ]);
       };
 
       const runTool = vi.fn(async (request) => {
-        if (request.toolName === 'fs_write') {
-          const args = request.args as { path: string; content: string };
-          writeFileSync(args.path, args.content, 'utf8');
+        if (request.toolName === 'code_build') {
           jobs.push({
-            id: 'job-supervisor-static-write',
-            toolName: 'fs_write',
+            id: 'job-static-runtime-worker-owned-success',
+            toolName: 'code_build',
             status: 'succeeded',
             requestId,
-            argsPreview: JSON.stringify({ path: args.path }),
-            resultPreview: JSON.stringify({ path: args.path, size: args.content.length }),
-            createdAt: 22,
-            startedAt: 22,
-            completedAt: 23,
-          });
-          return {
-            success: true,
-            message: 'Wrote missing static app asset.',
-            verificationStatus: 'verified',
-          };
-        }
-        if (request.toolName === 'code_build') {
-          const appScriptPath = join(publicRoot, 'app.js');
-          const appScriptExists = existsSync(appScriptPath);
-          jobs.push({
-            id: appScriptExists ? 'job-static-runtime-second-success' : 'job-static-runtime-second-failed',
-            toolName: 'code_build',
-            status: appScriptExists ? 'succeeded' : 'failed',
-            requestId,
             argsPreview: JSON.stringify(request.args),
-            resultPreview: appScriptExists
-              ? JSON.stringify({
-                  success: true,
-                  output: { stdout: 'Verify passed.' },
-                  verificationStatus: 'verified',
-                })
-              : JSON.stringify({
-                  success: false,
-                  output: { stderr: 'MISSING: public/app.js' },
-                  verificationStatus: 'failed',
-                }),
+            resultPreview: JSON.stringify({
+              success: true,
+              output: { stdout: 'Static app runtime check passed at http://127.0.0.1:41001/ with 2 linked asset(s).' },
+              verificationStatus: 'verified',
+            }),
             createdAt: 30,
             startedAt: 30,
-            completedAt: appScriptExists ? 41 : 31,
+            completedAt: 31,
           });
-          runtimeProofRecorded = appScriptExists;
-          if (!appScriptExists) {
-            return {
-              success: false,
-              message: 'MISSING: public/app.js',
-              verificationStatus: 'failed',
-            };
-          }
           return {
             success: true,
-            message: 'Verify passed.',
+            message: 'Static app runtime check passed at http://127.0.0.1:41001/ with 2 linked asset(s).',
             verificationStatus: 'verified',
           };
         }
@@ -4777,7 +4677,7 @@ describe('WorkerManager', () => {
       manager = new WorkerManager(
         {
           listAlwaysLoadedDefinitions: () => [],
-          listJobs: vi.fn(() => runtimeProofRecorded ? jobs : jobs.filter((job) => job.toolName !== 'code_build')),
+          listJobs: vi.fn(() => jobs),
           runTool,
         } as never,
         {
@@ -4818,11 +4718,11 @@ describe('WorkerManager', () => {
           id: requestId,
           userId: 'tester',
           channel: 'web',
-          content: 'Build a simple music app from scratch in the attached repo and verify it runs locally.',
+          content: 'Build a simple app from scratch in the attached repo and verify it runs locally.',
           metadata: attachPreRoutedIntentGatewayMetadata({
             codeContext: {
               workspaceRoot,
-              sessionId: 'music-session',
+              sessionId: 'app-session',
             },
           }, {
             mode: 'primary',
@@ -4861,11 +4761,11 @@ describe('WorkerManager', () => {
         },
         delegation: {
           requestId,
-          executionId: 'exec-static-second-retry',
-          rootExecutionId: 'exec-static-second-retry-root',
+          executionId: 'exec-static-worker-owned-retry',
+          rootExecutionId: 'exec-static-worker-owned-retry-root',
           originChannel: 'web',
           originSurfaceId: 'web-guardian-chat',
-          codeSessionId: 'music-session',
+          codeSessionId: 'app-session',
           orchestration: {
             role: 'implementer',
             label: 'Workspace Implementer',
@@ -4874,78 +4774,11 @@ describe('WorkerManager', () => {
         },
       });
 
-      expect(dispatchCount).toBe(1);
-      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'fs_write',
-        args: expect.objectContaining({
-          path: join(publicRoot, 'app.js'),
-          content: expect.stringContaining('Midnight Drive'),
-        }),
-      }));
-      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'fs_write',
-        args: expect.objectContaining({
-          content: expect.stringContaining('firstById("content-area", "main-content")'),
-        }),
-      }));
-      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'fs_write',
-        args: expect.objectContaining({
-          content: expect.stringContaining('ensureMusicShell()'),
-        }),
-      }));
-      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'fs_write',
-        args: expect.objectContaining({
-          content: expect.stringContaining('renderSongList("song-list"'),
-        }),
-      }));
-      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'fs_write',
-        args: expect.objectContaining({
-          content: expect.stringContaining('renderSongList("all-songs"'),
-        }),
-      }));
-      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'fs_write',
-        args: expect.objectContaining({
-          content: expect.stringContaining('byId("playlist-grid")'),
-        }),
-      }));
-      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'fs_write',
-        args: expect.objectContaining({
-          content: expect.stringContaining('byId("artist-grid")'),
-        }),
-      }));
-      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'fs_write',
-        args: expect.objectContaining({
-          content: expect.stringContaining('"player-song-title"'),
-        }),
-      }));
-      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'fs_write',
-        args: expect.objectContaining({
-          content: expect.stringContaining('byId("play-btn")'),
-        }),
-      }));
-      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'fs_write',
-        args: expect.objectContaining({
-          content: expect.stringContaining('byId("btn-shuffle")'),
-        }),
-      }));
-      expect(runTool).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'code_build',
-        args: expect.objectContaining({
-          cwd: workspaceRoot,
-          command: 'npm run verify',
-        }),
-      }));
+      expect(dispatchCount).toBe(2);
+      expect(runTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: 'fs_write' }));
+      expect(readFileSync(join(publicRoot, 'app.js'), 'utf8')).toContain('worker-owned app');
       expect(result.content).toContain('Local URL:');
-      expect(result.content).toContain('public/index.html');
-      expect(result.content).toContain('Verified: Verify passed');
+      expect(result.content).toContain('Verified: Static app runtime check passed');
       expect(result.content).not.toContain('Delegated work failed.');
       expect(readDelegatedResultEnvelope(result.metadata)?.verification).toMatchObject({
         decision: 'satisfied',
@@ -4955,12 +4788,11 @@ describe('WorkerManager', () => {
       rmSync(workspaceRoot, { recursive: true, force: true });
     }
   });
-
-  it('requires supervisor static-app semantic proof even when a worker reports generic runtime evidence', async () => {
+  it('keeps static app runtime proof generic and domain-neutral', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
-    const workspaceRoot = resolve(mkdtempSync(join(tmpdir(), 'ga-static-semantic-proof-')));
-    const requestId = 'm-static-semantic-proof';
+    const workspaceRoot = resolve(mkdtempSync(join(tmpdir(), 'ga-static-generic-proof-')));
+    const requestId = 'm-static-generic-proof';
     let manager: InstanceType<typeof WorkerManager> | undefined;
     let dispatchCount = 0;
     let runtimeProofAttempts = 0;
@@ -4968,8 +4800,8 @@ describe('WorkerManager', () => {
       const decision: IntentGatewayDecision = {
         route: 'coding_task',
         confidence: 'high',
-        operation: 'update',
-        summary: 'Improve the existing static music app and verify visible playback behavior.',
+        operation: 'create',
+        summary: 'Create a static app shell and verify it loads locally.',
         turnRelation: 'new_request',
         resolution: 'ready',
         missingFields: [],
@@ -4980,10 +4812,9 @@ describe('WorkerManager', () => {
         expectedContextPressure: 'medium',
         preferredAnswerPath: 'tool_loop',
         plannedSteps: [
-          { kind: 'read', summary: 'Inspect the current static app files.', expectedToolCategories: ['repo_evidence'], required: true },
-          { kind: 'write', summary: 'Improve the app behavior in place.', expectedToolCategories: ['repo_mutation'], required: true, dependsOn: ['step_1'] },
-          { kind: 'tool_call', summary: 'Exercise the app locally and verify visible behavior.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_2'] },
-          { kind: 'answer', summary: 'Report the local URL and verification result.', required: true, dependsOn: ['step_3'] },
+          { kind: 'write', summary: 'Create the static app files.', expectedToolCategories: ['repo_mutation'], required: true },
+          { kind: 'tool_call', summary: 'Verify the static app loads locally.', expectedToolCategories: ['runtime_evidence'], required: true, dependsOn: ['step_1'] },
+          { kind: 'answer', summary: 'Report the local URL and verification result.', required: true, dependsOn: ['step_2'] },
         ],
         entities: {},
       };
@@ -5003,11 +4834,10 @@ describe('WorkerManager', () => {
         };
         const toolReceiptStepIds = new Map<string, string>();
         for (const receipt of receipts) {
-          if (receipt.receiptId.includes('read')) toolReceiptStepIds.set(receipt.receiptId, 'step_1');
-          if (receipt.receiptId.includes('write')) toolReceiptStepIds.set(receipt.receiptId, 'step_2');
-          if (receipt.receiptId.includes('runtime')) toolReceiptStepIds.set(receipt.receiptId, 'step_3');
+          if (receipt.receiptId.includes('write')) toolReceiptStepIds.set(receipt.receiptId, 'step_1');
+          if (receipt.receiptId.includes('runtime')) toolReceiptStepIds.set(receipt.receiptId, 'step_2');
         }
-        toolReceiptStepIds.set(answerReceipt.receiptId, 'step_4');
+        toolReceiptStepIds.set(answerReceipt.receiptId, 'step_3');
         const evidenceReceipts = [...receipts, answerReceipt];
         const stepReceipts = buildStepReceipts({
           plannedTask: taskContract.plan,
@@ -5036,133 +4866,46 @@ describe('WorkerManager', () => {
 
       workerMessageHandler = () => {
         dispatchCount += 1;
-        if (dispatchCount === 1) {
-          writeFileSync(join(workspaceRoot, 'index.html'), [
-            '<!doctype html>',
-            '<html>',
-            '<head><link rel="stylesheet" href="styles.css"></head>',
-            '<body>',
-            '<main id="app">',
-            '<section id="home-view"><div id="recently-played"></div><input id="home-search-input"><div id="home-search-results"></div></section>',
-            '<section id="browse-view"><input id="search-input"><div id="song-list"></div></section>',
-            '<section id="playlists-view"><div id="playlist-list"></div></section>',
-            '<section id="view-search"><div id="search-songs-list"></div><div id="search-playlists-list"></div><div id="search-artists-list"></div></section>',
-            '<section id="view-playlist-detail"><div id="playlist-detail-content"></div></section>',
-            '<section id="artists-view"><div id="artist-list"></div></section>',
-            '<section id="view-artist-detail"><div id="artist-detail-content"></div></section>',
-            '</main>',
-            '<footer id="player-bar"><div id="player-title"></div><div id="player-artist"></div><button id="btn-prev">Prev</button><button id="btn-play">Play</button><button id="btn-next">Next</button><div id="progress-control"><div id="player-progress"></div></div></footer>',
-            '<script src="app.js"></script>',
-            '</body>',
-            '</html>',
-            '',
-          ].join('\n'));
-          writeFileSync(join(workspaceRoot, 'styles.css'), 'body { font-family: sans-serif; }\n');
-          writeFileSync(join(workspaceRoot, 'app.js'), [
-            'const songs = [{ title: "Midnight Drive", artist: "Ari Lane" }];',
-            'function renderSongList(id, list) { document.getElementById(id).textContent = list.map((song) => song.title).join(", "); }',
-            'renderSongList("song-list", songs);',
-            'renderSongList("recently-played", songs.slice(0, 4));',
-            'document.getElementById("playlist-list").textContent = "Chill Vibes";',
-            'document.getElementById("artist-list").textContent = "Ari Lane";',
-            'document.getElementById("playlist-detail-view");',
-            'document.getElementById("artist-detail-view");',
-            'document.getElementById("player-title").textContent = songs[0].title;',
-            'document.getElementById("player-artist").textContent = songs[0].artist;',
-            'document.getElementById("btn-play").textContent = isPlaying ? "Pause" : "Play";',
-            'document.getElementById("btn-next");',
-            'document.getElementById("btn-prev");',
-            'document.getElementById("progress-bar");',
-            '',
-          ].join('\n'));
-          return buildResponse('Completed. Local URL: file:///index.html Verified: shell check passed.', [
-            {
-              receiptId: 'receipt-read-index',
-              sourceType: 'tool_call',
-              toolName: 'fs_read',
-              status: 'succeeded',
-              refs: [join(workspaceRoot, 'index.html')],
-              summary: 'Read index.html.',
-              startedAt: 1,
-              endedAt: 2,
-            },
-            {
-              receiptId: 'receipt-write-index',
-              sourceType: 'tool_call',
-              toolName: 'fs_write',
-              status: 'succeeded',
-              refs: [join(workspaceRoot, 'index.html'), join(workspaceRoot, 'styles.css')],
-              summary: 'Wrote updated shell files.',
-              startedAt: 3,
-              endedAt: 4,
-            },
-            {
-              receiptId: 'receipt-runtime-shell',
-              sourceType: 'tool_call',
-              toolName: 'shell_safe',
-              status: 'succeeded',
-              refs: [workspaceRoot],
-              summary: 'Ran a generic shell check.',
-              startedAt: 5,
-              endedAt: 6,
-            },
-          ]);
-        }
-
-        writeFileSync(join(workspaceRoot, 'app.js'), [
-          'const songs = [{ title: "Midnight Drive", artist: "Ari Lane" }, { title: "Harbor Lights", artist: "Nia Vale" }];',
-          'let currentIndex = 0;',
-          'let isPlaying = false;',
-          'let recentlyPlayed = [];',
-          'const byId = (id) => document.getElementById(id);',
-          'function renderSongList(id, list) { const node = byId(id); if (node) node.textContent = list.map((song) => song.title).join(", "); }',
-          'function renderRecentlyPlayed() { renderSongList("recently-played", recentlyPlayed.map((index) => songs[index])); }',
-          'function renderSearch(query = "") { const filtered = songs.filter((song) => song.title.toLowerCase().includes(query.toLowerCase()) || song.artist.toLowerCase().includes(query.toLowerCase())); renderSongList("home-search-results", filtered); renderSongList("song-list", filtered); renderSongList("search-songs-list", filtered); byId("search-playlists-list").textContent = "Chill Vibes"; byId("search-artists-list").textContent = "Ari Lane, Nia Vale"; byId("view-search"); }',
-          'function syncPlayer() { byId("player-title").textContent = songs[currentIndex].title; byId("player-artist").textContent = songs[currentIndex].artist; byId("btn-play").textContent = isPlaying ? "[pause]" : "[play]"; byId("player-progress").style.width = "50%"; }',
-          'function playSong(index) { currentIndex = index; isPlaying = true; recentlyPlayed = [index, ...recentlyPlayed.filter((item) => item !== index)].slice(0, 6); renderRecentlyPlayed(); syncPlayer(); }',
-          'byId("home-search-input").addEventListener("input", (event) => renderSearch(event.target.value));',
-          'byId("search-input").addEventListener("input", (event) => renderSearch(event.target.value));',
-          'byId("playlist-list").textContent = "Chill Vibes";',
-          'byId("artist-list").textContent = "Ari Lane, Nia Vale";',
-          'byId("view-playlist-detail"); byId("playlist-detail-content").innerHTML = "<div id=\\"playlist-header\\"></div><div id=\\"playlist-songs\\"></div>"; byId("playlist-header").textContent = "Chill Vibes"; renderSongList("playlist-songs", songs);',
-          'byId("view-artist-detail"); byId("artist-detail-content").innerHTML = "<div id=\\"artist-header\\"></div><div id=\\"artist-songs\\"></div>"; byId("artist-header").textContent = "Ari Lane"; renderSongList("artist-songs", songs);',
-          'byId("btn-play").addEventListener("click", () => { isPlaying = !isPlaying; syncPlayer(); });',
-          'byId("btn-next").addEventListener("click", () => playSong((currentIndex + 1) % songs.length));',
-          'byId("btn-prev").addEventListener("click", () => playSong((currentIndex + songs.length - 1) % songs.length));',
-          'byId("progress-control").addEventListener("click", () => { byId("player-progress").style.width = "75%"; });',
-          'renderSearch(); playSong(0);',
+        writeFileSync(join(workspaceRoot, 'index.html'), [
+          '<!doctype html>',
+          '<html>',
+          '<head><link rel="stylesheet" href="styles.css"></head>',
+          '<body><main id="app"><h1>Static Shell</h1><button id="start">Start</button></main><script src="app.js"></script></body>',
+          '</html>',
           '',
         ].join('\n'));
-        return buildResponse('Completed. Local URL: file:///index.html Verified: semantic static app proof passed.', [
+        writeFileSync(join(workspaceRoot, 'styles.css'), 'body { font-family: sans-serif; }\n');
+        writeFileSync(join(workspaceRoot, 'app.js'), 'document.getElementById("start").dataset.ready = "true";\n');
+        return buildResponse('Created static shell. Local URL pending. Verification still needed.', [
           {
-            receiptId: 'receipt-read-retry',
+            receiptId: 'receipt-write-index-generic-proof',
             sourceType: 'tool_call',
-            toolName: 'fs_read',
+            toolName: 'fs_write',
             status: 'succeeded',
-            refs: [join(workspaceRoot, 'app.js')],
-            summary: 'Read app.js.',
-            startedAt: 10,
-            endedAt: 11,
+            refs: [join(workspaceRoot, 'index.html')],
+            summary: 'Wrote index.html.',
+            startedAt: 1,
+            endedAt: 2,
           },
           {
-            receiptId: 'receipt-write-app',
+            receiptId: 'receipt-write-css-generic-proof',
+            sourceType: 'tool_call',
+            toolName: 'fs_write',
+            status: 'succeeded',
+            refs: [join(workspaceRoot, 'styles.css')],
+            summary: 'Wrote styles.css.',
+            startedAt: 3,
+            endedAt: 4,
+          },
+          {
+            receiptId: 'receipt-write-js-generic-proof',
             sourceType: 'tool_call',
             toolName: 'fs_write',
             status: 'succeeded',
             refs: [join(workspaceRoot, 'app.js')],
-            summary: 'Rewired app.js behavior.',
-            startedAt: 12,
-            endedAt: 13,
-          },
-          {
-            receiptId: 'receipt-runtime-retry',
-            sourceType: 'tool_call',
-            toolName: 'shell_safe',
-            status: 'succeeded',
-            refs: [workspaceRoot],
-            summary: 'Ran a generic shell check after retry.',
-            startedAt: 14,
-            endedAt: 15,
+            summary: 'Wrote app.js.',
+            startedAt: 5,
+            endedAt: 6,
           },
         ]);
       };
@@ -5183,43 +4926,33 @@ describe('WorkerManager', () => {
         const args = request.args as { cwd?: string; command?: string };
         const command = args.command ?? '';
         const scriptName = command.replace(/^node\s+/u, '');
-        let stdout = '';
-        let stderr = '';
-        let success = true;
-        try {
-          stdout = execFileSync(process.execPath, [scriptName], {
-            cwd: args.cwd,
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'pipe'],
-          });
-        } catch (error) {
-          success = false;
-          const execError = error as { stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
-          stdout = execError.stdout ? String(execError.stdout) : '';
-          stderr = execError.stderr ? String(execError.stderr) : execError.message ?? '';
-        }
+        const stdout = execFileSync(process.execPath, [scriptName], {
+          cwd: args.cwd,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
         jobs.push({
-          id: `job-static-semantic-proof-${runtimeProofAttempts}`,
+          id: `job-static-generic-proof-${runtimeProofAttempts}`,
           toolName: 'code_build',
-          status: success ? 'succeeded' : 'failed',
+          status: 'succeeded',
           requestId,
           argsPreview: JSON.stringify(request.args),
           resultPreview: JSON.stringify({
-            success,
-            output: { stdout, stderr },
-            verificationStatus: success ? 'verified' : 'failed',
+            success: true,
+            output: { stdout },
+            verificationStatus: 'verified',
           }),
           createdAt: 20 + runtimeProofAttempts,
           startedAt: 20 + runtimeProofAttempts,
           completedAt: 21 + runtimeProofAttempts,
         });
         return {
-          success,
-          status: success ? 'succeeded' : 'failed',
-          jobId: `job-static-semantic-proof-${runtimeProofAttempts}`,
-          message: success ? stdout : stderr,
-          output: { stdout, stderr },
-          verificationStatus: success ? 'verified' : 'failed',
+          success: true,
+          status: 'succeeded',
+          jobId: `job-static-generic-proof-${runtimeProofAttempts}`,
+          message: stdout,
+          output: { stdout, stderr: '' },
+          verificationStatus: 'verified',
         };
       });
       const intentRoutingTrace = { record: vi.fn() };
@@ -5272,11 +5005,11 @@ describe('WorkerManager', () => {
           id: requestId,
           userId: 'tester',
           channel: 'web',
-          content: 'Continue the attached MusicApp repo, improve search, recently played, playlist and artist detail, and verify visible playback behavior.',
+          content: 'Create a static app shell and verify it loads locally.',
           metadata: attachPreRoutedIntentGatewayMetadata({
             codeContext: {
               workspaceRoot,
-              sessionId: 'music-session',
+              sessionId: 'static-session',
             },
           }, {
             mode: 'primary',
@@ -5315,11 +5048,11 @@ describe('WorkerManager', () => {
         },
         delegation: {
           requestId,
-          executionId: 'exec-static-semantic-proof',
-          rootExecutionId: 'exec-static-semantic-proof-root',
+          executionId: 'exec-static-generic-proof',
+          rootExecutionId: 'exec-static-generic-proof-root',
           originChannel: 'web',
           originSurfaceId: 'web-guardian-chat',
-          codeSessionId: 'music-session',
+          codeSessionId: 'static-session',
           orchestration: {
             role: 'implementer',
             label: 'Workspace Implementer',
@@ -5328,13 +5061,13 @@ describe('WorkerManager', () => {
         },
       });
 
-      expect(dispatchCount).toBeGreaterThan(1);
-      expect(jobs.map((job) => job.resultPreview ?? '').join('\n')).toContain('Static app runtime check passed');
-      expect(jobs.map((job) => job.status)).toContain('succeeded');
-      expect(jobs[0]?.status).toBe('failed');
-      expect(jobs[0]?.resultPreview).toContain('home-search-input');
-      expect(jobs[0]?.resultPreview).toContain('fixed song slice');
-      expect(result.content).not.toContain('Delegated work failed.');
+      const jobText = jobs.map((job) => job.resultPreview ?? '').join('\n');
+      expect(dispatchCount).toBe(1);
+      expect(jobText).toContain('Static app runtime check passed');
+      expect(jobText).not.toContain('Music app semantic smoke');
+      expect(jobText).not.toContain('Static app semantic check failed');
+      expect(result.content).toContain('Verified: Static app runtime check passed');
+      expect(result.content).not.toContain('Music app semantic');
       expect(readDelegatedResultEnvelope(result.metadata)?.verification).toMatchObject({
         decision: 'satisfied',
       });
@@ -5347,7 +5080,6 @@ describe('WorkerManager', () => {
       rmSync(workspaceRoot, { recursive: true, force: true });
     }
   });
-
   it('keeps static-app proof failures resumable when the delegated worker is approval-paused', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
@@ -5467,9 +5199,9 @@ describe('WorkerManager', () => {
         return {
           success: false,
           status: 'failed',
-          message: 'Static app semantic check failed: song list container is missing from index.html',
+          message: 'Static app runtime check failed: linked asset failed to load',
           output: {
-            stderr: 'Static app semantic check failed: song list container is missing from index.html',
+            stderr: 'Static app runtime check failed: linked asset failed to load',
           },
           verificationStatus: 'failed',
         };

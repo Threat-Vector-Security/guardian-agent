@@ -553,6 +553,7 @@ export function isDelegatedToolEvidenceRetry(
       || kind === 'read'
       || kind === 'search'
       || kind === 'runtime_evidence'
+      || kind === 'worker_owned_ux_evidence'
       || kind === 'repo_evidence'
       || kind === 'security_evidence'
       || kind === 'execution_evidence'
@@ -565,8 +566,17 @@ export function isDelegatedRuntimeEvidenceRetry(
 ): boolean {
   const missingEvidenceKinds = insufficiency.decision.missingEvidenceKinds ?? [];
   return missingEvidenceKinds.includes('runtime_evidence')
+    || missingEvidenceKinds.includes('worker_owned_ux_evidence')
     || insufficiency.unsatisfiedSteps.some((step) => (
-      step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true
+      step.expectedToolCategories?.some((category) => {
+        const normalized = category.trim().toLowerCase();
+        return normalized === 'runtime_evidence'
+          || normalized === 'worker_owned_ux_evidence'
+          || normalized === 'worker_owned_runtime_evidence'
+          || normalized === 'ux_behavior_evidence'
+          || normalized === 'visible_behavior_evidence'
+          || normalized === 'app_behavior_evidence';
+      }) === true
     ));
 }
 
@@ -753,6 +763,7 @@ export function appendDelegatedRetrySection(
           'This retry is a runtime-proof retry. Successful file reads, file listings, and file writes do not satisfy the remaining runtime evidence step.',
           'If the app already has a runnable entrypoint and all referenced static assets exist, your next tool action must target runtime proof: call coding_backend_run, code_build, code_test, code_remote_exec, shell_safe, or an available browser tool before any more file reads or writes.',
           'If the app is not yet runnable because a referenced asset, server entrypoint, or package verification script is missing, create only those missing runtime support files first, then immediately call the execution-capable tool.',
+          'When the remaining step is worker_owned_ux_evidence, Guardian generic static load/syntax proof is not enough. Produce worker-owned evidence for the requested behavior, such as a browser receipt or a small project verification script that targets the implemented selectors and state.',
           'If no execution-capable tool is visible, first call find_tools with the exact query "coding_backend_run code_build code_test code_remote_exec shell_safe browser_navigate", then call one of the discovered execution tools.',
           'If the runtime command fails, fix the repo files and run the app or verification command again before answering.',
           'Capture the command, local URL when available, and the concrete runtime or build result in the final answer.',
@@ -883,6 +894,9 @@ function buildDelegatedRetryReason(
   }
   if (missingEvidenceKinds.includes('runtime_evidence')) {
     return 'the previous attempt did not start or exercise the app locally';
+  }
+  if (missingEvidenceKinds.includes('worker_owned_ux_evidence')) {
+    return 'the previous attempt did not collect worker-owned proof for the requested visible app behavior';
   }
   if (missingEvidenceKinds.includes('execution_evidence')) {
     return 'the previous attempt did not actually execute the requested command or verification step';

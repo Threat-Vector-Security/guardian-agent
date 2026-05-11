@@ -605,7 +605,15 @@ function isRuntimeVerifiedWorkspaceMutation(decision: IntentGatewayDecision): bo
     return false;
   }
   const plannedSteps = decision.plannedSteps ?? [];
-  if (plannedSteps.some((step) => step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true)) {
+  if (plannedSteps.some((step) => step.expectedToolCategories?.some((category) => {
+    const normalized = category.trim().toLowerCase();
+    return normalized === 'runtime_evidence'
+      || normalized === 'worker_owned_ux_evidence'
+      || normalized === 'worker_owned_runtime_evidence'
+      || normalized === 'ux_behavior_evidence'
+      || normalized === 'visible_behavior_evidence'
+      || normalized === 'app_behavior_evidence';
+  }) === true)) {
     return true;
   }
   const text = [

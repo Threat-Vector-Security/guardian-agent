@@ -549,6 +549,14 @@ As built:
 
 This keeps Guardian in control of approvals, audit, routing, and verification while still allowing explicit delegation to terminal-first coding agents when the operator wants that path.
 
+## Delegated Coding Verification
+
+Coding-assistant verification follows `docs/design/CODING-ASSISTANT-VERIFICATION-DESIGN.md`.
+
+Guardian may orchestrate delegated coding work, collect evidence, retry incomplete work, and run generic runtime probes. It must not synthesize the requested application, source files, sample data, UI behavior, or domain-specific verification content inside the supervisor to make a delegated coding run appear successful.
+
+For static app builds, the built-in supervisor proof is intentionally generic: it may check that an entrypoint exists, linked local assets resolve inside the workspace, linked JavaScript parses, and the entrypoint can be loaded through a temporary localhost server. When the user asks for app-specific behavior such as search, navigation, playlists, playback controls, detail views, visual state changes, or similar UX, the delegated worker owns the behavior proof through browser evidence or a project-local verification script.
+
 ## Sandbox And Security Model
 
 Assistant-driven coding requests remain repo-scoped.

@@ -226,6 +226,149 @@ describe('delegated worker verification graph policy', () => {
     expect(result.decision.unsatisfiedStepIds).not.toContain('verify');
   });
 
+  it('does not let supervisor static proof satisfy worker-owned UX evidence', () => {
+    const taskContract: DelegatedTaskContract = {
+      kind: 'repo_mutation',
+      route: 'coding_task',
+      operation: 'create',
+      requiresEvidence: true,
+      allowsAnswerFirst: false,
+      requireExactFileReferences: false,
+      plan: {
+        planId: 'plan-worker-owned-ux-proof',
+        steps: [
+          {
+            stepId: 'write',
+            kind: 'write',
+            summary: 'Create the static app files.',
+            expectedToolCategories: ['repo_mutation'],
+            required: true,
+          },
+          {
+            stepId: 'runtime',
+            kind: 'tool_call',
+            summary: 'Verify the static app loads locally.',
+            expectedToolCategories: ['runtime_evidence'],
+            required: true,
+            dependsOn: ['write'],
+          },
+          {
+            stepId: 'ux',
+            kind: 'tool_call',
+            summary: 'Exercise the requested visible app behavior with worker-owned evidence.',
+            expectedToolCategories: ['worker_owned_ux_evidence'],
+            required: true,
+            dependsOn: ['runtime'],
+          },
+          {
+            stepId: 'answer',
+            kind: 'answer',
+            summary: 'Report the local URL and behavior verification.',
+            required: true,
+            dependsOn: ['ux'],
+          },
+        ],
+      },
+    };
+    const metadata = buildDelegatedExecutionMetadata(buildDelegatedSyntheticEnvelope({
+      taskContract,
+      runStatus: 'incomplete',
+      stopReason: 'end_turn',
+      operatorSummary: 'Needs worker-owned behavior proof.',
+    }));
+
+    const staticOnly = verifyDelegatedWorkerResult({
+      metadata,
+      intentDecision: undefined,
+      executionProfile: undefined,
+      taskContract,
+      jobSnapshots: [
+        {
+          id: 'write-index',
+          toolName: 'fs_write',
+          status: 'succeeded',
+          startedAt: 1,
+          completedAt: 2,
+          argsPreview: '{"path":"index.html"}',
+          resultPreview: '{"path":"index.html"}',
+        },
+        {
+          id: 'guardian-static-proof',
+          toolName: 'code_build',
+          status: 'succeeded',
+          startedAt: 3,
+          completedAt: 4,
+          argsPreview: '{"cwd":"S:/Development/App","command":"node .guardian-runtime-check-11111111-1111-4111-8111-111111111111.mjs"}',
+          resultPreview: '{"success":true,"output":{"stdout":"Static app runtime check passed at http://127.0.0.1:41001/ with 2 linked asset(s)."}}',
+        },
+      ],
+    });
+
+    expect(staticOnly.envelope.stepReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stepId: 'runtime',
+        status: 'satisfied',
+        evidenceReceiptIds: ['job:guardian-static-proof'],
+      }),
+      expect.objectContaining({
+        stepId: 'ux',
+        status: 'failed',
+        evidenceReceiptIds: [],
+      }),
+    ]));
+    expect(staticOnly.decision).toMatchObject({
+      decision: 'insufficient',
+      missingEvidenceKinds: expect.arrayContaining(['worker_owned_ux_evidence']),
+      unsatisfiedStepIds: expect.arrayContaining(['ux']),
+    });
+
+    const workerOwnedProof = verifyDelegatedWorkerResult({
+      metadata,
+      intentDecision: undefined,
+      executionProfile: undefined,
+      taskContract,
+      jobSnapshots: [
+        {
+          id: 'write-index',
+          toolName: 'fs_write',
+          status: 'succeeded',
+          startedAt: 1,
+          completedAt: 2,
+          argsPreview: '{"path":"index.html"}',
+          resultPreview: '{"path":"index.html"}',
+        },
+        {
+          id: 'guardian-static-proof',
+          toolName: 'code_build',
+          status: 'succeeded',
+          startedAt: 3,
+          completedAt: 4,
+          argsPreview: '{"cwd":"S:/Development/App","command":"node .guardian-runtime-check-11111111-1111-4111-8111-111111111111.mjs"}',
+          resultPreview: '{"success":true,"output":{"stdout":"Static app runtime check passed at http://127.0.0.1:41001/ with 2 linked asset(s)."}}',
+        },
+        {
+          id: 'worker-owned-ux-proof',
+          toolName: 'code_build',
+          status: 'succeeded',
+          startedAt: 5,
+          completedAt: 6,
+          argsPreview: '{"cwd":"S:/Development/App","command":"npm run verify"}',
+          resultPreview: '{"success":true,"output":{"stdout":"Verified search filtering and playback controls."}}',
+        },
+      ],
+    });
+
+    expect(workerOwnedProof.envelope.stepReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stepId: 'ux',
+        status: 'satisfied',
+        evidenceReceiptIds: ['job:worker-owned-ux-proof'],
+      }),
+    ]));
+    expect(workerOwnedProof.decision.unsatisfiedStepIds ?? []).not.toContain('ux');
+    expect(workerOwnedProof.decision.missingEvidenceKinds ?? []).not.toContain('worker_owned_ux_evidence');
+  });
+
   it('finalizes verification envelopes and trace reconciliation details without WorkerManager state', () => {
     const supervisorContract = delegatedTaskContract();
     const workerContract: DelegatedTaskContract = {

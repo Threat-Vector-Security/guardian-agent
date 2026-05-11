@@ -707,7 +707,7 @@ function buildDelegatedTaskPlanGuidance(taskContract: DelegatedTaskContract): st
   });
   const answerSteps = requiredSteps.filter((step) => step.kind === 'answer');
   const hasRuntimeEvidenceStep = requiredSteps.some((step) => (
-    step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true
+    step.expectedToolCategories?.some(isRuntimeOrWorkerOwnedUxEvidenceCategory) === true
   ));
   const hasRepoWriteStep = requiredSteps.some((step) => (
     step.kind === 'write'
@@ -753,11 +753,12 @@ function buildDelegatedTaskPlanGuidance(taskContract: DelegatedTaskContract): st
           'If `coding_backend_run` is available, prefer it as the main implementation tool for broad app builds; otherwise use concrete mutation tools such as fs_mkdir/fs_write/code_edit until the app files are complete.',
           'For simple empty local app builds, avoid adding runtime package dependencies unless the user explicitly asked for a framework or a dependency is essential. Prefer dependency-free static HTML/CSS/JS or a built-in Node http server so the app can be run and verified without package_install approval.',
           'For dependency-free app builds, create a complete runnable file set before runtime proof. If index.html links to app.js or styles.css, write those linked assets in the same implementation pass, and add a simple local entrypoint or verification script when the repo does not already have one.',
+          'When a required step includes worker_owned_ux_evidence, run a worker-owned smoke check for those requested behaviors instead of relying on generic load/syntax proof. That proof can be a browser receipt or a small project verification script that inspects the actual files/selectors/state you implemented.',
           'When implementing directly with file tools, keep the first runnable version small, create all required files in as few tool rounds as possible, and include a bounded verification script such as `npm run verify`, `npm test`, or `npm run build` when the project does not already have one.',
           'Do not call package_install for a simple app before first trying a dependency-free implementation path.',
           'Do not spend repeated rounds polishing styling before runtime proof. Build the minimal working app, run or verify it, then make only necessary fixes from the runtime result.',
-          'If no execution-capable tool is visible when the runtime_evidence step remains, call find_tools with the exact query "coding_backend_run code_build code_test code_remote_exec shell_safe browser_navigate", then call one of the discovered execution tools.',
-          'Runtime evidence must come from an execution-capable tool receipt such as coding_backend_run, code_build, code_test, code_remote_exec, shell_safe, or a browser tool. A final answer or file write alone does not satisfy runtime_evidence.',
+          'If no execution-capable tool is visible when runtime_evidence or worker_owned_ux_evidence remains, call find_tools with the exact query "coding_backend_run code_build code_test code_remote_exec shell_safe browser_navigate", then call one of the discovered execution tools.',
+          'Runtime evidence must come from an execution-capable tool receipt such as coding_backend_run, code_build, code_test, code_remote_exec, shell_safe, or a browser tool. A final answer or file write alone does not satisfy runtime_evidence. Worker-owned UX evidence must come from the worker or coding backend, and a final answer or file write alone does not satisfy worker_owned_ux_evidence.',
         ]
       : []),
     ...(answerSteps.length > 0
@@ -786,6 +787,16 @@ function isCatalogEvidenceCategory(category: string): boolean {
     || normalized.startsWith('second_brain_');
 }
 
+function isRuntimeOrWorkerOwnedUxEvidenceCategory(category: string): boolean {
+  const normalized = category.trim().toLowerCase();
+  return normalized === 'runtime_evidence'
+    || normalized === 'worker_owned_ux_evidence'
+    || normalized === 'worker_owned_runtime_evidence'
+    || normalized === 'ux_behavior_evidence'
+    || normalized === 'visible_behavior_evidence'
+    || normalized === 'app_behavior_evidence';
+}
+
 function buildDelegatedTaskContractToolExecutionCorrectionPrompt(
   taskContract: DelegatedTaskContract,
 ): string | undefined {
@@ -797,8 +808,11 @@ function buildDelegatedTaskContractToolExecutionCorrectionPrompt(
     ...new Set(evidenceSteps.flatMap((step) => step.expectedToolCategories ?? []).map((category) => category.trim()).filter(Boolean)),
   ];
   const hasRuntimeEvidencePlaceholder = expectedCategories.includes('runtime_evidence');
+  const hasWorkerOwnedUxEvidencePlaceholder = expectedCategories.some((category) => (
+    isRuntimeOrWorkerOwnedUxEvidenceCategory(category) && category !== 'runtime_evidence'
+  ));
   const hasLocalAppRuntimeEvidenceStep = evidenceSteps.some((step) => (
-    step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true
+    step.expectedToolCategories?.some(isRuntimeOrWorkerOwnedUxEvidenceCategory) === true
     && isLocalAppRuntimeEvidenceStepSummary(step.summary)
   ));
   return [
@@ -810,8 +824,11 @@ function buildDelegatedTaskContractToolExecutionCorrectionPrompt(
     ...(hasLocalAppRuntimeEvidenceStep
       ? [
           'For local app runtime_evidence, the required evidence is execution evidence, not another file read/list/write. Call an execution-capable tool such as coding_backend_run, code_build, code_test, code_remote_exec, shell_safe, or an available browser tool.',
+          ...(hasWorkerOwnedUxEvidencePlaceholder
+            ? ['For worker_owned_ux_evidence, the evidence must be owned by this worker or coding backend: use a browser receipt or project-local verification script that targets the actual behavior and selectors/state you implemented.']
+            : []),
           'If a missing linked asset or missing local entrypoint prevents runtime evidence, create only that missing runtime support file first, then call the execution-capable tool.',
-          'If no execution-capable tool is visible, first call find_tools with the exact query "coding_backend_run code_build code_test code_remote_exec shell_safe browser_navigate", then call one of the discovered execution tools.',
+            'If no execution-capable tool is visible, first call find_tools with the exact query "coding_backend_run code_build code_test code_remote_exec shell_safe browser_navigate", then call one of the discovered execution tools.',
           'If the runtime command fails, fix the concrete repo files and run or verify the app again before answering.',
         ]
       : hasRuntimeEvidencePlaceholder

@@ -12,6 +12,63 @@ import {
 } from './intent-gateway.js';
 
 describe('IntentGateway', () => {
+  it('preserves pre-routed resolved content across metadata round trips', () => {
+    const originalRequest = 'Build a dependency-free static Pantry Planner app in the current workspace. Start or exercise it locally and finish with the local URL and exactly what visible behavior you verified.';
+    const metadata = attachPreRoutedIntentGatewayMetadata(undefined, {
+      mode: 'primary',
+      available: false,
+      model: 'unknown',
+      latencyMs: 10,
+      decision: {
+        route: 'coding_task',
+        confidence: 'low',
+        operation: 'create',
+        summary: 'Continue the requested edit in the active coding workspace.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        resolvedContent: originalRequest,
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        requireExactFileReferences: false,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'chat_synthesis',
+        simpleVsComplex: 'complex',
+        plannedSteps: [
+          {
+            kind: 'write',
+            summary: 'Apply the requested workspace change.',
+            required: true,
+            expectedToolCategories: ['repo_mutation'],
+          },
+          {
+            kind: 'tool_call',
+            summary: 'Start or exercise the app locally and collect runtime evidence.',
+            required: true,
+            expectedToolCategories: ['runtime_evidence'],
+          },
+          {
+            kind: 'answer',
+            summary: 'Report the completed change and verification evidence.',
+            required: true,
+          },
+        ],
+        provenance: {
+          route: 'repair.structured',
+          operation: 'repair.structured',
+          resolvedContent: 'repair.continuity',
+        },
+        entities: {},
+      },
+    });
+
+    const restored = readPreRoutedIntentGatewayMetadata(metadata);
+
+    expect(restored?.decision.resolvedContent).toBe(originalRequest);
+  });
+
   it('uses a content-plan record for self-contained exact-answer turns without calling the model', async () => {
     const gateway = new IntentGateway();
     let called = false;

@@ -2323,6 +2323,50 @@ describe('verifyDelegatedResult', () => {
     ]);
   });
 
+  it('uses resolvedContent instead of generic repaired coding summaries', () => {
+    const originalRequest = 'Build a dependency-free static Pantry Planner app in the current workspace. Start or exercise it locally and finish with the local URL and exactly what visible behavior you verified.';
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'low',
+      operation: 'create',
+      summary: 'Continue the requested edit in the active coding workspace. (Workspace Implementer workload)',
+      resolvedContent: originalRequest,
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'chat_synthesis',
+      plannedSteps: [
+        {
+          kind: 'write',
+          summary: 'Apply the requested workspace change.',
+          required: true,
+          expectedToolCategories: ['repo_mutation'],
+        },
+        {
+          kind: 'tool_call',
+          summary: 'Start or exercise the app locally and collect runtime evidence.',
+          required: true,
+          expectedToolCategories: ['runtime_evidence'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Report the completed change and verification evidence.',
+          required: true,
+        },
+      ],
+      entities: {},
+    });
+
+    expect(taskContract.summary).toBe(originalRequest);
+    expect(taskContract.plan.steps.map((step) => step.expectedToolCategories ?? [])).toContainEqual(['worker_owned_ux_evidence']);
+  });
+
   it('injects a read step for exact-file repo inspections before the final answer step', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'coding_task',

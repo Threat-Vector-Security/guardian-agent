@@ -491,6 +491,205 @@ describe('task plan receipt accounting', () => {
     expect(computeWorkerRunStatus(plannedTask, stepReceipts, [], 'end_turn')).toBe('completed');
   });
 
+  it('requires worker-owned UX evidence when app builds request visible behavior proof', () => {
+    const plannedTask = buildPlannedTask(undefined, {
+      kind: 'repo_mutation',
+      route: 'coding_task',
+      operation: 'create',
+      summary: 'Build a dependency-free static Pantry Planner app in the current workspace. Start or exercise it locally and finish with the local URL and exactly what visible behavior you verified.',
+    });
+
+    expect(plannedTask.steps.map((step) => step.kind)).toEqual([
+      'search',
+      'write',
+      'read',
+      'tool_call',
+      'tool_call',
+      'answer',
+    ]);
+    expect(plannedTask.steps[3]).toMatchObject({
+      stepId: 'step_4',
+      expectedToolCategories: ['runtime_evidence'],
+      required: true,
+      dependsOn: ['step_2', 'step_3'],
+    });
+    expect(plannedTask.steps[4]).toMatchObject({
+      stepId: 'step_5',
+      expectedToolCategories: ['worker_owned_ux_evidence'],
+      required: true,
+      dependsOn: ['step_2', 'step_3', 'step_4'],
+    });
+    expect(plannedTask.steps[5]).toMatchObject({
+      stepId: 'step_6',
+      dependsOn: ['step_2', 'step_3', 'step_4', 'step_5'],
+    });
+
+    const matchedStepIds = new Map([
+      ['receipt-write', 'step_2'],
+      ['receipt-read', 'step_3'],
+      ['receipt-runtime', matchPlannedStepForTool({
+        plannedTask,
+        toolName: 'code_build',
+        args: { command: 'node .guardian-runtime-check-11111111-1111-4111-8111-111111111111.mjs' },
+        previouslyMatchedStepIds: new Set(['step_2', 'step_3']),
+      })],
+      ['receipt-ux', matchPlannedStepForTool({
+        plannedTask,
+        toolName: 'code_build',
+        args: { command: 'npm run verify' },
+        previouslyMatchedStepIds: new Set(['step_2', 'step_3', 'step_4']),
+      })],
+    ].filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+
+    expect(matchedStepIds.get('receipt-runtime')).toBe('step_4');
+    expect(matchedStepIds.get('receipt-ux')).toBe('step_5');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'code_build',
+      args: { command: 'node .guardian-runtime-check-11111111-1111-4111-8111-111111111111.mjs' },
+      previouslyMatchedStepIds: new Set(['step_2', 'step_3', 'step_4']),
+    })).not.toBe('step_5');
+
+    const receipts: EvidenceReceipt[] = [
+      {
+        receiptId: 'receipt-write',
+        sourceType: 'tool_call',
+        toolName: 'fs_write',
+        status: 'succeeded',
+        refs: ['index.html', 'styles.css', 'app.js'],
+        summary: 'Created the app files.',
+        startedAt: 1,
+        endedAt: 2,
+      },
+      {
+        receiptId: 'receipt-read',
+        sourceType: 'tool_call',
+        toolName: 'fs_read',
+        status: 'succeeded',
+        refs: ['index.html', 'styles.css', 'app.js'],
+        summary: 'Read the app files.',
+        startedAt: 3,
+        endedAt: 4,
+      },
+      {
+        receiptId: 'receipt-runtime',
+        sourceType: 'tool_call',
+        toolName: 'code_build',
+        status: 'succeeded',
+        refs: ['http://127.0.0.1:41001/'],
+        summary: 'Static app runtime check passed.',
+        startedAt: 5,
+        endedAt: 6,
+      },
+      {
+        receiptId: 'answer:1',
+        sourceType: 'model_answer',
+        status: 'succeeded',
+        refs: [],
+        summary: 'Built the app and verified visible behavior.',
+        startedAt: 7,
+        endedAt: 7,
+      },
+    ];
+
+    const staticOnlyReceipts = buildStepReceipts({
+      plannedTask,
+      evidenceReceipts: receipts,
+      toolReceiptStepIds: new Map([...matchedStepIds].filter(([receiptId]) => receiptId !== 'receipt-ux')),
+      finalAnswerReceiptId: 'answer:1',
+    });
+
+    expect(staticOnlyReceipts).toMatchObject([
+      { stepId: 'step_1', status: 'skipped' },
+      { stepId: 'step_2', status: 'satisfied', evidenceReceiptIds: ['receipt-write'] },
+      { stepId: 'step_3', status: 'satisfied', evidenceReceiptIds: ['receipt-read'] },
+      { stepId: 'step_4', status: 'satisfied', evidenceReceiptIds: ['receipt-runtime'] },
+      { stepId: 'step_5', status: 'failed', evidenceReceiptIds: [] },
+      { stepId: 'step_6', status: 'satisfied', evidenceReceiptIds: ['answer:1'] },
+    ]);
+    expect(computeWorkerRunStatus(plannedTask, staticOnlyReceipts, [], 'end_turn')).toBe('incomplete');
+    expect(collectMissingEvidenceKinds(plannedTask, staticOnlyReceipts)).toEqual(['worker_owned_ux_evidence']);
+  });
+
+  it('keeps visible-behavior proof requirements when a repaired coding decision has a generic summary', () => {
+    const plannedTask = buildPlannedTask({
+      route: 'coding_task',
+      confidence: 'low',
+      operation: 'create',
+      summary: 'Continue the requested edit in the active coding workspace.',
+      resolvedContent: 'Build a dependency-free static Pantry Planner app in the current workspace. Start or exercise it locally and finish with the local URL and exactly what visible behavior you verified.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'chat_synthesis',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Inspect the relevant workspace context before changing files.',
+          required: true,
+          expectedToolCategories: ['read', 'repo_inspect'],
+        },
+        {
+          kind: 'write',
+          summary: 'Apply the requested workspace change.',
+          required: true,
+          expectedToolCategories: ['write', 'repo_mutation'],
+        },
+        {
+          kind: 'read',
+          summary: 'Read back the changed artifact or collect equivalent verification evidence.',
+          required: true,
+          dependsOn: ['step_2'],
+          expectedToolCategories: ['read', 'repo_inspect'],
+        },
+        {
+          kind: 'tool_call',
+          summary: 'Start or exercise the app locally and collect runtime evidence.',
+          required: true,
+          dependsOn: ['step_2', 'step_3'],
+          expectedToolCategories: ['runtime_evidence'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Report the completed change and verification evidence.',
+          required: true,
+          dependsOn: ['step_2', 'step_3', 'step_4'],
+        },
+      ],
+      provenance: {
+        route: 'repair.structured',
+        operation: 'repair.structured',
+      },
+      entities: {},
+    }, {
+      kind: 'repo_mutation',
+      route: 'coding_task',
+      operation: 'create',
+      summary: 'Continue the requested edit in the active coding workspace.',
+    });
+
+    expect(plannedTask.steps.map((step) => step.expectedToolCategories ?? [])).toContainEqual(['worker_owned_ux_evidence']);
+    expect(plannedTask.steps.map((step) => step.kind)).toEqual([
+      'read',
+      'write',
+      'read',
+      'tool_call',
+      'tool_call',
+      'answer',
+    ]);
+    expect(plannedTask.steps.at(-1)).toMatchObject({
+      kind: 'answer',
+      dependsOn: ['step_2', 'step_4', 'step_5'],
+    });
+  });
+
   it('maps memory evidence categories to memory search receipts', () => {
     const plannedTask: PlannedTask = {
       planId: 'plan:memory_task:search:2',

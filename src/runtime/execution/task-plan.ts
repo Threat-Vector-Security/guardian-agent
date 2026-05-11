@@ -80,6 +80,26 @@ const LOCAL_APP_RUNTIME_EVIDENCE_TOOL_NAMES = new Set([
   'browser_act',
   'browser_interact',
 ]);
+const WORKER_OWNED_UX_EVIDENCE_CATEGORIES = new Set([
+  'worker_owned_ux_evidence',
+  'worker_owned_runtime_evidence',
+  'ux_behavior_evidence',
+  'visible_behavior_evidence',
+  'app_behavior_evidence',
+]);
+const WORKER_OWNED_UX_EVIDENCE_TOOL_NAMES = new Set([
+  'coding_backend_run',
+  'shell_safe',
+  'code_remote_exec',
+  'code_test',
+  'code_build',
+  'code_lint',
+  'browser_read',
+  'browser_state',
+  'browser_extract',
+  'browser_act',
+  'browser_interact',
+]);
 const M365_STATUS_TOOL_CATEGORIES = new Set([
   'm365_calendar_status',
   'microsoft_calendar_status',
@@ -96,6 +116,7 @@ const GWS_STATUS_TOOL_CATEGORIES = new Set([
   'workspace_auth_status',
 ]);
 const RUNTIME_WORKSPACE_VERIFICATION_PATTERN = /\b(?:runnable\s+locally|run(?:ning)?\s+locally|make\s+it\s+runnable|start(?:ed|ing)?\s+(?:the\s+)?(?:app|application|site|server|dev\s+server)|serve\s+(?:the\s+)?(?:app|application|site)|launch\s+(?:the\s+)?(?:app|application|site)|local\s+url|localhost|127\.0\.0\.1|click\s+around|setup\s+errors?|runtime\s+errors?|fix\s+(?:any\s+)?(?:setup|runtime)\b)/i;
+const VISIBLE_APP_BEHAVIOR_EVIDENCE_PATTERN = /\b(?:visible\s+(?:app\s+)?behavior|visible\s+ux|ux\s+behavior|ui\s+behavior|browser\s+evidence|click\s+around|exercise\s+(?:the\s+)?(?:requested\s+)?(?:visible\s+)?(?:behavior|flow|ui)|what\s+visible\s+behavior\s+you\s+verified)\b/i;
 
 export interface ToolStepMatchInput {
   hintStepId?: string;
@@ -491,7 +512,22 @@ function shouldRequireFinalAnswerStep(kind: DelegatedTaskContractKind): boolean 
 }
 
 function hasRuntimeEvidencePlaceholder(step: PlannedStep): boolean {
-  return step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true;
+  return step.expectedToolCategories?.some((category) => {
+    const normalized = normalizeExpectedToolCategory(category);
+    return normalized === 'runtime_evidence' || WORKER_OWNED_UX_EVIDENCE_CATEGORIES.has(normalized);
+  }) === true;
+}
+
+function hasRuntimeEvidenceCategory(step: PlannedStep): boolean {
+  return step.expectedToolCategories?.some((category) => (
+    normalizeExpectedToolCategory(category) === 'runtime_evidence'
+  )) === true;
+}
+
+function hasWorkerOwnedUxEvidenceCategory(step: PlannedStep): boolean {
+  return step.expectedToolCategories?.some((category) => (
+    WORKER_OWNED_UX_EVIDENCE_CATEGORIES.has(normalizeExpectedToolCategory(category))
+  )) === true;
 }
 
 function ensureRuntimeEvidenceStepForWorkspaceMutation(
@@ -502,7 +538,11 @@ function ensureRuntimeEvidenceStepForWorkspaceMutation(
     summary?: string;
   },
 ): PlannedStep[] {
-  if (!shouldRequireRuntimeEvidenceForWorkspaceMutation(steps, decision, contract)) {
+  const needsRuntimeEvidence = shouldRequireRuntimeEvidenceForWorkspaceMutation(steps, decision, contract);
+  const needsWorkerOwnedUxEvidence = shouldRequireWorkerOwnedUxEvidenceForWorkspaceMutation(steps, decision, contract);
+  const shouldAddRuntimeEvidence = needsRuntimeEvidence && !steps.some(hasRuntimeEvidenceCategory);
+  const shouldAddWorkerOwnedUxEvidence = needsWorkerOwnedUxEvidence && !steps.some(hasWorkerOwnedUxEvidenceCategory);
+  if (!shouldAddRuntimeEvidence && !shouldAddWorkerOwnedUxEvidence) {
     return steps;
   }
 
@@ -512,23 +552,40 @@ function ensureRuntimeEvidenceStepForWorkspaceMutation(
     .slice(0, insertIndex)
     .filter((step) => step.required !== false)
     .map((step) => step.stepId);
-  const runtimeStep: PlannedStep = {
-    stepId: '__runtime_evidence__',
-    kind: 'tool_call',
-    summary: 'Start or exercise the app locally and collect runtime evidence before answering.',
-    expectedToolCategories: ['runtime_evidence'],
-    required: true,
-    ...(priorRequiredStepIds.length > 0 ? { dependsOn: priorRequiredStepIds } : {}),
-  };
+  const insertedSteps: PlannedStep[] = [];
+  if (shouldAddRuntimeEvidence) {
+    insertedSteps.push({
+      stepId: '__runtime_evidence__',
+      kind: 'tool_call',
+      summary: 'Start or exercise the app locally and collect runtime evidence before answering.',
+      expectedToolCategories: ['runtime_evidence'],
+      required: true,
+      ...(priorRequiredStepIds.length > 0 ? { dependsOn: priorRequiredStepIds } : {}),
+    });
+  }
+  if (shouldAddWorkerOwnedUxEvidence) {
+    const runtimeStepIds = [
+      ...steps.filter(hasRuntimeEvidenceCategory).map((step) => step.stepId),
+      ...insertedSteps.filter(hasRuntimeEvidenceCategory).map((step) => step.stepId),
+    ];
+    insertedSteps.push({
+      stepId: '__worker_owned_ux_evidence__',
+      kind: 'tool_call',
+      summary: 'Exercise the requested visible app behavior with worker-owned evidence before answering.',
+      expectedToolCategories: ['worker_owned_ux_evidence'],
+      required: true,
+      dependsOn: [...new Set([...priorRequiredStepIds, ...runtimeStepIds])],
+    });
+  }
   const nextSteps = [...steps];
-  nextSteps.splice(insertIndex, 0, runtimeStep);
+  nextSteps.splice(insertIndex, 0, ...insertedSteps);
   if (answerIndex >= 0) {
-    const shiftedAnswerIndex = answerIndex + 1;
+    const shiftedAnswerIndex = answerIndex + insertedSteps.length;
     const answerStep = nextSteps[shiftedAnswerIndex];
     if (answerStep) {
       nextSteps[shiftedAnswerIndex] = {
         ...answerStep,
-        dependsOn: [...new Set([...(answerStep.dependsOn ?? []), runtimeStep.stepId])],
+        dependsOn: [...new Set([...(answerStep.dependsOn ?? []), ...insertedSteps.map((step) => step.stepId)])],
       };
     }
   }
@@ -546,7 +603,7 @@ function shouldRequireRuntimeEvidenceForWorkspaceMutation(
   if (contract.kind !== 'repo_mutation' && contract.kind !== 'filesystem_mutation') {
     return false;
   }
-  if (steps.some(hasRuntimeEvidencePlaceholder)) {
+  if (steps.some(hasRuntimeEvidenceCategory)) {
     return false;
   }
   if (!steps.some(isMutationStep) || !steps.some((step) => step.kind === 'answer')) {
@@ -562,6 +619,32 @@ function shouldRequireRuntimeEvidenceForWorkspaceMutation(
     .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
     .join(' ');
   return RUNTIME_WORKSPACE_VERIFICATION_PATTERN.test(text);
+}
+
+function shouldRequireWorkerOwnedUxEvidenceForWorkspaceMutation(
+  steps: PlannedStep[],
+  decision: IntentGatewayDecision | null | undefined,
+  contract: {
+    kind: DelegatedTaskContractKind;
+    summary?: string;
+  },
+): boolean {
+  if (contract.kind !== 'repo_mutation' && contract.kind !== 'filesystem_mutation') {
+    return false;
+  }
+  if (!steps.some(isMutationStep) || !steps.some((step) => step.kind === 'answer')) {
+    return false;
+  }
+  const text = [
+    contract.summary,
+    decision?.summary,
+    decision?.resolvedContent,
+    ...(decision?.plannedSteps ?? []).map((step) => step.summary),
+    ...steps.map((step) => step.summary),
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ');
+  return VISIBLE_APP_BEHAVIOR_EVIDENCE_PATTERN.test(text);
 }
 
 function buildReadOnlyToolSynthesisFallbackPlan(
@@ -828,7 +911,7 @@ export function matchPlannedStepForTool(input: ToolStepMatchInput): string | und
   const normalizedHint = input.hintStepId?.trim();
   if (normalizedHint) {
     const hintedStep = input.plannedTask.steps.find((step) => step.stepId === normalizedHint);
-    if (hintedStep && toolNameSatisfiesStep(hintedStep, input.toolName, toolKind)) {
+    if (hintedStep && toolNameSatisfiesStep(hintedStep, input.toolName, toolKind, input.args)) {
       return normalizedHint;
     }
   }
@@ -838,7 +921,7 @@ export function matchPlannedStepForTool(input: ToolStepMatchInput): string | und
 
   const scored = input.plannedTask.steps.map((step, index) => {
     let score = 0;
-    if (!toolNameSatisfiesStep(step, input.toolName, toolKind)) {
+    if (!toolNameSatisfiesStep(step, input.toolName, toolKind, input.args)) {
       return {
         step,
         index,
@@ -859,7 +942,7 @@ export function matchPlannedStepForTool(input: ToolStepMatchInput): string | und
       };
     }
     if (step.kind === toolKind) score += 8;
-    if (step.expectedToolCategories?.some((value) => expectedToolCategoryMatchesTool(value, input.toolName, toolKind, step))) {
+    if (step.expectedToolCategories?.some((value) => expectedToolCategoryMatchesTool(value, input.toolName, toolKind, step, input.args))) {
       score += 6;
     }
     const summaryRefs = extractNormalizedRefs(step.summary);
@@ -1056,6 +1139,14 @@ export function collectMissingEvidenceKinds(
 }
 
 function missingEvidenceKindForStep(step: PlannedStep): string {
+  if (
+    step.kind === 'tool_call'
+    && step.expectedToolCategories?.some((category) => (
+      WORKER_OWNED_UX_EVIDENCE_CATEGORIES.has(normalizeExpectedToolCategory(category))
+    ))
+  ) {
+    return 'worker_owned_ux_evidence';
+  }
   if (
     step.kind === 'tool_call'
     && step.expectedToolCategories?.some((category) => (
@@ -1520,6 +1611,7 @@ function toolNameSatisfiesStep(
   step: PlannedStep,
   toolName: string,
   inferredToolKind: PlannedStepKind = inferStepKindFromToolName(toolName),
+  args?: Record<string, unknown>,
 ): boolean {
   if (!step.expectedToolCategories?.length) {
     return step.kind === 'tool_call'
@@ -1527,7 +1619,7 @@ function toolNameSatisfiesStep(
       : step.kind === inferredToolKind;
   }
   return step.expectedToolCategories.some((value) => (
-    expectedToolCategoryMatchesTool(value, toolName, inferredToolKind, step)
+    expectedToolCategoryMatchesTool(value, toolName, inferredToolKind, step, args)
   ));
 }
 
@@ -1536,6 +1628,7 @@ function expectedToolCategoryMatchesTool(
   toolName: string,
   inferredToolKind: PlannedStepKind,
   step: PlannedStep,
+  args?: Record<string, unknown>,
 ): boolean {
   const normalized = normalizeExpectedToolCategory(value);
   return normalized === toolName
@@ -1543,6 +1636,7 @@ function expectedToolCategoryMatchesTool(
     || (isFilesystemReadCategory(normalized) && FILESYSTEM_READ_TOOL_NAMES.has(toolName))
     || (isFilesystemWriteCategory(normalized) && FILESYSTEM_WRITE_TOOL_NAMES.has(toolName))
     || (normalized === 'runtime_evidence' && runtimeEvidenceCategoryMatchesTool(step, toolName, inferredToolKind))
+    || (WORKER_OWNED_UX_EVIDENCE_CATEGORIES.has(normalized) && workerOwnedUxEvidenceCategoryMatchesTool(toolName, args))
     || (normalized === 'repo' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
     || (normalized === 'repository' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
     || (normalized === 'repo_inspect' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
@@ -1571,6 +1665,25 @@ function expectedToolCategoryMatchesTool(
     || (GWS_STATUS_TOOL_CATEGORIES.has(normalized) && (toolName === 'gws_status' || toolName === 'gws'))
     || (normalized === 'm365' && toolName.startsWith('m365'))
     || (normalized === 'gws' && (toolName === 'gws' || toolName === 'gws_schema'));
+}
+
+function workerOwnedUxEvidenceCategoryMatchesTool(
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+): boolean {
+  if (toolName === 'find_tools') return false;
+  if (!WORKER_OWNED_UX_EVIDENCE_TOOL_NAMES.has(toolName)) return false;
+  return !isGuardianStaticRuntimeProbeArgs(args);
+}
+
+function isGuardianStaticRuntimeProbeArgs(args: Record<string, unknown> | undefined): boolean {
+  if (!args) return false;
+  const command = typeof args.command === 'string'
+    ? args.command
+    : typeof args.cmd === 'string'
+      ? args.cmd
+      : '';
+  return /\.guardian-runtime-check-[a-f0-9-]+\.mjs\b/iu.test(command);
 }
 
 function runtimeEvidenceCategoryMatchesTool(

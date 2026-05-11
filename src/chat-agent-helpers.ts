@@ -85,11 +85,15 @@ function normalizeScheduledEmailBody(body: string | undefined, subject: string):
 }
 
 function formatDirectCodeSessionLine(
-  session: { title?: string | null; workspaceRoot?: string | null; id?: string | null },
+  session: { title?: string | null; workspaceRoot?: string | null; resolvedRoot?: string | null; id?: string | null },
   current: boolean,
 ): string {
   const title = session.title?.trim() || 'Untitled session';
-  const workspaceRoot = session.workspaceRoot?.trim() || '(unknown workspace)';
+  const rawWorkspaceRoot = session.workspaceRoot?.trim() || '';
+  const resolvedRoot = session.resolvedRoot?.trim() || '';
+  const workspaceRoot = rawWorkspaceRoot && rawWorkspaceRoot !== '.'
+    ? rawWorkspaceRoot
+    : resolvedRoot || rawWorkspaceRoot || '(unknown workspace)';
   const sessionId = session.id?.trim() || '';
   const parts = [`- ${current ? 'CURRENT: ' : ''}${title} — ${workspaceRoot}`];
   if (sessionId) {

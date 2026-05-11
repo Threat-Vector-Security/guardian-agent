@@ -1,5 +1,8 @@
 # Repository Guidelines
 
+## No Hardcoded Deliverables Or Test-Passing Fallbacks (CRITICAL)
+Never add hardcoded application deliverables, canned sample apps, domain-specific output, scripted answers, or test-passing fallback implementations to GuardianAgent itself in order to make a delegated coding task appear successful. The orchestration app must not secretly create user-requested project files, UI behavior, sample data, verification content, or final answers. Guardian may orchestrate, route, retry, verify generic evidence, and report failure honestly; the delegated worker or coding backend must own the actual implementation in the target workspace. If a test only passes because Guardian recognizes a specific app domain, prompt shape, file name, selector set, or expected answer and fills it in, that is a critical architecture violation. Stop, remove the workaround, and fix the shared orchestration, worker contract, or verification model instead.
+
 ## Branching (CRITICAL)
 Do not create or switch to a new branch unless the user explicitly asks for it. Default to staying on the current branch, including `main`, unless the user directs otherwise.
 

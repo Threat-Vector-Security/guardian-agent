@@ -1524,7 +1524,7 @@ guardian:
     await dismissedClickPromise;
     await page.waitForFunction(() => window.location.hash === '#/code');
     await page.waitForSelector('.code-page');
-    assert.match(dismissedRoutePrompt, /Save changes to example\.ts before leaving the Code page\?/);
+    assert.match(dismissedRoutePrompt, /Save (?:changes to example\.ts|2 unsaved files) before leaving the Code page\?/);
     assert.doesNotMatch(fs.readFileSync(examplePath, 'utf-8'), /route guard smoke/, 'Cancelling the leave prompt should not save the dirty editor content');
 
     await page.evaluate(() => {
@@ -1544,7 +1544,7 @@ guardian:
     await acceptedDialog.accept();
     await acceptedClickPromise;
     await page.waitForSelector('.code-page', { state: 'detached' });
-    assert.match(acceptedRoutePrompt, /Save changes to example\.ts before leaving the Code page\?/);
+    assert.match(acceptedRoutePrompt, /Save (?:changes to example\.ts|2 unsaved files) before leaving the Code page\?/);
     assert.match(fs.readFileSync(examplePath, 'utf-8'), /route guard smoke/, 'Accepting the leave prompt should save the dirty editor content before leaving Code');
     assert.equal(await page.locator('#chat-panel').isVisible(), true, 'Guardian chat should remain visible off the code route');
     await page.waitForTimeout(6000);

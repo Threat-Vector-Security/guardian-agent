@@ -1680,6 +1680,10 @@ export function deserializeIntentGatewayRecord(
   const normalizedProvenance = normalizeIntentGatewayDecisionProvenance(
     (value.decision as Record<string, unknown>).provenance,
   );
+  const serializedResolvedContent = typeof value.decision.resolvedContent === 'string'
+    && value.decision.resolvedContent.trim()
+    ? value.decision.resolvedContent.trim()
+    : undefined;
   return {
     mode,
     available: value.available !== false,
@@ -1697,6 +1701,9 @@ export function deserializeIntentGatewayRecord(
       : {}),
     decision: {
       ...normalizedDecision,
+      ...(serializedResolvedContent
+        ? { resolvedContent: serializedResolvedContent }
+        : {}),
       ...(normalizedProvenance
         ? { provenance: normalizedProvenance }
         : {}),

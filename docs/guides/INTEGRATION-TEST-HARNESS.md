@@ -355,6 +355,8 @@ For coding-session regressions, create a backend Code session first, attach the 
 
 The current `scripts/test-coding-assistant.mjs` lane also covers natural-language coding workspace current/list/switch flows, active workspace preservation across unrelated detours, `code_create` scoping to the active workspace, same-round `package_install` coalescing, and continuation recovery after tool-limit stops. Use it before adding narrower one-off coding-workspace harnesses.
 
+For app-build coding-assistant regressions, include both from-scratch and continuation coverage against a clean target workspace. The test should prove the worker or coding backend owns the deliverables: Guardian supervisor code must not contain canned app source, prompt-specific sample data, domain-specific semantic checks, or hardcoded final answers for the app under test. Static-app supervisor probes may check generic entrypoint, linked local asset, localhost load, and JavaScript syntax evidence only; requested UX behavior such as search, navigation, detail views, playback, or visible state changes needs worker-owned browser evidence or a project-local verification script.
+
 For graph-owned orchestration, delegated verification/retry, multi-domain tool synthesis, or cross-domain approval resume changes, run:
 
 ```bash

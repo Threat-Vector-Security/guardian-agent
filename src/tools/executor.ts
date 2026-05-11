@@ -4087,6 +4087,14 @@ export class ToolExecutor {
             job,
           };
         }
+        if (job.status === 'running') {
+          return {
+            success: true,
+            approved: true,
+            message: `Approval '${approvalId}' was already approved and '${job.toolName}' is still running.`,
+            job,
+          };
+        }
         return {
           success: true,
           approved: true,

@@ -82,7 +82,18 @@ const RUNTIME_EVIDENCE_TOOL_NAMES = [
   'code_remote_exec',
   'shell_safe',
   'browser_navigate',
+  'browser_state',
 ];
+
+function isRuntimeOrWorkerOwnedUxEvidenceCategory(category: string): boolean {
+  const normalized = category.trim().toLowerCase();
+  return normalized === 'runtime_evidence'
+    || normalized === 'worker_owned_ux_evidence'
+    || normalized === 'worker_owned_runtime_evidence'
+    || normalized === 'ux_behavior_evidence'
+    || normalized === 'visible_behavior_evidence'
+    || normalized === 'app_behavior_evidence';
+}
 
 // Extracted LLM loop, which can run either in-process or in an isolated worker
 export async function runLlmLoop(
@@ -170,7 +181,7 @@ export async function runLlmLoop(
         if (!normalized || !/^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/u.test(normalized)) {
           continue;
         }
-        if (normalized === 'runtime_evidence') {
+        if (isRuntimeOrWorkerOwnedUxEvidenceCategory(normalized)) {
           for (const toolName of RUNTIME_EVIDENCE_TOOL_NAMES) {
             exactToolNames.add(toolName);
           }
@@ -1158,7 +1169,7 @@ function buildPlannedTaskContinuationCorrectionPrompt(
     });
   const hasRuntimeEvidenceStep = plannedTask?.steps.some((step) => (
     step.required !== false
-    && step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true
+    && step.expectedToolCategories?.some((category) => isRuntimeOrWorkerOwnedUxEvidenceCategory(category.trim())) === true
   )) ?? false;
   const mutationTools = toolDefs
     .map((tool) => tool.name)
@@ -1182,6 +1193,7 @@ function buildPlannedTaskContinuationCorrectionPrompt(
       ? [
           'For runtime_evidence steps, file reads, file listings, directory creation, and file writes do not count. Use an execution-capable tool such as coding_backend_run, code_build, code_test, code_remote_exec, shell_safe, or an available browser tool.',
           'If runtime proof is impossible because a linked static asset or local entrypoint is missing, create only that missing runtime support file first, then call the execution-capable tool.',
+          'When the remaining step is worker_owned_ux_evidence, run a worker-owned smoke check for those requested behaviors, such as a browser receipt or a small project verification script that targets the actual selectors and state you implemented.',
           'If no execution-capable tool is visible, first call find_tools with the exact query "coding_backend_run code_build code_test code_remote_exec shell_safe browser_navigate", then call one of the discovered execution tools.',
         ]
       : []),
