@@ -10,6 +10,8 @@ import {
 import { classifyIntentGatewayPass } from './intent/route-classifier.js';
 import {
   extractExplicitAutomationName,
+  isExplicitAutomationAuthoringRequest,
+  isExplicitAutomationControlRequest,
   inferAutomationControlOperation,
   inferAutomationEnabledState,
 } from './intent/entity-resolvers/automation.js';
@@ -23,6 +25,7 @@ import {
   parseStructuredContent,
   parseStructuredToolArguments,
 } from './intent/structured-recovery.js';
+import { normalizeIntentGatewayRepairText } from './intent/text.js';
 import { hasRequiredWritePlannedStep } from './intent/planned-steps.js';
 import {
   PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY,
@@ -32,8 +35,13 @@ import {
   looksLikeSelfContainedDirectAnswerTurn,
   looksLikeContextDependentPromptSelectionTurn,
   isExplicitRepoInspectionRequest,
+  isExplicitWorkspaceAppBuildRequest,
   isExplicitWorkspaceScopedRepoWorkRequest,
 } from './intent/request-patterns.js';
+import {
+  inferProviderConfigOperation,
+  isExplicitProviderConfigRequest,
+} from './intent/entity-resolvers/provider-config.js';
 import { getAmbiguousEmailProviderClarification } from './email-provider-routing.js';
 import type {
   IntentGatewayChatFn,
@@ -381,6 +389,252 @@ function buildContentPlanIntentGatewayRecord(
     }, 'content-plan:raw-credential-disclosure-refusal');
   }
 
+  if (isPendingApprovalStatusRequest(sourceContent)) {
+    return normalize({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Report the current approval status.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'direct_assistant',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      entities: {},
+    }, 'content-plan:pending-approval-status');
+  }
+
+  if (isNarrowContentPlanRepoInspectionRequest(sourceContent)) {
+    return normalize({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Inspect the current coding workspace and answer from repo evidence.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'chat_synthesis',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Inspect the relevant repo files or symbols.',
+          required: true,
+          expectedToolCategories: ['read', 'repo_inspect'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Answer with the grounded repo evidence.',
+          required: true,
+          dependsOn: ['step_1'],
+          expectedToolCategories: ['answer'],
+        },
+      ],
+      entities: {},
+    }, 'content-plan:repo-inspection');
+  }
+
+  if (
+    isExplicitAutomationControlRequest(sourceContent)
+    && !isExplicitAutomationAuthoringRequest(sourceContent)
+    && hasExplicitReadOnlyConstraint(sourceContent)
+  ) {
+    const automationOperation = inferAutomationControlOperation(sourceContent, 'unknown');
+    if (automationOperation === 'read' || automationOperation === 'inspect' || automationOperation === 'search') {
+      return normalize({
+        route: 'automation_control',
+        confidence: 'high',
+        operation: automationOperation,
+        summary: 'Read the automation catalog or automation status.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        requireExactFileReferences: false,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Read automation catalog data.',
+            required: true,
+            expectedToolCategories: ['automation_list'],
+          },
+          {
+            kind: 'answer',
+            summary: 'Summarize the automation catalog result.',
+            required: true,
+            dependsOn: ['step_1'],
+            expectedToolCategories: ['answer'],
+          },
+        ],
+        entities: {},
+      }, 'content-plan:automation-control-read');
+    }
+  }
+
+  if (isExplicitProviderConfigRequest(sourceContent) || isExplicitProviderStatusReadRequest(sourceContent)) {
+    const providerOperation = inferProviderConfigOperation(sourceContent, 'unknown');
+    if (providerOperation === 'read' || providerOperation === 'inspect') {
+      return normalize({
+        route: 'general_assistant',
+        confidence: 'high',
+        operation: providerOperation,
+        summary: 'Read Guardian provider configuration or status.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'provider_crud',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        requireExactFileReferences: false,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Read provider configuration or status evidence.',
+            required: true,
+            expectedToolCategories: ['provider_config'],
+          },
+          {
+            kind: 'answer',
+            summary: 'Report provider status without changing configuration.',
+            required: true,
+            dependsOn: ['step_1'],
+            expectedToolCategories: ['answer'],
+          },
+        ],
+        entities: {
+          uiSurface: 'config',
+        },
+      }, 'content-plan:provider-config-read');
+    }
+  }
+
+  if (isExplicitSecondBrainReadOnlyRequest(sourceContent)) {
+    return normalize({
+      route: 'personal_assistant_task',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Read Second Brain items and answer from that evidence.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Read the relevant Second Brain items.',
+          required: true,
+          expectedToolCategories: ['second_brain'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Summarize the Second Brain result.',
+          required: true,
+          dependsOn: ['step_1'],
+          expectedToolCategories: ['answer'],
+        },
+      ],
+      entities: {},
+    }, 'content-plan:second-brain-read');
+  }
+
+  if (
+    isExplicitWorkspaceAppBuildRequest(sourceContent)
+    && asksForWorkspaceAppRuntimeEvidence(sourceContent)
+  ) {
+    const normalizedSourceContent = sourceContent.toLowerCase();
+    const inferredOperation = inferExplicitCodingTaskOperation(normalizedSourceContent, 'unknown');
+    const operation = inferredOperation && inferredOperation !== 'unknown'
+      ? inferredOperation
+      : 'create';
+    return normalize({
+      route: 'coding_task',
+      confidence: 'high',
+      operation,
+      summary: operation === 'create'
+        ? 'Build the requested app in the current coding workspace.'
+        : 'Update the requested app in the current coding workspace.',
+      turnRelation: input.continuity?.activeExecution?.codeSessionId || input.continuity?.activeExecutionRefs?.some((ref) => ref.startsWith('code_session:'))
+        ? 'follow_up'
+        : 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Inspect the current workspace before creating app files.',
+          required: true,
+          expectedToolCategories: ['read', 'repo_inspect'],
+        },
+        {
+          kind: 'write',
+          summary: 'Create or update the requested app files in the workspace.',
+          required: true,
+          dependsOn: ['step_1'],
+          expectedToolCategories: ['write', 'repo_mutation'],
+        },
+        {
+          kind: 'read',
+          summary: 'Read back the created app files or collect equivalent file evidence.',
+          required: true,
+          dependsOn: ['step_2'],
+          expectedToolCategories: ['read', 'repo_inspect'],
+        },
+        {
+          kind: 'tool_call',
+          summary: 'Run or exercise the app locally and collect runtime evidence.',
+          required: true,
+          dependsOn: ['step_3'],
+          expectedToolCategories: ['runtime_evidence'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Report the local URL and verified visible behavior.',
+          required: true,
+          dependsOn: ['step_4'],
+          expectedToolCategories: ['answer'],
+        },
+      ],
+      entities: {},
+    }, 'content-plan:workspace-app-build');
+  }
+
   const hasAttachedCodeSessionRef = input.continuity?.activeExecutionRefs?.some((ref) => ref.startsWith('code_session:')) === true
     || !!input.continuity?.activeExecution?.codeSessionId;
   const normalizedSourceForContinuity = sourceContent.toLowerCase();
@@ -450,6 +704,80 @@ function buildContentPlanIntentGatewayRecord(
   }
 
   return null;
+}
+
+function isPendingApprovalStatusRequest(content: string | undefined): boolean {
+  const normalized = normalizePendingApprovalStatusRequestText(content);
+  if (!normalized) return false;
+  return /^pending approvals?\??$/.test(normalized)
+    || /^approvals? pending\??$/.test(normalized)
+    || /^(?:what|which)\s+(?:pending approvals?|approvals?\s+pending)(?:\s+do i have)?(?:\s+(?:right now|currently|today))?\??$/.test(normalized)
+    || /^(?:show|list)\s+(?:my\s+|the\s+)?(?:current\s+)?(?:pending approvals?|approvals?\s+pending)(?:\s+(?:right now|currently|today))?\??$/.test(normalized)
+    || /^(?:are there|do i have)\s+(?:any\s+)?(?:pending approvals?|approvals?\s+pending)(?:\s+(?:right now|currently|today))?\??$/.test(normalized)
+    || /^(?:tell me whether|tell me if)\s+(?:i\s+have\s+)?(?:any\s+)?pending approvals?(?:\s+(?:right now|currently|today))?[.?!]?$/.test(normalized);
+}
+
+function normalizePendingApprovalStatusRequestText(content: string | undefined): string {
+  return normalizeIntentGatewayRepairText(content)
+    .replace(/\b(?:do\s+not|don't|never)\s+(?:approve|deny|accept|reject)(?:\s+or\s+(?:approve|deny|accept|reject))?\s+anything\b[^.!?\n]*[.!?]?/g, ' ')
+    .replace(/\binclude\s+marker\s+[a-z0-9_-]+\b[.!?]?/g, ' ')
+    .replace(/\bkeep\s+the\s+answer\s+concise\b[.!?]?/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.?!]+$/g, '?');
+}
+
+function stripNegatedMutationClauses(content: string): string {
+  return content
+    .replace(/\b(?:do\s+not|don't|never)\s+(?:create|update|archive|save|delete|remove|write|change|edit|modify)\b[^.!?\n]*/g, ' ')
+    .replace(/\bwithout\s+(?:creating|updating|archiving|saving|deleting|removing|writing|changing|editing|modifying)\b[^.!?\n]*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isExplicitSecondBrainReadOnlyRequest(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized || !/\bsecond brain\b/.test(normalized)) return false;
+  const positiveContent = stripNegatedMutationClauses(normalized);
+  if (!/\b(?:list|show|read|count|summarize|summary|current|open|what|which|how many)\b/.test(positiveContent)) {
+    return false;
+  }
+  return !/\b(?:create|update|archive|save|delete|remove|write|change|edit|modify)\b/.test(positiveContent);
+}
+
+function hasExplicitReadOnlyConstraint(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return false;
+  return /\b(?:do\s+not|don't|never)\s+(?:create|update|archive|save|delete|remove|write|change|edit|modify|run|enable|disable)\b/.test(normalized)
+    || /\bwithout\s+(?:creating|updating|archiving|saving|deleting|removing|writing|changing|editing|modifying|running|enabling|disabling)\b/.test(normalized)
+    || /\bread[\s-]*only\b/.test(normalized);
+}
+
+function isNarrowContentPlanRepoInspectionRequest(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized || !isExplicitRepoInspectionRequest(normalized)) return false;
+  if (/(?:^|\s)(?:src|docs|web|scripts|native|policies|skills)\//.test(normalized)) return false;
+  if (/\b(?:functions?|types?|symbols?|classes?|interfaces?|methods?)\b/.test(normalized)) return false;
+  return /\bwhich\s+(?:typescript|javascript|source|code)?\s*files?\s+contains?\b/.test(normalized)
+    || /\bwhich\s+(?:typescript|javascript|source|code)?\s*files?\s+(?:implement|define|handle|own)\b/.test(normalized);
+}
+
+function isExplicitProviderStatusReadRequest(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return false;
+  if (!/\b(?:providers?|ollama|openai|anthropic|xai|gemini|claude)\b/.test(normalized)) {
+    return false;
+  }
+  return /\b(?:check|show|list|read|inspect|status|connected|health|available|catalog|models?)\b/.test(normalized)
+    && !/\b(?:update|edit|change|modify|set|switch|create|add|delete|remove)\b/.test(stripNegatedMutationClauses(normalized));
+}
+
+function asksForWorkspaceAppRuntimeEvidence(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return false;
+  return /\b(?:start|run|launch|serve|exercise|open)\b[^.!?\n]{0,120}\b(?:app|locally|local\s+url|localhost|browser|visible\s+behavior|verified?)\b/.test(normalized)
+    || /\b(?:local\s+url|localhost|browser|visible\s+behavior|verified?\s+visible|what\s+you\s+verified)\b/.test(normalized)
+    || /\bmake\s+(?:it|the\s+app)\s+runnable\s+locally\b/.test(normalized);
 }
 
 function isExplicitBoundedCodeSessionFileMutation(content: string): boolean {

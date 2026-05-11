@@ -5,6 +5,8 @@ import type { IntentGatewayDecision } from '../intent-gateway.js';
 import {
   formatDirectProviderInventoryResponse,
   formatDirectProviderModelsResponse,
+  formatDirectProviderStatusResponse,
+  resolveDirectProviderInventoryTarget,
   tryDirectProviderRead,
 } from './direct-provider-read.js';
 
@@ -110,5 +112,57 @@ describe('direct provider read runtime', () => {
       { name: 'ollama-cloud-tools', model: 'glm-4.7' },
       { activeModel: 'gpt-oss:120b', models: ['gpt-oss:120b', 'glm-4.7'] },
     )).toContain('Available models for ollama-cloud-tools:');
+  });
+
+  it('resolves Ollama Managed Cloud status to the managed cloud provider instead of local ollama', async () => {
+    const providers = [
+      {
+        name: 'ollama',
+        type: 'ollama',
+        model: 'gemma4:26b',
+        tier: 'local',
+        connected: true,
+        isDefault: true,
+      },
+      {
+        name: 'ollama-cloud',
+        type: 'ollama_cloud',
+        model: 'glm-5.1',
+        tier: 'managed_cloud',
+        connected: true,
+        isPreferredManagedCloud: true,
+      },
+    ];
+    expect(resolveDirectProviderInventoryTarget(
+      'Check Guardian provider status and tell me whether Ollama Managed Cloud is connected.',
+      providers,
+    )).toMatchObject({ name: 'ollama-cloud' });
+
+    const executeModelTool = vi.fn(async (toolName: string) => {
+      expect(toolName).toBe('llm_provider_list');
+      return {
+        success: true,
+        output: { providers },
+      };
+    });
+
+    const result = await tryDirectProviderRead({
+      agentId: 'chat',
+      tools: {
+        isEnabled: vi.fn(() => true),
+        executeModelTool,
+      } as never,
+      message: {
+        ...baseMessage,
+        content: 'Check Guardian provider status and tell me whether Ollama Managed Cloud is connected.',
+      },
+      ctx: baseCtx,
+      decision: { ...providerReadDecision, operation: 'inspect' },
+    });
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toBe(formatDirectProviderStatusResponse(providers[1]));
+    expect(content).toContain('ollama-cloud is connected');
+    expect(executeModelTool).toHaveBeenCalledTimes(1);
   });
 });

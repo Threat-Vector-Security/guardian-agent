@@ -142,8 +142,8 @@ export function isExplicitRepoInspectionRequest(content: string | undefined): bo
     || /(?:^|\s)(?:src|docs|web|scripts|native|policies|skills)\//.test(normalized)
     || /\b[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|rs|py|go|java|yml|yaml)\b/.test(normalized);
   const asksForFileOrSymbolLocation = /\btell me which files?\b/.test(normalized)
-    || /\bwhich files?\b.*\b(?:implement|define|render|handle|contain|route|wire|own|use)\b/.test(normalized)
-    || /\bfind\s+(?:the\s+)?files?\b.*\b(?:implement|define|render|handle|contain|route|wire|own|use)\b/.test(normalized)
+    || /\bwhich\s+(?:typescript|javascript|source|code)?\s*files?\b.*\b(?:implement|define|render|handle|contains?|route|wire|own|use)\b/.test(normalized)
+    || /\bfind\s+(?:the\s+)?(?:typescript|javascript|source|code)?\s*files?\b.*\b(?:implement|define|render|handle|contains?|route|wire|own|use)\b/.test(normalized)
     || /\bwhere\b.*\bdefined\b/.test(normalized);
   const usesPositiveInspectionVerb = /\b(?:inspect|review|scan|trace|grep)\b/.test(normalized)
     || /\bsearch\s+(?:this|the)?\s*(?:repo|repository|codebase|workspace)\b/.test(normalized)

@@ -35,7 +35,7 @@ export function isPendingApprovalStatusQuery(
   content: string,
   options?: PendingApprovalStatusOptions,
 ): boolean {
-  const normalized = stripLeadingContextPrefix(content).replace(/\s+/g, ' ').trim();
+  const normalized = normalizePendingApprovalStatusText(stripLeadingContextPrefix(content));
   if (!normalized) return false;
   const exactPendingApprovalStatus = /^pending approvals?\??$/i.test(normalized)
     || /^approvals? pending\??$/i.test(normalized);
@@ -43,12 +43,23 @@ export function isPendingApprovalStatusQuery(
     /^(?:what|which)\s+(?:pending approvals?|approvals?\s+pending)(?:\s+do i have)?(?:\s+(?:right now|currently|today))?\??$/i.test(normalized)
     || /^(?:show|list)\s+(?:my\s+|the\s+)?(?:current\s+)?(?:pending approvals?|approvals?\s+pending)(?:\s+(?:right now|currently|today))?\??$/i.test(normalized)
     || /^(?:are there|do i have)\s+(?:any\s+)?(?:pending approvals?|approvals?\s+pending)(?:\s+(?:right now|currently|today))?\??$/i.test(normalized)
+    || /^(?:tell me whether|tell me if)\s+(?:i\s+have\s+)?(?:any\s+)?pending approvals?(?:\s+(?:right now|currently|today))?\??$/i.test(normalized)
     || /^(?:any|current)\s+(?:pending approvals?|approvals?\s+pending)\??$/i.test(normalized)
     || /^(?:pending approvals?|approvals?\s+pending)\s+(?:right now|currently|today)\??$/i.test(normalized);
 
   return options?.exactOnly === true
     ? exactPendingApprovalStatus
     : exactPendingApprovalStatus || broadPendingApprovalStatus;
+}
+
+function normalizePendingApprovalStatusText(content: string): string {
+  return content
+    .replace(/\b(?:do\s+not|don't|never)\s+(?:approve|deny|accept|reject)(?:\s+or\s+(?:approve|deny|accept|reject))?\s+anything\b[^.!?\n]*[.!?]?/gi, ' ')
+    .replace(/\binclude\s+marker\s+[a-z0-9_-]+\b[.!?]?/gi, ' ')
+    .replace(/\bkeep\s+the\s+answer\s+concise\b[.!?]?/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.?!]+$/g, '?');
 }
 
 export function tryBuildDirectPendingApprovalStatusResponse(

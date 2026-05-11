@@ -465,6 +465,133 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('direct');
   });
 
+  it('uses a content-plan record for explicit repo inspection requests without calling the model', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: 'Inspect this repo and answer in one short sentence: which TypeScript file contains the Intent Gateway? Do not edit anything.',
+        channel: 'web',
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:repo-inspection');
+    expect(result.decision).toMatchObject({
+      route: 'coding_task',
+      operation: 'inspect',
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'chat_synthesis',
+    });
+  });
+
+  it('uses a content-plan record for read-only Second Brain summary requests without calling the model', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: 'Use Second Brain to list my current note count and open task count. Do not create, update, archive, save, or delete anything.',
+        channel: 'web',
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:second-brain-read');
+    expect(result.decision).toMatchObject({
+      route: 'personal_assistant_task',
+      operation: 'read',
+      requiresToolSynthesis: true,
+    });
+    expect(result.decision.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'answer']);
+  });
+
+  it('uses a content-plan record for automation catalog reads without calling the model', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: 'List my saved automations and say how many are active. Do not create, update, run, enable, disable, or delete automations.',
+        channel: 'web',
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:automation-control-read');
+    expect(result.decision).toMatchObject({
+      route: 'automation_control',
+      operation: 'read',
+      requiresToolSynthesis: true,
+    });
+  });
+
+  it('uses a content-plan record for provider status reads without preserving stray update operations', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: 'Check Guardian provider status and tell me whether Ollama Managed Cloud is connected. Do not change configuration.',
+        channel: 'web',
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:provider-config-read');
+    expect(result.decision).toMatchObject({
+      route: 'general_assistant',
+      operation: 'inspect',
+      executionClass: 'provider_crud',
+      requiresToolSynthesis: true,
+    });
+    expect(result.decision.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'answer']);
+  });
+
+  it('uses a content-plan record for pending approval status questions without calling the model', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: 'Tell me whether I have any pending approvals right now. Do not approve or deny anything. Include marker API-SMOKE-APPROVALS.',
+        channel: 'web',
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:pending-approval-status');
+    expect(result.decision).toMatchObject({
+      route: 'general_assistant',
+      operation: 'read',
+      executionClass: 'direct_assistant',
+      requiresToolSynthesis: false,
+    });
+  });
+
   it('recovers explicit repo file review requests when the model response is not structured', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -1731,8 +1858,9 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.sessionTarget).toBeUndefined();
   });
 
-  it('repairs attached repo app-build requests into runnable coding work when classifiers are unavailable', async () => {
+  it('uses a content-plan record for attached repo app-build requests without calling the model', async () => {
     const gateway = new IntentGateway();
+    let called = false;
 
     const result = await gateway.classify(
       {
@@ -1745,11 +1873,15 @@ describe('IntentGateway', () => {
         },
       },
       async () => {
+        called = true;
         throw new Error('classifier unavailable');
       },
     );
 
-    expect(result.available).toBe(false);
+    expect(called).toBe(false);
+    expect(result.available).toBe(true);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:workspace-app-build');
     expect(result.decision.route).toBe('coding_task');
     expect(result.decision.operation).toBe('create');
     expect(result.decision.entities.sessionTarget).toBeUndefined();

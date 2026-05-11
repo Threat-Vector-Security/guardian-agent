@@ -18,6 +18,9 @@ describe('pending approval status helper', () => {
     expect(isPendingApprovalStatusQuery('What pending approvals do I have right now?')).toBe(true);
     expect(isPendingApprovalStatusQuery('Show my current pending approvals')).toBe(true);
     expect(isPendingApprovalStatusQuery('Are there any pending approvals today?')).toBe(true);
+    expect(isPendingApprovalStatusQuery(
+      'Tell me whether I have any pending approvals right now. Do not approve or deny anything. Include marker API-SMOKE-APPROVALS.',
+    )).toBe(true);
     expect(isPendingApprovalStatusQuery('Which files implement pending approvals?')).toBe(false);
   });
 

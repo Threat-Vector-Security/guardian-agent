@@ -14,10 +14,15 @@ export function inferProviderConfigOperation(
   content: string,
   fallback: IntentGatewayOperation,
 ): IntentGatewayOperation {
+  const normalized = content.toLowerCase();
+  if (isExplicitProviderConfigReadOnlyRequest(normalized)) {
+    return /\b(?:inspect|explain|details?|catalog|models?|status|connected|health)\b/.test(normalized)
+      ? 'inspect'
+      : 'read';
+  }
   if (['read', 'inspect', 'create', 'update', 'delete'].includes(fallback)) {
     return fallback;
   }
-  const normalized = content.toLowerCase();
   if (/\b(?:update|edit|change|modify|set|switch)\b/.test(normalized)) {
     return 'update';
   }
@@ -31,4 +36,15 @@ export function inferProviderConfigOperation(
     return 'inspect';
   }
   return 'read';
+}
+
+function isExplicitProviderConfigReadOnlyRequest(normalized: string): boolean {
+  if (!normalized) return false;
+  if (/\b(?:do\s+not|don't|never)\s+(?:change|modify|update|edit|set|switch|create|add|delete|remove)\b/.test(normalized)) {
+    return true;
+  }
+  return /\b(?:check|show|list|read|inspect|status|connected|health|available|catalog|models?)\b/.test(normalized)
+    && !/\b(?:update|edit|change|modify|set|switch|create|add|delete|remove)\b/.test(
+      normalized.replace(/\b(?:do\s+not|don't|never)\s+(?:change|modify|update|edit|set|switch|create|add|delete|remove)\b[^.!?\n]*/g, ' '),
+    );
 }

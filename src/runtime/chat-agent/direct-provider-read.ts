@@ -43,7 +43,10 @@ export async function tryDirectProviderRead(input: {
   }
 
   const targetProvider = resolveDirectProviderInventoryTarget(input.message.content, providers);
-  if (input.decision.operation === 'inspect' && targetProvider) {
+  if (targetProvider && isProviderStatusRequest(input.message.content)) {
+    return formatDirectProviderStatusResponse(targetProvider);
+  }
+  if (input.decision.operation === 'inspect' && targetProvider && asksForProviderModels(input.message.content)) {
     const providerName = toString(targetProvider.name).trim();
     const modelsResult = await input.tools.executeModelTool(
       'llm_provider_models',
@@ -65,15 +68,50 @@ export function resolveDirectProviderInventoryTarget(
   content: string,
   providers: readonly Record<string, unknown>[],
 ): Record<string, unknown> | null {
-  const normalized = content.trim().toLowerCase();
+  const normalized = normalizeProviderLookupText(content);
   if (!normalized) return null;
   const matches = providers
     .filter((provider) => {
-      const name = toString(provider.name).trim().toLowerCase();
-      return !!name && normalized.includes(name);
+      const name = normalizeProviderLookupText(toString(provider.name));
+      const type = normalizeProviderLookupText(toString(provider.type));
+      const tier = normalizeProviderLookupText(toString(provider.tier));
+      if (name && normalized.includes(name)) return true;
+      if (name && normalized.includes(name.replace(/\s+/g, ''))) return true;
+      return type === 'ollama cloud'
+        && tier === 'managed cloud'
+        && /\bollama\s+managed\s+cloud\b/.test(normalized);
     })
-    .sort((left, right) => toString(right.name).length - toString(left.name).length);
+    .sort((left, right) => providerTargetScore(right, normalized) - providerTargetScore(left, normalized));
   return matches[0] ?? null;
+}
+
+function providerTargetScore(provider: Record<string, unknown>, normalizedContent: string): number {
+  const name = normalizeProviderLookupText(toString(provider.name));
+  let score = name.length;
+  if (provider.isPreferredManagedCloud === true && /\bmanaged\s+cloud\b/.test(normalizedContent)) score += 100;
+  if (provider.isDefault === true) score += 10;
+  if (provider.connected === true) score += 1;
+  return score;
+}
+
+function normalizeProviderLookupText(content: string): string {
+  return content
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+function asksForProviderModels(content: string): boolean {
+  const normalized = normalizeProviderLookupText(content);
+  return /\b(?:models?|catalog)\b/.test(normalized)
+    && !isProviderStatusRequest(normalized);
+}
+
+function isProviderStatusRequest(content: string): boolean {
+  const normalized = normalizeProviderLookupText(content);
+  return /\b(?:status|connected|health|available|reachable|configured)\b/.test(normalized)
+    && !/\b(?:models?|catalog)\b/.test(normalized);
 }
 
 export function formatDirectProviderInventoryResponse(
@@ -96,6 +134,15 @@ export function formatDirectProviderInventoryResponse(
     lines.push(`- ${name} [${tier} · ${type}] model ${model} · ${connected}${extras}`);
   }
   return lines.join('\n');
+}
+
+export function formatDirectProviderStatusResponse(provider: Record<string, unknown>): string {
+  const name = toString(provider.name).trim() || '(unnamed)';
+  const type = toString(provider.type).trim().replace(/_/g, ' ') || 'unknown';
+  const tier = toString(provider.tier).trim().replace(/_/g, ' ') || 'unknown';
+  const model = toString(provider.model).trim() || 'unknown';
+  const connected = provider.connected === true ? 'connected' : 'not verified';
+  return `${name} is ${connected} [${tier} · ${type}], active model ${model}.`;
 }
 
 export function formatDirectProviderModelsResponse(
