@@ -61,7 +61,10 @@ const FILESYSTEM_WRITE_TOOL_NAMES = new Set([
 const REPO_MUTATION_TOOL_NAMES = new Set([
   ...FILESYSTEM_WRITE_TOOL_NAMES,
   'coding_backend_run',
+  'code_create',
+  'code_edit',
   'code_git_commit',
+  'code_patch',
   'code_remote_exec',
   'package_install',
   'shell_safe',
@@ -1550,6 +1553,9 @@ function inferStepKindFromToolName(toolName: string): PlannedStepKind {
     || toolName === 'fs_move'
     || toolName === 'fs_copy'
     || toolName === 'coding_backend_run'
+    || toolName === 'code_create'
+    || toolName === 'code_edit'
+    || toolName === 'code_patch'
     || isSecondBrainWriteToolName(toolName)
     || AUTOMATION_WRITE_TOOL_NAMES.has(toolName)
   ) {

@@ -548,6 +548,111 @@ describe('ToolExecutor', () => {
     }));
   });
 
+  it('keeps code test runs local by default when a remote sandbox is available', async () => {
+    const root = createExecutorRoot();
+    const remoteExecutionService = {
+      runBoundedJob: vi.fn(),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['node'],
+      allowedDomains: ['localhost', 'api.vercel.com'],
+      cloudConfig: {
+        enabled: true,
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Main Vercel',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_test',
+      args: {
+        cwd: root,
+        command: 'node --version',
+      },
+      origin: 'web',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(remoteExecutionService.runBoundedJob).not.toHaveBeenCalled();
+    expect(result.output).toMatchObject({
+      cwd: root,
+    });
+  });
+
+  it('reuses successful verification evidence instead of rerunning the same command through another execution tool', async () => {
+    const root = createExecutorRoot();
+    const remoteExecutionService = {
+      runBoundedJob: vi.fn(),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['node'],
+      allowedDomains: ['localhost', 'api.vercel.com'],
+      cloudConfig: {
+        enabled: true,
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Main Vercel',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    const requestContext = {
+      origin: 'web' as const,
+      channel: 'web',
+      requestId: 'verification-chain-1',
+      codeContext: { sessionId: 'code-session-1', workspaceRoot: root },
+    };
+    const first = await executor.runTool({
+      ...requestContext,
+      toolName: 'code_test',
+      args: {
+        cwd: root,
+        command: 'node --version',
+      },
+    });
+    const second = await executor.runTool({
+      ...requestContext,
+      toolName: 'code_remote_exec',
+      args: {
+        cwd: root,
+        command: 'node --version',
+      },
+    });
+
+    expect(first.success).toBe(true);
+    expect(second.success).toBe(true);
+    expect(second.verificationStatus).toBe('verified');
+    expect(second.message).toContain('Reused earlier successful code_test verification');
+    expect(remoteExecutionService.runBoundedJob).not.toHaveBeenCalled();
+  });
+
   it('avoids cached-unreachable remote providers when automatic selection has multiple targets', async () => {
     const root = createExecutorRoot();
     writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');

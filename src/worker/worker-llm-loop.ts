@@ -43,6 +43,8 @@ export interface LlmLoopOptions {
   allowAnswerFirstCompletionWithToolExecutionCorrection?: boolean;
   /** Optional structural plan the worker should satisfy. */
   plannedTask?: PlannedTask;
+  /** When true, stop the loop as soon as any real approval is pending, even if sibling tools succeeded. */
+  suspendOnAnyPendingApproval?: boolean;
   /** Structured per-tool lifecycle callback for delegated execution receipts. */
   onToolEvent?: (event: LlmLoopToolEvent) => void;
 }
@@ -83,6 +85,12 @@ const RUNTIME_EVIDENCE_TOOL_NAMES = [
   'shell_safe',
   'browser_navigate',
   'browser_state',
+];
+
+const REPO_MUTATION_SCOPED_TOOL_NAMES = [
+  'code_create',
+  'code_edit',
+  'code_patch',
 ];
 
 function isRuntimeOrWorkerOwnedUxEvidenceCategory(category: string): boolean {
@@ -183,6 +191,12 @@ export async function runLlmLoop(
         }
         if (isRuntimeOrWorkerOwnedUxEvidenceCategory(normalized)) {
           for (const toolName of RUNTIME_EVIDENCE_TOOL_NAMES) {
+            exactToolNames.add(toolName);
+          }
+          continue;
+        }
+        if (normalized === 'repo_mutation' || normalized === 'repo_write') {
+          for (const toolName of REPO_MUTATION_SCOPED_TOOL_NAMES) {
             exactToolNames.add(toolName);
           }
           continue;
@@ -459,6 +473,22 @@ export async function runLlmLoop(
       }
     }
 
+    if (
+      response.toolCalls?.length
+      && areRequiredNonAnswerStepsSatisfied(options?.plannedTask, cumulativeToolRoundResults)
+    ) {
+      response = await chatFn(
+        [
+          ...plannedTaskMessages,
+          { role: 'assistant', content: response.content ?? '' },
+          { role: 'user', content: buildPlannedTaskCompletionCorrectionPrompt(options?.plannedTask) },
+        ],
+        { tools: [] },
+      );
+      finalContent = response.content ?? '';
+      stopReason = mapChatResponseStopReason(response);
+    }
+
     if (!response.toolCalls || response.toolCalls.length === 0) {
       break;
     }
@@ -648,22 +678,27 @@ export async function runLlmLoop(
       }
     }
 
-    // Partial approval handling: only break if EVERY tool in this round is
-    // pending approval. When some tools succeeded, the LLM already sees their
-    // results alongside the pending status, so it can compose a natural response
-    // that acknowledges what's waiting and what it plans to do next.
     if (roundHasPending) {
       const allPending = toolResults.every(
         (s) => s.status === 'fulfilled' && (s.value as any).result?.status === 'pending_approval',
       );
-      if (allPending) {
+      if (allPending || options?.suspendOnAnyPendingApproval === true) {
+        const pendingToolCallIds = new Set<string>();
+        for (const settled of toolResults) {
+          if (settled.status !== 'fulfilled') continue;
+          if ((settled.value as any).result?.status === 'pending_approval') {
+            pendingToolCallIds.add(settled.value.toolCall.id);
+          }
+        }
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const message = messages[index];
+          if (message?.role === 'tool' && pendingToolCallIds.has(message.toolCallId ?? '')) {
+            messages.splice(index, 1);
+          }
+        }
         stopReason = 'approval_required';
-        // Remove the pending tool result messages we just pushed so we don't
-        // send duplicate toolCallIds when resuming after approval.
-        messages.splice(-toolResults.length, toolResults.length);
         break;
       }
-      // Some tools succeeded — continue so LLM can use their results
     }
 
     if (lastToolRoundResults.some(({ result }) => isFixablePolicyBlockedToolResult(result))) {
@@ -965,7 +1000,7 @@ function shouldRetryDiscoveryContinuation(
 }
 
 function shouldRetryPlannedTaskContinuation(input: {
-  cumulativeResults: Array<{ toolName: string; result: Record<string, unknown> }>;
+  cumulativeResults: Array<{ toolName: string; args?: Record<string, unknown>; result: Record<string, unknown> }>;
   lastResults: Array<{ toolName: string; result: Record<string, unknown> }>;
   plannedTask?: PlannedTask;
 }): boolean {
@@ -988,7 +1023,7 @@ function shouldRetryPlannedTaskContinuation(input: {
 
 function collectUnsatisfiedRequiredNonAnswerSteps(
   plannedTask: PlannedTask | undefined,
-  cumulativeResults: Array<{ toolName: string; result: Record<string, unknown> }>,
+  cumulativeResults: Array<{ toolName: string; args?: Record<string, unknown>; result: Record<string, unknown> }>,
 ) {
   const requiredSteps = plannedTask?.steps.filter((step) => step.required !== false && step.kind !== 'answer') ?? [];
   if (!plannedTask || requiredSteps.length === 0) return [];
@@ -998,12 +1033,13 @@ function collectUnsatisfiedRequiredNonAnswerSteps(
 
 function collectSatisfiedPlannedStepIds(
   plannedTask: PlannedTask,
-  cumulativeResults: Array<{ toolName: string; result: Record<string, unknown> }>,
+  cumulativeResults: Array<{ toolName: string; args?: Record<string, unknown>; result: Record<string, unknown> }>,
 ): Set<string> {
   const satisfiedStepIds = new Set<string>();
-  for (const { toolName, result } of cumulativeResults) {
+  for (const { toolName, args: invocationArgs, result } of cumulativeResults) {
     if (!isSuccessfulToolResult(result)) continue;
-    const args = readToolResultArgs(result);
+    const resultArgs = readToolResultArgs(result);
+    const args = { ...(invocationArgs ?? {}), ...resultArgs };
     const matchedStepId = matchPlannedStepForTool({
       plannedTask,
       toolName,
@@ -1015,6 +1051,14 @@ function collectSatisfiedPlannedStepIds(
     }
   }
   return satisfiedStepIds;
+}
+
+function areRequiredNonAnswerStepsSatisfied(
+  plannedTask: PlannedTask | undefined,
+  cumulativeResults: Array<{ toolName: string; args?: Record<string, unknown>; result: Record<string, unknown> }>,
+): boolean {
+  const requiredSteps = plannedTask?.steps.filter((step) => step.required !== false && step.kind !== 'answer') ?? [];
+  return !!plannedTask && requiredSteps.length > 0 && collectUnsatisfiedRequiredNonAnswerSteps(plannedTask, cumulativeResults).length === 0;
 }
 
 function readToolResultArgs(result: Record<string, unknown>): Record<string, unknown> {
@@ -1202,6 +1246,19 @@ function buildPlannedTaskContinuationCorrectionPrompt(
     ...(mutationTools.length > 0 ? [`Available mutation tools include: ${mutationTools.join(', ')}.`] : []),
     ...(executionTools.length > 0 ? [`Available execution/verification tools include: ${executionTools.join(', ')}.`] : []),
     'Only pause if a real mutation tool returns pending_approval or another real blocker.',
+  ].join('\n');
+}
+
+function buildPlannedTaskCompletionCorrectionPrompt(plannedTask: PlannedTask | undefined): string {
+  const answerSteps = plannedTask?.steps
+    .filter((step) => step.required !== false && step.kind === 'answer')
+    .map((step) => `- ${step.stepId}: ${step.summary}`)
+    ?? [];
+  return [
+    'System correction: all required non-answer steps in the execution plan already have successful tool evidence.',
+    'Do not call more tools or request more approvals.',
+    'Use the existing tool results and evidence to answer the user now.',
+    ...(answerSteps.length > 0 ? ['Required answer step:', ...answerSteps] : []),
   ].join('\n');
 }
 

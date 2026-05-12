@@ -1541,9 +1541,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         const remoteProfile = asString(args.remoteProfile).trim() || undefined;
         const command = requireString(args.command, 'command');
 
-        // Automatic tier promotion if a remote execution target is available
-        const hasRemoteTarget = context.resolveRemoteExecutionTarget && (await context.resolveRemoteExecutionTarget(remoteProfile, command, request.codeContext?.workspaceRoot)) != null;
-        if (isolation === 'local' && hasRemoteTarget && !args.isolation) {
+        if (isolation === 'local' && remoteProfile && !args.isolation) {
           isolation = 'remote_if_available';
         }
 

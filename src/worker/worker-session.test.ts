@@ -2141,6 +2141,217 @@ describe('BrokeredWorkerSession automation control', () => {
     });
   });
 
+  it('synthesizes the final answer after an approved receipt satisfies the remaining planned evidence step', async () => {
+    const finalAnswer = 'Created tmp/scoreboard.py and tmp/test_scoreboard.py; python -m unittest test_scoreboard -v passed.';
+    let toolLoopCalls = 0;
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('Pre-routed coding requests should not reclassify the turn.');
+      }
+      if (
+        options?.tools?.length === 0
+        && messages.some((message) => message.content.includes('approval-continuation grounded synthesis'))
+      ) {
+        const prompt = messages.map((message) => message.content).join('\n');
+        expect(prompt).toContain('python -m unittest test_scoreboard -v');
+        expect(prompt).toContain('tmp/scoreboard.py');
+        return {
+          content: finalAnswer,
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (options?.tools?.some((tool: { name: string }) => tool.name === 'code_create')) {
+        toolLoopCalls += 1;
+        expect(toolLoopCalls).toBe(1);
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'call-create-1',
+              name: 'code_create',
+              arguments: JSON.stringify({ path: 'tmp/scoreboard.py', content: 'def rank_players(players): return players' }),
+            },
+            {
+              id: 'call-read-1',
+              name: 'fs_read',
+              arguments: JSON.stringify({ path: 'tmp/scoreboard.py' }),
+            },
+            {
+              id: 'call-test-1',
+              name: 'code_test',
+              arguments: JSON.stringify({ cwd: 'tmp', command: 'python -m unittest test_scoreboard -v' }),
+            },
+          ],
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat call with first tool ${firstTool ?? 'none'}`);
+    });
+
+    const callTool = vi.fn(async (request: { toolName?: string }) => {
+      if (request.toolName === 'code_test') {
+        return {
+          success: false,
+          status: 'pending_approval',
+          jobId: 'job-code-test-1',
+          approvalId: 'approval-code-test-1',
+          message: 'code_test is awaiting approval.',
+          approvalSummary: {
+            toolName: 'code_test',
+            argsPreview: '{"cwd":"tmp","command":"python -m unittest test_scoreboard -v"}',
+          },
+        };
+      }
+      return {
+        success: true,
+        output: {
+          path: 'tmp/scoreboard.py',
+          message: `${request.toolName} succeeded.`,
+        },
+      };
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'code_create',
+          description: 'Create code.',
+          risk: 'mutating',
+          parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } },
+        },
+        {
+          name: 'fs_read',
+          description: 'Read a file.',
+          risk: 'read_only',
+          parameters: { type: 'object', properties: { path: { type: 'string' } } },
+        },
+        {
+          name: 'code_test',
+          description: 'Run tests.',
+          risk: 'mutating',
+          parameters: { type: 'object', properties: { cwd: { type: 'string' }, command: { type: 'string' } } },
+        },
+      ],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(async () => ({
+        success: true,
+        status: 'approved',
+        jobId: 'job-code-test-1',
+        message: 'python -m unittest test_scoreboard -v passed.',
+        output: {
+          command: 'python -m unittest test_scoreboard -v',
+          cwd: 'tmp',
+          stdout: 'Ran 8 tests in 0.001s\n\nOK',
+        },
+      })),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-code-test-approval-start',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Create and test tmp/scoreboard.py.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata({
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'session-123',
+          },
+        }, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'create',
+            summary: 'Create and test tmp/scoreboard.py.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            plannedSteps: [
+              {
+                stepId: 'step_1',
+                kind: 'write',
+                summary: 'Create tmp/scoreboard.py.',
+                expectedToolCategories: ['repo_mutation'],
+                required: true,
+              },
+              {
+                stepId: 'step_2',
+                kind: 'read',
+                summary: 'Verify tmp/scoreboard.py after writing.',
+                expectedToolCategories: ['fs_read'],
+                required: true,
+                dependsOn: ['step_1'],
+              },
+              {
+                stepId: 'step_3',
+                kind: 'tool_call',
+                summary: 'Run python -m unittest test_scoreboard -v.',
+                expectedToolCategories: ['runtime_evidence'],
+                required: true,
+                dependsOn: ['step_2'],
+              },
+              {
+                stepId: 'step_4',
+                kind: 'answer',
+                summary: 'Report files changed and test result.',
+                required: true,
+                dependsOn: ['step_3'],
+              },
+            ],
+          },
+        }),
+      },
+    });
+
+    const resumed = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-code-test-approval-resume',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: '',
+        metadata: buildApprovalOutcomeContinuationMetadata({
+          approvalId: 'approval-code-test-1',
+          decision: 'approved',
+          resultMessage: 'python -m unittest test_scoreboard -v passed.',
+        }),
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(resumed.content).toBe(finalAnswer);
+    expect(resumed.metadata).toMatchObject({
+      approvalContinuationSynthesis: {
+        available: true,
+        reason: 'approved_evidence_satisfied_plan',
+      },
+      delegatedResult: {
+        runStatus: 'completed',
+        finalUserAnswer: finalAnswer,
+      },
+    });
+    expect(toolLoopCalls).toBe(1);
+  });
+
   it('uses successful remote exec approval messages when stdout output is unavailable during resume', async () => {
     const exactToolMessage = 'Remote sandbox command completed on \'Vercel Production\'. STDOUT:\n/vercel/sandbox';
     const llmChat = vi.fn(async (messages, options) => {
@@ -2869,6 +3080,9 @@ describe('BrokeredWorkerSession automation control', () => {
       .join('\n\n');
     expect(systemMessages).toContain('Local app build rule:');
     expect(systemMessages).toContain('prefer it as the main implementation tool for broad app builds');
+    expect(systemMessages).toContain('code_create/code_edit/code_patch');
+    expect(systemMessages).toContain('prefer scoped coding mutation tools such as code_create, code_edit, and code_patch');
+    expect(systemMessages).toContain('find_tools with the exact query "code_create code_edit code_patch"');
     expect(systemMessages).toContain('Prefer dependency-free static HTML/CSS/JS or a built-in Node http server');
     expect(systemMessages).toContain('Do not call package_install for a simple app before first trying a dependency-free implementation path.');
     expect(systemMessages).toContain('Runtime evidence must come from an execution-capable tool receipt');

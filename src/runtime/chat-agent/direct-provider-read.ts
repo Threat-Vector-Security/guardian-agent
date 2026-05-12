@@ -42,6 +42,11 @@ export async function tryDirectProviderRead(input: {
     return 'No AI providers are currently configured.';
   }
 
+  const activeProvider = resolveDirectProviderActiveTarget(input.message.content, providers);
+  if (activeProvider) {
+    return formatDirectProviderStatusResponse(activeProvider);
+  }
+
   const targetProvider = resolveDirectProviderInventoryTarget(input.message.content, providers);
   if (targetProvider && isProviderStatusRequest(input.message.content)) {
     return formatDirectProviderStatusResponse(targetProvider);
@@ -62,6 +67,24 @@ export async function tryDirectProviderRead(input: {
   }
 
   return formatDirectProviderInventoryResponse(providers);
+}
+
+export function resolveDirectProviderActiveTarget(
+  content: string,
+  providers: readonly Record<string, unknown>[],
+): Record<string, unknown> | null {
+  const normalized = normalizeProviderLookupText(content);
+  if (!/\b(?:active|current|configured|selected|using|running)\b/.test(normalized)) return null;
+  if (!/\b(?:provider|model)\b/.test(normalized)) return null;
+  if (/\b(?:all|list|every|available|catalog|models?)\b/.test(normalized)
+    && !/\b(?:active|current|configured|selected|using|running)\b/.test(normalized)) {
+    return null;
+  }
+  return providers.find((provider) => provider.isDefault === true)
+    ?? providers.find((provider) => provider.isPreferredManagedCloud === true)
+    ?? providers.find((provider) => provider.connected === true)
+    ?? providers[0]
+    ?? null;
 }
 
 export function resolveDirectProviderInventoryTarget(

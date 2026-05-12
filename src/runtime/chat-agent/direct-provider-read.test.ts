@@ -6,6 +6,7 @@ import {
   formatDirectProviderInventoryResponse,
   formatDirectProviderModelsResponse,
   formatDirectProviderStatusResponse,
+  resolveDirectProviderActiveTarget,
   resolveDirectProviderInventoryTarget,
   tryDirectProviderRead,
 } from './direct-provider-read.js';
@@ -112,6 +113,56 @@ describe('direct provider read runtime', () => {
       { name: 'ollama-cloud-tools', model: 'glm-4.7' },
       { activeModel: 'gpt-oss:120b', models: ['gpt-oss:120b', 'glm-4.7'] },
     )).toContain('Available models for ollama-cloud-tools:');
+  });
+
+  it('answers active provider/model prompts with the configured default provider', async () => {
+    const providers = [
+      {
+        name: 'ollama-cloud',
+        type: 'ollama_cloud',
+        model: 'glm-5.1',
+        tier: 'managed_cloud',
+        connected: true,
+        isDefault: true,
+      },
+      {
+        name: 'openai',
+        type: 'openai',
+        model: 'gpt-4o',
+        tier: 'frontier',
+        connected: true,
+      },
+    ];
+
+    expect(resolveDirectProviderActiveTarget(
+      'Identify your configured provider/model if available.',
+      providers,
+    )).toMatchObject({ name: 'ollama-cloud' });
+
+    const executeModelTool = vi.fn(async (toolName: string) => {
+      expect(toolName).toBe('llm_provider_list');
+      return {
+        success: true,
+        output: { providers },
+      };
+    });
+
+    const result = await tryDirectProviderRead({
+      agentId: 'chat',
+      tools: {
+        isEnabled: vi.fn(() => true),
+        executeModelTool,
+      } as never,
+      message: {
+        ...baseMessage,
+        content: 'Reply with exactly one concise sentence: identify your configured provider/model if available.',
+      },
+      ctx: baseCtx,
+      decision: { ...providerReadDecision, operation: 'inspect' },
+    });
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toBe('ollama-cloud is connected [managed cloud · ollama cloud], active model glm-5.1.');
   });
 
   it('resolves Ollama Managed Cloud status to the managed cloud provider instead of local ollama', async () => {

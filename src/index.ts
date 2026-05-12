@@ -1571,7 +1571,7 @@ function buildDashboardCallbacks(
   });
   const listConfiguredLlmProviders = async () => {
     const currentConfig = configRef.current;
-    const runtimeProviderInfo = await buildProviderInfo(true);
+    const runtimeProviderInfo = getProviderInfoSnapshot();
     const runtimeProvidersByName = new Map(
       runtimeProviderInfo.map((provider) => [provider.name, provider] as const),
     );

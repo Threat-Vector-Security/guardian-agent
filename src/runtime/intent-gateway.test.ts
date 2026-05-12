@@ -355,6 +355,39 @@ describe('IntentGateway', () => {
     expect(record?.decision.plannedSteps?.map((step) => step.kind)).toEqual(['search']);
   });
 
+  it('enriches existing planned records with resolved coding workspace targets', () => {
+    const record = enrichIntentGatewayRecordWithContentPlan({
+      mode: 'primary',
+      available: false,
+      model: 'unknown',
+      latencyMs: 0,
+      decision: {
+        route: 'coding_task',
+        confidence: 'low',
+        operation: 'create',
+        summary: 'Create a scratch scoreboard module.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'chat_synthesis',
+        plannedSteps: [
+          { kind: 'read', summary: 'Inspect the workspace.', required: true },
+          { kind: 'write', summary: 'Create files.', required: true },
+        ],
+        entities: {},
+      },
+    }, 'Work only inside `tmp/hermes-vs-guardian/guardian` in the current GuardianAgent repo.');
+
+    expect(record?.decision.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'write']);
+    expect(record?.decision.entities.sessionTarget).toBe('current GuardianAgent');
+    expect(record?.decision.provenance?.entities?.sessionTarget).toBe('resolver.coding');
+  });
+
   it('repairs malformed tool-call JSON arguments before normalizing the decision', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

@@ -564,6 +564,145 @@ describe('runLlmLoop', () => {
     expect(result.finalContent).toContain('Created src/app-state.ts');
   });
 
+  it('answers instead of executing new mutation tools after all required plan evidence is satisfied', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Create and test tmp/scoreboard.py.' }];
+    const plannedTask: PlannedTask = {
+      planId: 'plan-scoreboard',
+      allowAdditionalSteps: true,
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'write',
+          summary: 'Create tmp/scoreboard.py and tmp/test_scoreboard.py.',
+          expectedToolCategories: ['repo_mutation'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'read',
+          summary: 'Verify the changed repo files after the mutation.',
+          expectedToolCategories: ['fs_read', 'fs_list'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+        {
+          stepId: 'step_3',
+          kind: 'tool_call',
+          summary: 'Run the tests and collect runtime evidence.',
+          expectedToolCategories: ['runtime_evidence'],
+          required: true,
+          dependsOn: ['step_2'],
+        },
+        {
+          stepId: 'step_4',
+          kind: 'answer',
+          summary: 'Report the files changed and test result.',
+          required: true,
+          dependsOn: ['step_3'],
+        },
+      ],
+    };
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{
+          id: 'call-1',
+          name: 'code_create',
+          arguments: JSON.stringify({ path: 'tmp/scoreboard.py', content: 'def rank_players(players): return players' }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-2', name: 'fs_read', arguments: JSON.stringify({ path: 'tmp/scoreboard.py' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-3', name: 'shell_safe', arguments: JSON.stringify({ command: 'python -m unittest test_scoreboard -v', cwd: 'tmp' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-4', name: 'fs_write', arguments: JSON.stringify({ path: 'tmp/scoreboard.py', content: 'rewrite' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Created tmp/scoreboard.py and verified with python -m unittest test_scoreboard -v.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const calledTools: string[] = [];
+    const chatCalls: Array<{ messages: ChatMessage[]; options?: ChatOptions }> = [];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [
+          {
+            name: 'fs_read',
+            description: 'Read a file.',
+            parameters: { type: 'object', properties: { path: { type: 'string' } } },
+          },
+          {
+            name: 'fs_write',
+            description: 'Write a file.',
+            parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } },
+          },
+          {
+            name: 'shell_safe',
+            description: 'Run a safe command.',
+            parameters: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' } } },
+          },
+          {
+            name: 'code_create',
+            description: 'Create source code.',
+            parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } },
+          },
+        ];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        return {
+          success: true,
+          output: { message: `Completed ${request.toolName}.` },
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (msgs: ChatMessage[], opts?: ChatOptions) => {
+        chatCalls.push({ messages: msgs, options: opts });
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      6,
+      32_000,
+      undefined,
+      { plannedTask },
+    );
+
+    expect(calledTools).toEqual(['code_create', 'fs_read', 'shell_safe']);
+    expect(chatCalls.at(-1)?.options?.tools).toEqual([]);
+    expect(chatCalls.at(-1)?.messages.at(-1)).toMatchObject({
+      role: 'user',
+      content: expect.stringContaining('all required non-answer steps'),
+    });
+    expect(result.finalContent).toContain('verified');
+  });
+
   it('does not accept tool-free answer-first replies when the turn requires repo evidence', async () => {
     const messages: ChatMessage[] = [{ role: 'user', content: 'Inspect src/chat-agent.ts and write tmp/repo-summary.md with a short summary.' }];
     const responses: ChatResponse[] = [
@@ -1593,6 +1732,94 @@ describe('runLlmLoop', () => {
     expect(toolNamesByRound[0]).toContain('automation_list');
     expect(toolNamesByRound[0]).not.toContain('automation_save');
     expect(result.finalContent).toContain('stale-approval monitor');
+  });
+
+  it('preloads scoped coding mutation tools for repo mutation planned steps', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Create a small module and tests.' }];
+    const plannedTask: PlannedTask = {
+      planId: 'plan:coding_task:create:2',
+      allowAdditionalSteps: true,
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'write',
+          summary: 'Create the requested source files.',
+          expectedToolCategories: ['repo_mutation'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'answer',
+          summary: 'Summarize the created files.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    };
+    const searchQueries: string[] = [];
+    const toolNamesByRound: string[][] = [];
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'find_tools',
+          description: 'Find deferred tools.',
+          parameters: { type: 'object', properties: { query: { type: 'string' } } },
+          risk: 'read_only',
+          category: 'system',
+        }];
+      },
+      async searchTools(query) {
+        searchQueries.push(query);
+        const definitions: Record<string, ToolDefinition> = {
+          code_create: {
+            name: 'code_create',
+            description: 'Create a new source file in the workspace.',
+            parameters: { type: 'object', properties: {} },
+            risk: 'mutating',
+            category: 'coding',
+          },
+          code_edit: {
+            name: 'code_edit',
+            description: 'Edit an existing source file in the workspace.',
+            parameters: { type: 'object', properties: {} },
+            risk: 'mutating',
+            category: 'coding',
+          },
+          code_patch: {
+            name: 'code_patch',
+            description: 'Apply a unified diff patch in the workspace.',
+            parameters: { type: 'object', properties: {} },
+            risk: 'mutating',
+            category: 'coding',
+          },
+        };
+        return definitions[query] ? [definitions[query]] : [];
+      },
+      async callTool(): Promise<ToolResult> {
+        throw new Error('No tool call expected.');
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (_messages, options) => {
+        toolNamesByRound.push(options?.tools?.map((tool) => tool.name) ?? []);
+        return {
+          content: 'Ready to use scoped coding tools.',
+          model: 'test-model',
+          finishReason: 'stop',
+        };
+      },
+      toolCaller,
+      1,
+      32_000,
+      undefined,
+      { plannedTask },
+    );
+
+    expect(searchQueries).toEqual(['code_create', 'code_edit', 'code_patch']);
+    expect(toolNamesByRound[0]).toEqual(expect.arrayContaining(['code_create', 'code_edit', 'code_patch']));
+    expect(result.finalContent).toContain('scoped coding tools');
   });
 
   it('repairs empty find_tools queries from the latest user request', async () => {

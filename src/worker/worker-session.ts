@@ -750,7 +750,8 @@ function buildDelegatedTaskPlanGuidance(taskContract: DelegatedTaskContract): st
       ? [
           'Local app build rule:',
           'For coding tasks that require both repo changes and runtime evidence, complete the implementation first, then collect a successful run/build/test/browser receipt before answering.',
-          'If `coding_backend_run` is available, prefer it as the main implementation tool for broad app builds; otherwise use concrete mutation tools such as fs_mkdir/fs_write/code_edit until the app files are complete.',
+          'If `coding_backend_run` is available, prefer it as the main implementation tool for broad app builds; otherwise use scoped coding mutation tools such as code_create/code_edit/code_patch, with fs_mkdir/fs_write as fallback until the app files are complete.',
+          'For direct coding work inside an active coding workspace, prefer scoped coding mutation tools such as code_create, code_edit, and code_patch for source files. If they are not visible, call find_tools with the exact query "code_create code_edit code_patch"; use raw fs_write/fs_mkdir only when the scoped coding tool is not a fit.',
           'For simple empty local app builds, avoid adding runtime package dependencies unless the user explicitly asked for a framework or a dependency is essential. Prefer dependency-free static HTML/CSS/JS or a built-in Node http server so the app can be run and verified without package_install approval.',
           'For dependency-free app builds, create a complete runnable file set before runtime proof. If index.html links to app.js or styles.css, write those linked assets in the same implementation pass, and add a simple local entrypoint or verification script when the repo does not already have one.',
           'When a required step includes worker_owned_ux_evidence, run a worker-owned smoke check for those requested behaviors instead of relying on generic load/syntax proof. That proof can be a browser receipt or a small project verification script that inspects the actual files/selectors/state you implemented.',
@@ -771,8 +772,8 @@ function buildDelegatedTaskPlanGuidance(taskContract: DelegatedTaskContract): st
     ...(requiredSteps.some((step) => step.kind === 'write')
       ? [
           'Write-step completion rule:',
-          'A write step is satisfied only by a successful filesystem mutation tool receipt such as fs_write, fs_mkdir, fs_delete, fs_move, or fs_copy. A chat answer saying the file was written is not sufficient.',
-          'When a write step names an output path, call fs_write/fs_mkdir for that exact path before ending the turn. This still applies when the preceding search found no rows; create the requested output with safe empty or no-match content that respects the user format constraint.',
+          'A write step is satisfied only by a successful mutation tool receipt such as code_create, code_edit, code_patch, fs_write, fs_mkdir, fs_delete, fs_move, or fs_copy. A chat answer saying the file was written is not sufficient.',
+          'When a coding-task write step names a source-file output path, prefer code_create/code_edit/code_patch for that exact path; otherwise call fs_write/fs_mkdir before ending the turn. This still applies when the preceding search found no rows; create the requested output with safe empty or no-match content that respects the user format constraint.',
           'For security or credential scans, never write secret values to the output file. Write only the sanitized fields requested by the user, such as file paths and line numbers.',
         ]
       : []),
@@ -3092,6 +3093,17 @@ export class BrokeredWorkerSession {
     this.suspendedSession = null;
     this.pendingApprovals = null;
 
+    const completedFromApprovedEvidence = await this.tryBuildApprovalContinuationCompletedFromEvidence({
+      suspended,
+      resumedMessages,
+      approvedReceipts,
+      approvedEvents,
+      chatFn,
+    });
+    if (completedFromApprovedEvidence) {
+      return completedFromApprovedEvidence;
+    }
+
     const originalIntentDecision = readPreRoutedIntentGatewayMetadata(suspended.originalMessage.metadata)?.decision;
     const resumed = await this.executeLoop(
       suspended.originalMessage,
@@ -3114,6 +3126,112 @@ export class BrokeredWorkerSession {
       chatFn,
     });
     return reconciled ?? resumed;
+  }
+
+  private async tryBuildApprovalContinuationCompletedFromEvidence(input: {
+    suspended: SuspendedToolLoopSession;
+    resumedMessages: ChatMessage[];
+    approvedReceipts: EvidenceReceipt[];
+    approvedEvents: ExecutionEvent[];
+    chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>;
+  }): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const sourceEnvelope = input.suspended.sourceEnvelope;
+    const taskContract = input.suspended.taskContract
+      ?? sourceEnvelope?.taskContract
+      ?? buildDelegatedTaskContract(readPreRoutedIntentGatewayMetadata(input.suspended.originalMessage.metadata)?.decision);
+    if (taskContract.kind !== 'repo_mutation') {
+      return null;
+    }
+    const sourceReceipts = removeModelAnswerReceipts(removeFallbackAnswerReceipts(sourceEnvelope?.evidenceReceipts ?? []));
+    const approvedReceiptIds = new Set(input.approvedReceipts.map((receipt) => receipt.receiptId));
+    const receipts = [
+      ...sourceReceipts.filter((receipt) => !approvedReceiptIds.has(receipt.receiptId)),
+      ...input.approvedReceipts,
+    ];
+    const toolReceiptStepIds = buildApprovalContinuationReceiptStepIds({
+      taskContract,
+      sourceEnvelope,
+      approvedReceipts: input.approvedReceipts,
+    });
+    const stepReceipts = buildStepReceipts({
+      plannedTask: taskContract.plan,
+      evidenceReceipts: receipts,
+      toolReceiptStepIds,
+      interruptions: [],
+    });
+    const satisfiedStepIds = new Set(
+      stepReceipts
+        .filter((receipt) => receipt.status === 'satisfied')
+        .map((receipt) => receipt.stepId),
+    );
+    const requiredNonAnswerSteps = taskContract.plan.steps.filter((step) => step.required !== false && step.kind !== 'answer');
+    if (
+      requiredNonAnswerSteps.length === 0
+      || !requiredNonAnswerSteps.every((step) => satisfiedStepIds.has(step.stepId))
+    ) {
+      return null;
+    }
+
+    const response = await input.chatFn(
+      buildApprovalContinuationSynthesisMessages({
+        originalMessage: input.suspended.originalMessage,
+        resumedMessages: input.resumedMessages,
+        approvedReceipts: input.approvedReceipts,
+        sourceEnvelope,
+      }),
+      {
+        tools: [],
+        maxTokens: 2_000,
+        temperature: 0,
+      },
+    );
+    const finalAnswer = response.content.trim();
+    if (!finalAnswer || isEmptyResponseFallbackContent(finalAnswer)) {
+      return null;
+    }
+    const responseSource = buildChatResponseSource(response as BrokeredChatResponse, input.suspended.executionProfile, {
+      usedFallback: false,
+    }) ?? buildExecutionProfileResponseSource(input.suspended.executionProfile);
+    const envelope = buildDelegatedResultEnvelope({
+      taskContract,
+      finalAnswerCandidate: finalAnswer,
+      operatorSummary: finalAnswer,
+      events: [
+        ...(sourceEnvelope?.events ?? []),
+        ...input.approvedEvents,
+      ],
+      receipts,
+      toolReceiptStepIds,
+      responseSource,
+      selectedExecutionProfile: input.suspended.executionProfile,
+      stopReason: 'end_turn',
+    });
+    if (envelope.runStatus !== 'completed') {
+      return null;
+    }
+    return {
+      content: finalAnswer,
+      metadata: {
+        ...buildToolLoopExecutionMetadata({
+          stopReason: 'end_turn',
+          completionReason: 'model_response',
+          responseQuality: 'final',
+          roundCount: 0,
+          toolCallCount: 0,
+          toolResultCount: input.approvedReceipts.length,
+          successfulToolResultCount: input.approvedReceipts.filter((receipt) => receipt.status === 'succeeded').length,
+        }, {
+          runStatus: envelope.runStatus,
+        }),
+        ...buildDelegatedExecutionMetadata(envelope),
+        approvalContinuationSynthesis: {
+          available: true,
+          reason: 'approved_evidence_satisfied_plan',
+          approvedReceiptCount: input.approvedReceipts.length,
+        },
+        ...(responseSource ? { responseSource } : {}),
+      },
+    };
   }
 
   private async tryBuildApprovalContinuationResponse(input: {
@@ -3684,6 +3802,7 @@ export class BrokeredWorkerSession {
           : undefined,
         toolExecutionCorrectionPrompt,
         plannedTask: taskContract.plan,
+        suspendOnAnyPendingApproval: taskContract.kind === 'repo_mutation',
         onToolEvent: recordDelegatedToolEvent,
       },
     );

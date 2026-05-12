@@ -2093,8 +2093,6 @@ export function enrichIntentGatewayRecordWithContentPlan(
   if (!record) return null;
   const trimmedSource = sourceContent?.trim();
   if (!trimmedSource) return record;
-  if (hasRequiredWritePlannedStep(record.decision)) return record;
-  if (record.decision.plannedSteps?.length) return record;
 
   const normalized = normalizeIntentGatewayDecision(
     {
@@ -2107,23 +2105,56 @@ export function enrichIntentGatewayRecordWithContentPlan(
     { sourceContent: trimmedSource },
     { classifierSource: classifierProvenanceSourceForMode(record.mode) },
   );
+
+  const shouldApplyEntityEnrichment = record.decision.route === 'coding_task'
+    || record.decision.route === 'coding_session_control';
+  const normalizedEntityKeys = Object.keys(normalized.entities ?? {});
+  const normalizedEntityProvenanceKeys = Object.keys(normalized.provenance?.entities ?? {});
+  const entityEnrichedRecord = shouldApplyEntityEnrichment
+    && (normalizedEntityKeys.length > 0 || normalizedEntityProvenanceKeys.length > 0)
+    ? {
+        ...record,
+        decision: {
+          ...record.decision,
+          entities: {
+            ...(record.decision.entities ?? {}),
+            ...(normalized.entities ?? {}),
+          },
+          provenance: {
+            ...(record.decision.provenance ?? {}),
+            ...(normalizedEntityProvenanceKeys.length > 0
+              ? {
+                  entities: {
+                    ...(record.decision.provenance?.entities ?? {}),
+                    ...(normalized.provenance?.entities ?? {}),
+                  },
+                }
+              : {}),
+          },
+        },
+      }
+    : record;
+
+  if (hasRequiredWritePlannedStep(entityEnrichedRecord.decision)) return entityEnrichedRecord;
+  if (entityEnrichedRecord.decision.plannedSteps?.length) return entityEnrichedRecord;
+
   if (!hasRequiredWritePlannedStep(normalized) || !normalized.plannedSteps?.length) {
-    return record;
+    return entityEnrichedRecord;
   }
 
   return {
-    ...record,
+    ...entityEnrichedRecord,
     decision: {
-      ...record.decision,
+      ...entityEnrichedRecord.decision,
       plannedSteps: cloneIntentGatewayPlannedSteps(normalized.plannedSteps),
-      ...(typeof record.decision.requireExactFileReferences === 'boolean'
+      ...(typeof entityEnrichedRecord.decision.requireExactFileReferences === 'boolean'
         ? {}
         : typeof normalized.requireExactFileReferences === 'boolean'
           ? { requireExactFileReferences: normalized.requireExactFileReferences }
           : {}),
       provenance: {
-        ...(record.decision.provenance ?? {}),
-        ...(typeof record.decision.requireExactFileReferences === 'boolean'
+        ...(entityEnrichedRecord.decision.provenance ?? {}),
+        ...(typeof entityEnrichedRecord.decision.requireExactFileReferences === 'boolean'
           ? {}
           : normalized.provenance?.requireExactFileReferences
             ? { requireExactFileReferences: normalized.provenance.requireExactFileReferences }

@@ -39,6 +39,18 @@ describe('resolveCodingBackendSessionTarget', () => {
     });
   });
 
+  it('returns current when the mentioned workspace uses a compact repo name with current wording', () => {
+    expect(resolveCodingBackendSessionTarget({
+      sessions: [...SESSIONS],
+      currentSessionId: 'guardian',
+      requestedSessionTarget: 'current GuardianAgent',
+    })).toEqual({
+      status: 'current',
+      currentSession: SESSIONS[0],
+      targetSession: SESSIONS[0],
+    });
+  });
+
   it('returns current when the mentioned workspace matches the current attachment even if there are multiple ambiguous sessions', () => {
     expect(resolveCodingBackendSessionTarget({
       sessions: [

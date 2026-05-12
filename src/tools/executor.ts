@@ -372,6 +372,13 @@ const CODE_SESSION_UNTRUSTED_APPROVAL_TOOLS = new Set([
   ...CODE_SESSION_TRUSTED_EXECUTION_TOOLS,
   ...CODE_SESSION_RAW_FILESYSTEM_MUTATION_TOOLS,
 ]);
+const VERIFICATION_EXECUTION_TOOLS = new Set([
+  'shell_safe',
+  'code_test',
+  'code_build',
+  'code_lint',
+  'code_remote_exec',
+]);
 
 type ShellExecMode = 'direct_exec' | 'shell_fallback';
 
@@ -3826,6 +3833,63 @@ export class ToolExecutor {
     return null;
   }
 
+  private normalizeVerificationExecutionArgs(args: Record<string, unknown> | undefined): { command: string; cwd: string } | null {
+    const command = asString(args?.command).trim();
+    if (!command) return null;
+    const cwd = asString(args?.cwd).trim();
+    return {
+      command: this.normalizeVerificationCommand(command),
+      cwd: normalizePathForHost(cwd).toLowerCase(),
+    };
+  }
+
+  private normalizeVerificationCommand(command: string): string {
+    return command
+      .trim()
+      .replace(/\s+/g, ' ')
+      .replace(/^python3\b/i, 'python')
+      .replace(/\s+2>&1\s*$/i, '')
+      .replace(/\s*>\s*(?:"[^"]+"|'[^']+'|\S+)\s+2>&1\s*$/i, '')
+      .trim()
+      .toLowerCase();
+  }
+
+  private tryReturnRecentEquivalentVerificationRun(job: ToolJobRecord): ToolRunResponse | null {
+    if (!VERIFICATION_EXECUTION_TOOLS.has(job.toolName)) return null;
+    const requested = this.normalizeVerificationExecutionArgs(job.argsRedacted);
+    if (!requested) return null;
+    const cutoff = this.now() - 10 * 60_000;
+    const prior = this.jobs.find((candidate) => {
+      if (candidate.id === job.id) return false;
+      if (candidate.status !== 'succeeded') return false;
+      if (!VERIFICATION_EXECUTION_TOOLS.has(candidate.toolName)) return false;
+      if ((candidate.completedAt ?? candidate.createdAt) < cutoff) return false;
+      if (job.requestId?.trim() && candidate.requestId?.trim() !== job.requestId.trim()) return false;
+      if (!job.requestId?.trim() && (candidate.codeSessionId ?? '') !== (job.codeSessionId ?? '')) return false;
+      const candidateArgs = this.normalizeVerificationExecutionArgs(candidate.argsRedacted);
+      return !!candidateArgs
+        && candidateArgs.command === requested.command
+        && candidateArgs.cwd === requested.cwd;
+    });
+    if (!prior) return null;
+
+    job.status = 'succeeded';
+    job.completedAt = this.now();
+    job.durationMs = 0;
+    job.resultPreview = prior.resultPreview;
+    job.verificationStatus = 'verified';
+    job.verificationEvidence = `Reused successful ${prior.toolName} verification from the same execution chain.`;
+    return {
+      success: true,
+      status: 'succeeded',
+      jobId: job.id,
+      message: prior.resultPreview
+        ? `Reused earlier successful ${prior.toolName} verification. ${prior.resultPreview}`
+        : `Reused earlier successful ${prior.toolName} verification for '${requested.command}'.`,
+      verificationStatus: 'verified',
+    };
+  }
+
   async runTool(request: ToolExecutionRequest): Promise<ToolRunResponse> {
     if (!this.options.enabled) {
       return {
@@ -3936,6 +4000,11 @@ export class ToolExecutor {
         jobId: job.id,
         message: criticalPathError,
       };
+    }
+
+    const equivalentVerificationResult = this.tryReturnRecentEquivalentVerificationRun(job);
+    if (equivalentVerificationResult) {
+      return equivalentVerificationResult;
     }
 
     const decision = this.decide(entry.definition, args, request);
