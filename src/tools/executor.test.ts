@@ -9295,7 +9295,7 @@ describe('ToolExecutor', () => {
     expect(result.approvalId).toBeDefined();
   });
 
-  it('approval-gates mutating tool calls derived from quarantined context instead of hard denying them', async () => {
+  it('denies mutating tool calls derived from quarantined context', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
       enabled: true,
@@ -9324,14 +9324,9 @@ describe('ToolExecutor', () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.status).toBe('pending_approval');
-    expect(result.approvalId).toBeDefined();
-    expect(executor.listApprovals(10, 'pending')).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: result.approvalId,
-        toolName: 'code_create',
-      }),
-    ]));
+    expect(result.status).toBe('denied');
+    expect(result.approvalId).toBeUndefined();
+    expect(executor.listApprovals(10, 'pending')).toHaveLength(0);
   });
 
   it('keeps global memory as the default and uses code-session memory only when explicitly requested', async () => {

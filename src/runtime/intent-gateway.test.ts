@@ -574,6 +574,68 @@ describe('IntentGateway', () => {
     });
   });
 
+  it('does not collapse mixed-domain automation creation into automation catalog reads for code-scoped edit constraints', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: 'Save a Second Brain note, create a daily automation, inspect this repo, then check whm_status. Do not edit code.',
+        channel: 'web',
+      },
+      async () => {
+        called = true;
+        return {
+          content: '',
+          toolCalls: [
+            {
+              id: 'call-1',
+              name: 'route_intent',
+              arguments: JSON.stringify({
+                route: 'general_assistant',
+                confidence: 'high',
+                operation: 'run',
+                summary: 'Coordinate mixed Second Brain, automation, repo, and cloud tool work.',
+                turnRelation: 'new_request',
+                resolution: 'ready',
+                executionClass: 'tool_orchestration',
+                preferredTier: 'external',
+                requiresRepoGrounding: true,
+                requiresToolSynthesis: true,
+                expectedContextPressure: 'high',
+                preferredAnswerPath: 'tool_loop',
+                simpleVsComplex: 'complex',
+                planned_steps: [
+                  { kind: 'write', summary: 'Save the note.', expectedToolCategories: ['second_brain_note_upsert'], required: true },
+                  { kind: 'write', summary: 'Create the automation.', expectedToolCategories: ['automation_save'], required: true },
+                  { kind: 'search', summary: 'Inspect the repo.', expectedToolCategories: ['repo_inspect'], required: true },
+                  { kind: 'tool_call', summary: 'Check WHM status.', expectedToolCategories: ['whm_status'], required: true },
+                  { kind: 'answer', summary: 'Summarize the work.', required: true },
+                ],
+              }),
+            },
+          ],
+        };
+      },
+    );
+
+    expect(called).toBe(true);
+    expect(result.rawResponsePreview).not.toBe('content-plan:automation-control-read');
+    expect(result.decision).toMatchObject({
+      route: 'general_assistant',
+      operation: 'run',
+      executionClass: 'tool_orchestration',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+    });
+    expect(result.decision.plannedSteps?.map((step) => step.expectedToolCategories?.[0])).toEqual([
+      'second_brain_note_upsert',
+      'automation_save',
+      'repo_inspect',
+      'whm_status',
+      undefined,
+    ]);
+  });
+
   it('uses a content-plan record for provider status reads without preserving stray update operations', async () => {
     const gateway = new IntentGateway();
     let called = false;

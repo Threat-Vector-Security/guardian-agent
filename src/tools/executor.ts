@@ -4613,7 +4613,7 @@ export class ToolExecutor {
     }
 
     if (contentTrustLevel === 'quarantined' && definition.risk !== 'read_only') {
-      return 'require_approval';
+      return 'deny';
     }
     if (derivedFromTaintedContent) {
       if (definition.name === 'shell_safe' && this.isTaintSafeReadOnlyShellCommand(asString(args.command))) {

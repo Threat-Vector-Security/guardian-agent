@@ -748,9 +748,18 @@ function isExplicitSecondBrainReadOnlyRequest(content: string | undefined): bool
 function hasExplicitReadOnlyConstraint(content: string | undefined): boolean {
   const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized) return false;
-  return /\b(?:do\s+not|don't|never)\s+(?:create|update|archive|save|delete|remove|write|change|edit|modify|run|enable|disable)\b/.test(normalized)
-    || /\bwithout\s+(?:creating|updating|archiving|saving|deleting|removing|writing|changing|editing|modifying|running|enabling|disabling)\b/.test(normalized)
-    || /\bread[\s-]*only\b/.test(normalized);
+  const withoutCodeScopedConstraints = normalized
+    .replace(
+      /\b(?:do\s+not|don't|never)\s+(?:edit|change|modify|write|update)\s+(?:the\s+)?(?:code|source|repo|repository|codebase|workspace)\b/g,
+      ' ',
+    )
+    .replace(
+      /\bwithout\s+(?:editing|changing|modifying|writing|updating)\s+(?:the\s+)?(?:code|source|repo|repository|codebase|workspace)\b/g,
+      ' ',
+    );
+  return /\b(?:do\s+not|don't|never)\s+(?:create|update|archive|save|delete|remove|write|change|edit|modify|run|enable|disable)\b/.test(withoutCodeScopedConstraints)
+    || /\bwithout\s+(?:creating|updating|archiving|saving|deleting|removing|writing|changing|editing|modifying|running|enabling|disabling)\b/.test(withoutCodeScopedConstraints)
+    || /\bread[\s-]*only\b/.test(withoutCodeScopedConstraints);
 }
 
 function isNarrowContentPlanRepoInspectionRequest(content: string | undefined): boolean {

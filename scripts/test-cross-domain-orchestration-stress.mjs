@@ -1914,7 +1914,9 @@ async function startFakeProvider() {
       calls.push({ latestUser, lookupKey, tools, toolMessageCount: toolMessages.length, historyContextSeen });
 
       if (tools.includes('route_intent')) {
-        const decision = decisionByPrompt.get(lookupKey) ?? {
+        const decision = findLatestStressCaseInContent(latestUser)?.decision
+          ?? decisionByPrompt.get(lookupKey)
+          ?? {
           route: 'general_assistant',
           confidence: 'medium',
           operation: 'inspect',

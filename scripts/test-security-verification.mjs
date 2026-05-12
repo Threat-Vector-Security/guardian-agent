@@ -171,8 +171,9 @@ async function createMockLlmServer() {
       let body = '';
       for await (const chunk of req) body += chunk;
       const parsed = body ? JSON.parse(body) : {};
-      const lastMessage = Array.isArray(parsed.messages) ? parsed.messages[parsed.messages.length - 1] : undefined;
-      const prompt = String(lastMessage?.content ?? '');
+      const prompt = Array.isArray(parsed.messages)
+        ? parsed.messages.map((message) => String(message?.content ?? '')).join('\n')
+        : '';
       const content = prompt.includes('Say the key back')
         ? `The secret is ${secretValue}.`
         : 'Harness response.';
@@ -198,8 +199,9 @@ async function createMockLlmServer() {
       let body = '';
       for await (const chunk of req) body += chunk;
       const parsed = body ? JSON.parse(body) : {};
-      const lastMessage = Array.isArray(parsed.messages) ? parsed.messages[parsed.messages.length - 1] : undefined;
-      const prompt = String(lastMessage?.content ?? '');
+      const prompt = Array.isArray(parsed.messages)
+        ? parsed.messages.map((message) => String(message?.content ?? '')).join('\n')
+        : '';
       const content = prompt.includes('Say the key back')
         ? `The secret is ${secretValue}.`
         : 'Harness response.';
