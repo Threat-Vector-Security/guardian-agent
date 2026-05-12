@@ -7,6 +7,7 @@ import type { CpanelClient, CpanelInstanceConfig, NormalizedApiResponse } from '
 import type { CloudflareClient, CloudflareInstanceConfig } from '../cloud/cloudflare-client.js';
 import type { GcpClient, GcpInstanceConfig, GcpServiceName } from '../cloud/gcp-client.js';
 import type { VercelClient, VercelInstanceConfig } from '../cloud/vercel-client.js';
+import type { ToolContextCloudProfileSummary } from '../tool-context.js';
 
 type AwsServiceName =
   | 'sts'
@@ -51,6 +52,8 @@ interface CloudToolRegistrarContext {
   describeAzureEndpoint: (profile: AzureInstanceConfig, service: AzureServiceName, accountName?: string) => string;
   resolveGcpLocation: (value: unknown, profileId: string, throwOnMissing?: boolean) => string;
   resolveAzureResourceGroup: (value: unknown, profileId: string, throwOnMissing?: boolean) => string;
+  listCloudProfileSummaries: () => ToolContextCloudProfileSummary[];
+  isCloudEnabled: () => boolean;
 }
 
 type CloudToolValueHelpers = Pick<CloudToolRegistrarContext, 'requireString' | 'asString' | 'asStringArray'>;
@@ -138,6 +141,42 @@ function nextActionForCloudStatusFailure(cause: CloudStatusFailureCause): string
 export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): void {
   const { requireString, asString, asNumber, asStringArray } = context;
   // ── Cloud & Hosting Tools ───────────────────────────────────
+
+  context.registry.register(
+    {
+      name: 'cloud_profile_list',
+      description: 'List configured cloud and hosting profile ids, provider families, labels, credential readiness, host allowlist status, and suggested read-only status tools. Use this before provider-specific status checks to avoid guessing profile ids. Read-only.',
+      shortDescription: 'List configured cloud and hosting profiles.',
+      risk: 'read_only',
+      category: 'cloud',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    async () => {
+      const profiles = context.listCloudProfileSummaries();
+      const counts = profiles.reduce<Record<string, number>>((acc, profile) => {
+        acc[profile.family] = (acc[profile.family] ?? 0) + 1;
+        return acc;
+      }, {});
+      return {
+        success: true,
+        output: {
+          enabled: context.isCloudEnabled(),
+          profileCount: profiles.length,
+          counts,
+          profiles: profiles.map((profile) => ({
+            family: profile.family,
+            id: profile.id,
+            label: profile.label,
+            summary: profile.line,
+          })),
+        },
+      };
+    },
+  );
 
   context.registry.register(
     {

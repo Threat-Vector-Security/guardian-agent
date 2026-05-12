@@ -295,9 +295,12 @@ export function reconcileDelegatedEnvelopeWithJobSnapshots(
   const evidenceReceipts = [...envelope.evidenceReceipts];
   const evidenceReceiptIds = new Set(evidenceReceipts.map((receipt) => receipt.receiptId));
   const toolReceiptStepIds = new Map<string, string>();
+  const evidenceById = new Map(evidenceReceipts.map((receipt) => [receipt.receiptId, receipt]));
   for (const stepReceipt of envelope.stepReceipts) {
     for (const receiptId of stepReceipt.evidenceReceiptIds) {
-      toolReceiptStepIds.set(receiptId, stepReceipt.stepId);
+      if (evidenceById.get(receiptId)?.sourceType === 'tool_call') {
+        toolReceiptStepIds.set(receiptId, stepReceipt.stepId);
+      }
     }
   }
   for (const [receiptId, stepId] of synthesized.toolReceiptStepIds) {
@@ -309,12 +312,17 @@ export function reconcileDelegatedEnvelopeWithJobSnapshots(
     }
     evidenceReceipts.push(receipt);
     evidenceReceiptIds.add(receipt.receiptId);
+    evidenceById.set(receipt.receiptId, receipt);
   }
+  const finalAnswerReceiptId = envelope.finalUserAnswer?.trim()
+    ? evidenceReceipts.filter((receipt) => receipt.sourceType === 'model_answer').at(-1)?.receiptId
+    : undefined;
 
   const stepReceipts = buildStepReceipts({
     plannedTask: envelope.taskContract.plan,
     evidenceReceipts,
     toolReceiptStepIds,
+    ...(finalAnswerReceiptId ? { finalAnswerReceiptId } : {}),
     interruptions: envelope.interruptions,
   });
   const runStatus = computeWorkerRunStatus(

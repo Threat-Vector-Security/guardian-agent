@@ -509,9 +509,20 @@ export function isDelegatedAnswerSynthesisRetry(
     && insufficiency.unsatisfiedSteps.every((step) => !step.kind || step.kind === 'answer');
   const hasImplicitAnswerOnlyGap = insufficiency.unsatisfiedSteps.length === 0
     && missingEvidenceKinds.includes('answer');
+  const nonAnswerUnsatisfiedSteps = insufficiency.unsatisfiedSteps.filter(
+    (step) => step.kind && step.kind !== 'answer',
+  );
+  const nonAnswerStepsHaveEvidenceButAreDependencyBlocked = nonAnswerUnsatisfiedSteps.length > 0
+    && nonAnswerUnsatisfiedSteps.every((step) => typeof step.reason === 'string' && step.reason.trim().length > 0);
+  const hasCollectedEvidence = insufficiency.satisfiedSteps.length > 0
+    || nonAnswerStepsHaveEvidenceButAreDependencyBlocked;
   return hasOnlyAnswerEvidenceMissing
-    && insufficiency.satisfiedSteps.length > 0
-    && (hasExplicitAnswerStepRemaining || hasImplicitAnswerOnlyGap);
+    && hasCollectedEvidence
+    && (
+      hasExplicitAnswerStepRemaining
+      || hasImplicitAnswerOnlyGap
+      || nonAnswerStepsHaveEvidenceButAreDependencyBlocked
+    );
 }
 
 export function shouldRetryDelegatedAnswerSynthesisOnSameProfile(

@@ -142,7 +142,7 @@ function buildCloudContextLines(input: ToolContextInput, signalText: string): st
 
   const lines = [
     'Cloud tools: enabled',
-    'Cloud tool families available via find_tools: cpanel_*, whm_*, vercel_*, cf_*, aws_*, gcp_*, azure_*',
+    'Use cloud_profile_list to inventory configured cloud profile ids before provider-specific status checks; cloud tool families available via find_tools: cpanel_*, whm_*, vercel_*, cf_*, aws_*, gcp_*, azure_*',
     'Use configured cloud profile ids exactly as listed below when calling cloud tools. If a matching profile is listed, do not ask the user to repeat host or credential details.',
     ...input.cloudSummaryLines,
   ];

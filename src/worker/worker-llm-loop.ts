@@ -7,6 +7,7 @@ import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } fr
 import { withTaintedContentSystemPrompt } from '../util/tainted-content.js';
 import { formatToolResultForLLM, toLLMToolDef } from '../chat-agent-helpers.js';
 import { coalescePackageInstallToolCalls } from '../runtime/package-install-tool-coalescing.js';
+import { lacksUsableAssistantContent } from '../util/assistant-response-shape.js';
 import type { PlannedTask, WorkerStopReason } from '../runtime/execution/types.js';
 import { matchPlannedStepForTool } from '../runtime/execution/task-plan.js';
 import type {
@@ -127,6 +128,7 @@ export async function runLlmLoop(
   let forcedToolExecutionRetryUsed = false;
   let forcedDiscoveryContinuationRetryCount = 0;
   let forcedPlannedTaskContinuationRetryCount = 0;
+  let forcedPlannedTaskCompletionRetryUsed = false;
   let forcedPlannedTaskContinuationSatisfiedKey = '';
   let lastToolRoundResults: Array<{
     toolName: string;
@@ -477,9 +479,29 @@ export async function runLlmLoop(
       response.toolCalls?.length
       && areRequiredNonAnswerStepsSatisfied(options?.plannedTask, cumulativeToolRoundResults)
     ) {
+      forcedPlannedTaskCompletionRetryUsed = true;
       response = await chatFn(
         [
-          ...plannedTaskMessages,
+          ...messages,
+          { role: 'assistant', content: response.content ?? '' },
+          { role: 'user', content: buildPlannedTaskCompletionCorrectionPrompt(options?.plannedTask) },
+        ],
+        { tools: [] },
+      );
+      finalContent = response.content ?? '';
+      stopReason = mapChatResponseStopReason(response);
+    }
+
+    if (
+      (!response.toolCalls || response.toolCalls.length === 0)
+      && !forcedPlannedTaskCompletionRetryUsed
+      && areRequiredNonAnswerStepsSatisfied(options?.plannedTask, cumulativeToolRoundResults)
+      && !hasUsableDirectContent(response.content)
+    ) {
+      forcedPlannedTaskCompletionRetryUsed = true;
+      response = await chatFn(
+        [
+          ...messages,
           { role: 'assistant', content: response.content ?? '' },
           { role: 'user', content: buildPlannedTaskCompletionCorrectionPrompt(options?.plannedTask) },
         ],
@@ -875,6 +897,7 @@ function addPlannerStepIdHint(
 function hasUsableDirectContent(content: string | undefined): boolean {
   const trimmed = content?.trim() ?? '';
   if (!trimmed) return false;
+  if (lacksUsableAssistantContent(trimmed)) return false;
   if (/<\/?tool_result\b|<\/?tool_response\b|<\/?tool_calls?\b|<\/?tool_call\b/i.test(trimmed)) {
     return false;
   }

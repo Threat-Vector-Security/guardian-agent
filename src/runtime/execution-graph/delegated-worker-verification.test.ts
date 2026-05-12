@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildDelegatedExecutionMetadata, buildDelegatedSyntheticEnvelope } from '../execution/metadata.js';
-import type { DelegatedTaskContract } from '../execution/types.js';
+import type { DelegatedResultEnvelope, DelegatedTaskContract } from '../execution/types.js';
 import type { WorkerExecutionMetadata } from '../worker-execution-metadata.js';
 import {
   awaitDelegatedRequestJobDrain,
@@ -52,6 +52,108 @@ describe('delegated worker verification graph policy', () => {
         stepId: 'read',
         status: 'satisfied',
         evidenceReceiptIds: ['job:job-1'],
+      }),
+    ]));
+  });
+
+  it('preserves final answer receipts across every answer step while reconciling job evidence', () => {
+    const taskContract: DelegatedTaskContract = {
+      kind: 'general_answer',
+      route: 'general_assistant',
+      operation: 'inspect',
+      requiresEvidence: true,
+      allowsAnswerFirst: false,
+      requireExactFileReferences: false,
+      summary: 'Run a hybrid read-only task.',
+      plan: {
+        planId: 'plan-hybrid',
+        allowAdditionalSteps: false,
+        steps: [
+          { stepId: 'intro', kind: 'answer', summary: 'Acknowledge tool use.', required: true },
+          { stepId: 'read', kind: 'read', summary: 'Read the requested evidence.', required: true, dependsOn: ['intro'] },
+          { stepId: 'answer', kind: 'answer', summary: 'Answer from gathered evidence.', required: true, dependsOn: ['read'] },
+        ],
+      },
+    };
+    const envelope: DelegatedResultEnvelope = {
+      ...buildDelegatedSyntheticEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        stopReason: 'end_turn',
+        operatorSummary: 'Final answer from evidence.',
+        evidenceReceipts: [
+          {
+            receiptId: 'receipt-read',
+            sourceType: 'tool_call',
+            toolName: 'web_fetch',
+            status: 'succeeded',
+            refs: ['https://example.com/'],
+            summary: 'Fetched requested evidence.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            receiptId: 'answer-final',
+            sourceType: 'model_answer',
+            status: 'succeeded',
+            refs: [],
+            summary: 'Final answer from evidence.',
+            startedAt: 3,
+            endedAt: 3,
+          },
+        ],
+        stepReceipts: [
+          {
+            stepId: 'intro',
+            status: 'satisfied',
+            evidenceReceiptIds: ['answer-final'],
+            summary: 'Final answer from evidence.',
+            startedAt: 3,
+            endedAt: 3,
+          },
+          {
+            stepId: 'read',
+            status: 'satisfied',
+            evidenceReceiptIds: ['receipt-read'],
+            summary: 'Fetched requested evidence.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            stepId: 'answer',
+            status: 'satisfied',
+            evidenceReceiptIds: ['answer-final'],
+            summary: 'Final answer from evidence.',
+            startedAt: 3,
+            endedAt: 3,
+          },
+        ],
+      }),
+      finalUserAnswer: 'Final answer from evidence.',
+    };
+
+    const reconciled = reconcileDelegatedEnvelopeWithJobSnapshots(envelope, [{
+      id: 'job-1',
+      toolName: 'web_fetch',
+      status: 'succeeded',
+      createdAt: 1,
+      startedAt: 1,
+      completedAt: 2,
+      argsPreview: '{"url":"https://example.com/"}',
+      resultPreview: '{"url":"https://example.com/","content":"Example Domain"}',
+    }]);
+
+    expect(reconciled.runStatus).toBe('completed');
+    expect(reconciled.stepReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stepId: 'intro',
+        status: 'satisfied',
+        evidenceReceiptIds: expect.arrayContaining(['answer-final']),
+      }),
+      expect.objectContaining({
+        stepId: 'answer',
+        status: 'satisfied',
+        evidenceReceiptIds: expect.arrayContaining(['answer-final']),
       }),
     ]));
   });

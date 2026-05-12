@@ -61,6 +61,7 @@ import { MarketingStore } from './marketing-store.js';
 import type { ProviderToolModelItem } from './builtin/provider-tools.js';
 import { ToolApprovalStore } from './approvals.js';
 import { ToolRegistry } from './registry.js';
+import { parseToolJobOutputPreview } from './job-results.js';
 import { canonicalizePolicyPathValue, normalizePathForHost } from './path-normalization.js';
 import { hashRedactedObject, redactSensitiveValue } from '../util/crypto-guardrails.js';
 import type {
@@ -201,7 +202,7 @@ const MAX_IDENTICAL_FAILURES_PER_CHAIN = 2;
 const TOOL_CHAIN_APPROVAL_GRANT_TTL_MS = 10 * 60_000;
 const MAX_WEB_SEARCH_APPROVAL_GRANT_CALLS = 4;
 const BOUNDED_TOOL_CHAIN_APPROVAL_GRANT_TOOLS = new Set(['web_search']);
-const READ_LIKE_NETWORK_LOOKUP_TOOLS = new Set(['web_search']);
+const READ_LIKE_NETWORK_LOOKUP_TOOLS = new Set(['web_search', 'web_fetch']);
 const HIGH_RISK_AUTO_POLICY_TOOLS = new Set([
   'shell_safe',
   'run_command',
@@ -378,6 +379,40 @@ const VERIFICATION_EXECUTION_TOOLS = new Set([
   'code_build',
   'code_lint',
   'code_remote_exec',
+]);
+const REUSABLE_READ_EVIDENCE_TOOLS = new Set([
+  'automation_list',
+  'automation_output_read',
+  'automation_output_search',
+  'browser_capabilities',
+  'browser_extract',
+  'browser_links',
+  'browser_read',
+  'browser_state',
+  'cloud_profile_list',
+  'doc_search',
+  'doc_search_list',
+  'doc_search_status',
+  'github_status',
+  'gws_status',
+  'llm_provider_list',
+  'llm_provider_models',
+  'm365_status',
+  'memory_bridge_search',
+  'memory_recall',
+  'memory_search',
+  'second_brain_brief_list',
+  'second_brain_calendar_list',
+  'second_brain_library_list',
+  'second_brain_note_list',
+  'second_brain_overview',
+  'second_brain_people_list',
+  'second_brain_routine_catalog',
+  'second_brain_routine_list',
+  'second_brain_task_list',
+  'second_brain_usage',
+  'web_fetch',
+  'web_search',
 ]);
 
 type ShellExecMode = 'direct_exec' | 'shell_fallback';
@@ -2695,6 +2730,13 @@ export class ToolExecutor {
       || readOnlyPrefixed.some((candidate) => fullCmd === candidate || fullCmd.startsWith(`${candidate} `));
   }
 
+  private isTaintSafeReadOnlyShellCommand(command: string): boolean {
+    const fullCmd = command.trim();
+    if (!fullCmd) return false;
+    const taintSafePrefixed = ['git status', 'git diff'];
+    return taintSafePrefixed.some((candidate) => fullCmd === candidate || fullCmd.startsWith(`${candidate} `));
+  }
+
   private decideCodeSessionTrust(
     definition: ToolDefinition,
     args: Record<string, unknown>,
@@ -3890,6 +3932,40 @@ export class ToolExecutor {
     };
   }
 
+  private tryReturnRecentEquivalentReadEvidenceRun(job: ToolJobRecord): ToolRunResponse | null {
+    if (!REUSABLE_READ_EVIDENCE_TOOLS.has(job.toolName)) return null;
+    const requestId = job.requestId?.trim();
+    if (!requestId || !job.argsHash) return null;
+    const cutoff = this.now() - 10 * 60_000;
+    const prior = this.jobs.find((candidate) => (
+      candidate.id !== job.id
+      && candidate.toolName === job.toolName
+      && candidate.status === 'succeeded'
+      && candidate.requestId?.trim() === requestId
+      && candidate.argsHash === job.argsHash
+      && (candidate.completedAt ?? candidate.createdAt) >= cutoff
+    ));
+    if (!prior) return null;
+
+    const output = parseToolJobOutputPreview(prior.resultPreview);
+    job.status = 'succeeded';
+    job.completedAt = this.now();
+    job.durationMs = 0;
+    job.resultPreview = prior.resultPreview;
+    job.verificationStatus = prior.verificationStatus;
+    job.verificationEvidence = `Reused successful ${prior.toolName} evidence from the same request.`;
+    return {
+      success: true,
+      status: 'succeeded',
+      jobId: job.id,
+      message: prior.resultPreview
+        ? `Reused earlier successful ${prior.toolName} evidence.`
+        : `Reused earlier successful ${prior.toolName} evidence for the same arguments.`,
+      ...(output !== undefined ? { output } : {}),
+      ...(job.verificationStatus ? { verificationStatus: job.verificationStatus } : {}),
+    };
+  }
+
   async runTool(request: ToolExecutionRequest): Promise<ToolRunResponse> {
     if (!this.options.enabled) {
       return {
@@ -4005,6 +4081,10 @@ export class ToolExecutor {
     const equivalentVerificationResult = this.tryReturnRecentEquivalentVerificationRun(job);
     if (equivalentVerificationResult) {
       return equivalentVerificationResult;
+    }
+    const equivalentReadEvidenceResult = this.tryReturnRecentEquivalentReadEvidenceRun(job);
+    if (equivalentReadEvidenceResult) {
+      return equivalentReadEvidenceResult;
     }
 
     const decision = this.decide(entry.definition, args, request);
@@ -4536,6 +4616,9 @@ export class ToolExecutor {
       return 'require_approval';
     }
     if (derivedFromTaintedContent) {
+      if (definition.name === 'shell_safe' && this.isTaintSafeReadOnlyShellCommand(asString(args.command))) {
+        return 'allow';
+      }
       if (definition.risk !== 'read_only' && !READ_LIKE_NETWORK_LOOKUP_TOOLS.has(definition.name)) {
         return 'require_approval';
       }
@@ -6471,6 +6554,8 @@ export class ToolExecutor {
       describeAzureEndpoint: (profile, service, accountName) => this.describeAzureEndpoint(profile, service, accountName),
       resolveGcpLocation: (value, profileId, throwOnMissing) => this.resolveGcpLocation(value, profileId, throwOnMissing),
       resolveAzureResourceGroup: (value, profileId, throwOnMissing) => this.resolveAzureResourceGroup(value, profileId, throwOnMissing),
+      listCloudProfileSummaries: () => this.describeCloudProfilesForContext(),
+      isCloudEnabled: () => this.cloudConfig.enabled,
     });
 
     registerBuiltinMemoryTools({

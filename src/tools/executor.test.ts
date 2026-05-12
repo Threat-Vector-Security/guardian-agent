@@ -2495,7 +2495,7 @@ describe('ToolExecutor', () => {
     expect(context).toContain('Deferred cloud tools (');
     expect(context).toContain('whm_status');
     expect(context).toContain('Cloud tools: enabled');
-    expect(context).toContain('Cloud tool families available via find_tools: cpanel_*, whm_*, vercel_*, cf_*, aws_*, gcp_*, azure_*');
+    expect(context).toContain('Use cloud_profile_list to inventory configured cloud profile ids before provider-specific status checks');
     expect(context).toContain('Use configured cloud profile ids exactly as listed below when calling cloud tools.');
     expect(context).toContain('- social: provider=whm');
     expect(context).toContain('endpoint=https://host.social.example:2087');
@@ -2505,6 +2505,65 @@ describe('ToolExecutor', () => {
     expect(context).toContain('defaultCpanelUser=socialuser');
     expect(context).toContain('- web-prod: provider=vercel');
     expect(context).toContain('suggestedReadOnlyTest=vercel_status');
+  });
+
+  it('lists configured cloud profiles through a read-only inventory tool', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost', 'api.vercel.com', 'host.social.example'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'social',
+          name: 'Social WHM',
+          type: 'whm',
+          host: 'https://host.social.example/',
+          username: 'root',
+          apiToken: 'secret',
+          defaultCpanelUser: 'socialuser',
+        }],
+        vercelProfiles: [{
+          id: 'web-prod',
+          name: 'Web Production',
+          apiToken: 'vercel-secret',
+        }],
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'cloud_profile_list',
+      args: {},
+      origin: 'assistant',
+      requestId: 'cloud-inventory-1',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    expect(result.output).toMatchObject({
+      enabled: true,
+      profileCount: 2,
+      counts: {
+        cpanel: 1,
+        vercel: 1,
+      },
+    });
+    expect((result.output as any).profiles).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        family: 'cpanel',
+        id: 'social',
+        summary: expect.stringContaining('suggestedReadOnlyTest=whm_status'),
+      }),
+      expect.objectContaining({
+        family: 'vercel',
+        id: 'web-prod',
+        summary: expect.stringContaining('suggestedReadOnlyTest=vercel_status'),
+      }),
+    ]));
   });
 
   it('includes Google auth guidance in tool context when Google Workspace is configured', () => {
@@ -6453,6 +6512,41 @@ describe('ToolExecutor', () => {
     expect((result.output as any).stdout).toContain('+export const answer = 42;');
   });
 
+  it('allows tainted read-only git diff shell checks without approval', async () => {
+    const root = createExecutorRoot();
+    execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+    await writeFile(join(root, 'sample.ts'), 'export const answer = 41;\n', 'utf-8');
+    execFileSync('git', ['add', '--', 'sample.ts'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'guardian@example.com'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Guardian Agent'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: root, stdio: 'ignore' });
+    await writeFile(join(root, 'sample.ts'), 'export const answer = 42;\n', 'utf-8');
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['git status', 'git diff'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'shell_safe',
+      args: { command: 'git diff --stat', cwd: root },
+      origin: 'assistant',
+      requestId: 'tainted-git-read-1',
+      derivedFromTaintedContent: true,
+      contentTrustLevel: 'low_trust',
+      taintReasons: ['remote_tool'],
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).not.toBe('pending_approval');
+    expect(result.approvalId).toBeUndefined();
+    expect((result.output as any).stdout).toContain('sample.ts');
+  });
+
   it('includes untracked created files in code_git_diff output', async () => {
     const root = createExecutorRoot();
     execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
@@ -10208,7 +10302,8 @@ describe('ToolExecutor', () => {
           toolName: 'web_fetch',
           args: { url: 'https://example.com/article' },
         });
-        expect(differentTool.status).toBe('pending_approval');
+        expect(differentTool.status).toBe('succeeded');
+        expect(differentTool.approvalId).toBeUndefined();
       } finally {
         globalThis.fetch = originalFetch;
       }
@@ -10273,6 +10368,7 @@ describe('ToolExecutor', () => {
     it('fetches and extracts HTML content with untrusted marker', async () => {
       const root = createExecutorRoot();
       const originalFetch = globalThis.fetch;
+      let fetchCount = 0;
       const html = `
         <html>
           <head><title>Test Page</title></head>
@@ -10283,10 +10379,13 @@ describe('ToolExecutor', () => {
           </body>
         </html>
       `;
-      globalThis.fetch = (async () => new Response(html, {
-        status: 200,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      })) as typeof fetch;
+      globalThis.fetch = (async () => {
+        fetchCount += 1;
+        return new Response(html, {
+          status: 200,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }) as typeof fetch;
       try {
         const executor = new ToolExecutor({
           enabled: true,
@@ -10308,6 +10407,47 @@ describe('ToolExecutor', () => {
         expect(output.content).toContain('Test Page');
         // nav/footer should be stripped from <main> extraction
         expect(output.host).toBe('example.com');
+        expect(fetchCount).toBe(1);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('reuses same-request web fetch evidence instead of fetching the same URL twice', async () => {
+      const root = createExecutorRoot();
+      const originalFetch = globalThis.fetch;
+      let fetchCount = 0;
+      globalThis.fetch = (async () => {
+        fetchCount += 1;
+        return new Response('<main><h1>Example Domain</h1></main>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }) as typeof fetch;
+      try {
+        const executor = new ToolExecutor({
+          enabled: true,
+          workspaceRoot: root,
+          policyMode: 'autonomous',
+          allowedPaths: [root],
+          allowedCommands: [],
+          allowedDomains: [],
+        });
+        const requestContext = {
+          toolName: 'web_fetch',
+          args: { url: 'https://example.com/article' },
+          origin: 'web' as const,
+          requestId: 'read-evidence-chain-1',
+        };
+
+        const first = await executor.runTool(requestContext);
+        const second = await executor.runTool(requestContext);
+
+        expect(first.success).toBe(true);
+        expect(second.success).toBe(true);
+        expect(second.message).toContain('Reused earlier successful web_fetch evidence');
+        expect(second.output).toEqual(first.output);
+        expect(fetchCount).toBe(1);
       } finally {
         globalThis.fetch = originalFetch;
       }

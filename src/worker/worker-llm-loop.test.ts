@@ -64,7 +64,7 @@ describe('runLlmLoop', () => {
     expect(result.outcome).toMatchObject({
       stopReason: 'end_turn',
       completionReason: 'empty_response_fallback',
-      responseQuality: 'final',
+      responseQuality: 'degraded',
       toolCallCount: 1,
       toolResultCount: 1,
       successfulToolResultCount: 1,
@@ -696,11 +696,108 @@ describe('runLlmLoop', () => {
 
     expect(calledTools).toEqual(['code_create', 'fs_read', 'shell_safe']);
     expect(chatCalls.at(-1)?.options?.tools).toEqual([]);
+    expect(chatCalls.at(-1)?.messages.some((message) => (
+      message.role === 'tool'
+      && message.content.includes('<tool_result name="shell_safe"')
+    ))).toBe(true);
     expect(chatCalls.at(-1)?.messages.at(-1)).toMatchObject({
       role: 'user',
       content: expect.stringContaining('all required non-answer steps'),
     });
     expect(result.finalContent).toContain('verified');
+  });
+
+  it('re-prompts for a final answer when evidence is complete but the model returns unusable content', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Fetch example.com and summarize it.' }];
+    const plannedTask: PlannedTask = {
+      planId: 'plan-web-summary',
+      allowAdditionalSteps: true,
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'read',
+          summary: 'Read https://example.com.',
+          expectedToolCategories: ['web_fetch'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'answer',
+          summary: 'Summarize the fetched page.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    };
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{
+          id: 'fetch-1',
+          name: 'web_fetch',
+          arguments: JSON.stringify({ url: 'https://example.com' }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'I could not generate a final response for that request.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: 'Example.com is the Example Domain page used for documentation examples.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const chatCalls: Array<{ messages: ChatMessage[]; options?: ChatOptions }> = [];
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'web_fetch',
+          description: 'Fetch a web page.',
+          parameters: { type: 'object', properties: { url: { type: 'string' } } },
+        }];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(): Promise<ToolResult> {
+        return {
+          success: true,
+          output: {
+            url: 'https://example.com/',
+            content: 'Example Domain. This domain is for use in documentation examples.',
+          },
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (msgs: ChatMessage[], opts?: ChatOptions) => {
+        chatCalls.push({ messages: msgs, options: opts });
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      4,
+      32_000,
+      undefined,
+      { plannedTask },
+    );
+
+    expect(result.finalContent).toContain('Example.com');
+    expect(chatCalls).toHaveLength(3);
+    expect(chatCalls.at(-1)?.options?.tools).toEqual([]);
+    expect(chatCalls.at(-1)?.messages.some((message) => (
+      message.role === 'tool'
+      && message.content.includes('<tool_result name="web_fetch"')
+    ))).toBe(true);
   });
 
   it('does not accept tool-free answer-first replies when the turn requires repo evidence', async () => {

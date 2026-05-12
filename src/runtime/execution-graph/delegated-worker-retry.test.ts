@@ -94,6 +94,65 @@ describe('delegated worker retry graph policy', () => {
     )).toContain('Retrying Workspace Explorer with openrouter / moonshotai/kimi-k2.6 in code session code-session-1 because required steps remain unsatisfied (answer)');
   });
 
+  it('treats dependency-blocked evidence steps as answer synthesis when only answer evidence is missing', () => {
+    const envelope = delegatedEnvelope({
+      taskContract: taskContract({
+        steps: [
+          { stepId: 'intro', kind: 'answer', summary: 'Acknowledge the requested tool run.' },
+          {
+            stepId: 'read',
+            kind: 'read',
+            summary: 'Read the requested web page.',
+            expectedToolCategories: ['web_fetch'],
+            dependsOn: ['intro'],
+          },
+          {
+            stepId: 'answer',
+            kind: 'answer',
+            summary: 'Summarize the gathered evidence.',
+            dependsOn: ['read'],
+          },
+        ],
+      }),
+      stepReceipts: [{
+        stepId: 'read',
+        status: 'satisfied',
+        evidenceReceiptIds: ['receipt-read'],
+        summary: 'Fetched requested web page.',
+        startedAt: 1,
+        endedAt: 2,
+      }],
+      evidenceReceipts: [{
+        receiptId: 'receipt-read',
+        sourceType: 'tool_call',
+        toolName: 'web_fetch',
+        status: 'succeeded',
+        refs: ['https://example.com/'],
+        summary: 'Fetched requested web page.',
+        startedAt: 1,
+        endedAt: 2,
+      }],
+    });
+    const failure = buildDelegatedRetryableFailure({
+      decision: 'insufficient',
+      reasons: ['The worker gathered evidence but did not answer.'],
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['intro', 'read', 'answer'],
+    }, envelope);
+
+    expect(failure?.satisfiedSteps).toEqual([]);
+    expect(failure?.unsatisfiedSteps).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stepId: 'read',
+        kind: 'read',
+        reason: 'Fetched requested web page.',
+      }),
+    ]));
+    expect(isDelegatedAnswerSynthesisRetry(failure!)).toBe(true);
+    expect(shouldRetryDelegatedAnswerSynthesisOnSameProfile(failure!, executionProfile())).toBe(true);
+  });
+
   it('builds retry attempt plans from verification policy without supervisor state', () => {
     const profile = executionProfile();
     const equivalentProfile = {
