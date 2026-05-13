@@ -541,17 +541,43 @@ function pendingActionAppliesToClassificationTurn(
   if (looksLikePendingActionContextTurn(content)) return true;
   if (pendingAction.blocker.kind !== 'clarification') return false;
   const normalized = stripLeadingContextPrefix(content).trim().toLowerCase();
-  if (!normalized || normalized.length > 120) return false;
+  if (!normalized) return false;
   if (isQueryClarificationAnswerCandidate(pendingAction, content)) return true;
   if (resolveSearchSurfaceSelection(pendingAction, content)) return true;
   const options = pendingAction.blocker.options ?? [];
-  return options.some((option) => {
-    const value = option.value.trim().toLowerCase();
-    const label = option.label.trim().toLowerCase();
-    return normalized === value
-      || normalized === label
-      || (normalized.length >= 3 && label.includes(normalized));
-  });
+  if (options.some((option) => pendingActionOptionMatchesContent(option, normalized))) {
+    return true;
+  }
+  return false;
+}
+
+function pendingActionOptionMatchesContent(
+  option: NonNullable<PendingActionBlocker['options']>[number],
+  normalizedContent: string,
+): boolean {
+  const value = normalizePendingActionOptionText(option.value);
+  const label = normalizePendingActionOptionText(option.label);
+  const description = normalizePendingActionOptionText(option.description ?? '');
+  if (!value && !label && !description) {
+    return false;
+  }
+  if ((value && normalizedContent === value) || (label && normalizedContent === label)) {
+    return true;
+  }
+  if (label && normalizedContent.length >= 3 && label.includes(normalizedContent)) {
+    return true;
+  }
+  if (label && label.length >= 3 && normalizedContent.includes(label)) {
+    return true;
+  }
+  if (value && value.length >= 3 && normalizedContent.includes(value)) {
+    return true;
+  }
+  return !!(description && description.length >= 3 && normalizedContent.includes(description));
+}
+
+function normalizePendingActionOptionText(value: string): string {
+  return stripLeadingContextPrefix(value).trim().toLowerCase();
 }
 
 type SearchSurfaceSelection = 'configured_documents' | 'workspace' | 'web';

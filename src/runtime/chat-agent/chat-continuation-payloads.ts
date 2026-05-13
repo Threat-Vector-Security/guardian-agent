@@ -6,6 +6,7 @@ import type { PrincipalRole, ToolExecutionRequest } from '../../tools/types.js';
 
 export const CHAT_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT = 'filesystem_save_output';
 export const CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING = 'automation_authoring';
+export const CHAT_CONTINUATION_TYPE_CODE_SESSION_CREATE = 'code_session_create';
 
 export interface FilesystemSaveOutputContinuationPayload {
   type: typeof CHAT_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT;
@@ -32,6 +33,16 @@ export interface AutomationAuthoringContinuationPayload {
     workspaceRoot: string;
     sessionId?: string;
   };
+}
+
+export interface CodeSessionCreateContinuationPayload {
+  type: typeof CHAT_CONTINUATION_TYPE_CODE_SESSION_CREATE;
+  workspaceRoot: string;
+  title: string;
+  attach: boolean;
+  originalUserContent: string;
+  principalId?: string;
+  principalRole?: string;
 }
 
 export function buildDirectFilesystemToolRequest(input: {
@@ -205,5 +216,25 @@ export function readAutomationAuthoringContinuationPayload(
     ...(toString(payload.principalRole).trim() ? { principalRole: toString(payload.principalRole).trim() } : {}),
     ...(isRecord(payload.messageMetadata) ? { messageMetadata: { ...payload.messageMetadata } } : {}),
     ...(codeContext ? { codeContext } : {}),
+  };
+}
+
+export function readCodeSessionCreateContinuationPayload(
+  payload: Record<string, unknown> | undefined,
+): CodeSessionCreateContinuationPayload | null {
+  if (!isRecord(payload)) return null;
+  if (payload.type !== CHAT_CONTINUATION_TYPE_CODE_SESSION_CREATE) return null;
+  const workspaceRoot = toString(payload.workspaceRoot).trim();
+  const title = toString(payload.title).trim();
+  const originalUserContent = toString(payload.originalUserContent).trim();
+  if (!workspaceRoot || !title || !originalUserContent) return null;
+  return {
+    type: CHAT_CONTINUATION_TYPE_CODE_SESSION_CREATE,
+    workspaceRoot,
+    title,
+    attach: payload.attach !== false,
+    originalUserContent,
+    ...(toString(payload.principalId).trim() ? { principalId: toString(payload.principalId).trim() } : {}),
+    ...(toString(payload.principalRole).trim() ? { principalRole: toString(payload.principalRole).trim() } : {}),
   };
 }

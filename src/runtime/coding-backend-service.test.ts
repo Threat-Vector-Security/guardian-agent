@@ -6,6 +6,106 @@ import { CodingBackendService } from './coding-backend-service.js';
 import type { CodingBackendTerminalControl } from '../channels/web-types.js';
 import type { CodingBackendsConfig } from '../config/types.js';
 
+const codexSdkMockState = vi.hoisted(() => ({
+  tasks: [] as string[],
+  turnOptions: [] as unknown[],
+  resumedThreadIds: [] as string[],
+}));
+
+vi.mock('@openai/codex-sdk', () => ({
+  Codex: class MockCodex {
+    startThread() {
+      return createMockThread('thread-test');
+    }
+
+    resumeThread(threadId: string) {
+      codexSdkMockState.resumedThreadIds.push(threadId);
+      return createMockThread(threadId);
+    }
+  },
+}));
+
+function createMockThread(threadId: string) {
+      return {
+        id: threadId,
+        async runStreamed(task = '', turnOptions?: unknown) {
+          codexSdkMockState.tasks.push(task);
+          codexSdkMockState.turnOptions.push(turnOptions);
+          async function* events() {
+            yield { type: 'thread.started', thread_id: threadId };
+            yield { type: 'turn.started' };
+            if (task.includes('User task:\nhang without sdk completion')) {
+              await new Promise<never>(() => {});
+            }
+            if (task.includes('structured host launch') || task.includes('structured invalid host launch')) {
+              const invalidHost = task.includes('structured invalid host launch');
+              yield {
+                type: 'item.completed',
+                item: {
+                  id: 'cmd-1',
+                  type: 'command_execution',
+                  command: 'node --check server.js',
+                  status: 'completed',
+                  aggregated_output: '',
+                  exit_code: 0,
+                },
+              };
+              yield {
+                type: 'item.completed',
+                item: {
+                  id: 'item-1',
+                  type: 'agent_message',
+                  text: JSON.stringify({
+                    status: 'completed',
+                    summary: 'Built a dependency-free prototype app.',
+                    filesChanged: ['server.js', 'public/index.html'],
+                    verification: [
+                      { name: 'Node syntax check', status: 'passed', evidence: 'node --check server.js' },
+                    ],
+                    localServer: {
+                      requested: true,
+                      persistentStarted: false,
+                      startCommand: 'node server.js',
+                      url: invalidHost ? 'https://example.com' : 'http://127.0.0.1:5123',
+                      healthUrl: invalidHost ? 'https://example.com/api/status' : 'http://127.0.0.1:5123/api/status',
+                    },
+                    nextSteps: [],
+                  }),
+                },
+              };
+              yield {
+                type: 'turn.completed',
+                usage: {
+                  input_tokens: 1,
+                  cached_input_tokens: 0,
+                  output_tokens: 1,
+                  reasoning_output_tokens: 0,
+                },
+              };
+              return;
+            }
+            yield {
+              type: 'item.completed',
+              item: { id: 'item-1', type: 'agent_message', text: 'Codex SDK finished the delegated task.' },
+            };
+            yield {
+              type: 'turn.completed',
+              usage: {
+                input_tokens: 1,
+                cached_input_tokens: 0,
+                output_tokens: 1,
+                reasoning_output_tokens: 0,
+              },
+            };
+            if (task.includes('cleanup parse noise')) {
+              throw new Error('Failed to parse item: SUCCESS: The process with PID 1234 (child process of PID 5678) has been terminated.');
+            }
+          }
+          return { events: events() };
+        },
+      };
+}
+
 function createMockTerminalControl(): CodingBackendTerminalControl & {
   outputCallbacks: Map<string, Set<(data: string) => void>>;
   exitCallbacks: Map<string, Set<(exitCode: number, signal: number) => void>>;
@@ -96,6 +196,9 @@ describe('CodingBackendService', () => {
   let service: CodingBackendService;
 
   beforeEach(() => {
+    codexSdkMockState.tasks.length = 0;
+    codexSdkMockState.turnOptions.length = 0;
+    codexSdkMockState.resumedThreadIds.length = 0;
     mock = createMockTerminalControl();
     service = new CodingBackendService({ config: BASE_CONFIG, terminalControl: mock });
   });
@@ -193,6 +296,586 @@ describe('CodingBackendService', () => {
     expect(result.assistantResponse).toBe('GuardianAgent is a security-first AI assistant platform.');
     expect(result.output).toContain('OpenAI Codex CLI completed.');
     expect(result.output).not.toContain('GuardianAgent is a security-first AI assistant platform.');
+  });
+
+  it('runs Codex through the SDK backend without opening a terminal', async () => {
+    const codexSdkService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'codex-sdk',
+            name: 'OpenAI Codex SDK',
+            enabled: true,
+            adapterKind: 'codex_sdk',
+            executionHost: 'windows',
+            command: 'codex-sdk',
+            args: ['{{task}}'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'codex-sdk',
+      },
+      terminalControl: mock,
+    });
+    const progressDetails: string[] = [];
+    codexSdkService.subscribeProgress((event) => {
+      if (event.detail) progressDetails.push(event.detail);
+    });
+
+    const result = await codexSdkService.run({
+      task: 'Summarize the repository',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+      requestId: 'req-sdk',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.backendId).toBe('codex-sdk');
+    expect(result.assistantResponse).toBe('Codex SDK finished the delegated task.');
+    expect(result.output).toBe('Codex SDK finished the delegated task.');
+    expect(result.terminalTabId).toMatch(/^sdk:/);
+    expect(mock.openedTerminals).toHaveLength(0);
+    expect(codexSdkMockState.tasks[0]).toContain('You are the delegated Codex SDK coding worker');
+    expect(codexSdkMockState.tasks[0]).toContain('Do not call Guardian APIs');
+    expect(codexSdkMockState.tasks[0]).toContain('If browser automation tools are unavailable');
+    expect(codexSdkMockState.tasks[0]).toContain('Do not load or follow Codex Desktop Browser skill instructions');
+    expect(codexSdkMockState.tasks[0]).toContain('do not spend time trying to keep a detached child process alive');
+    expect(codexSdkMockState.tasks[0]).toContain('Guardian can start and verify the persistent process from the host');
+    expect(codexSdkMockState.tasks[0]).toContain('Return only JSON matching the provided output schema');
+    expect(codexSdkMockState.tasks[0]).toContain('User task:\nSummarize the repository');
+    expect(codexSdkMockState.turnOptions[0]).toMatchObject({
+      outputSchema: expect.objectContaining({
+        type: 'object',
+        required: expect.arrayContaining(['status', 'summary', 'filesChanged', 'verification', 'localServer', 'nextSteps']),
+      }),
+    });
+    const outputSchema = (codexSdkMockState.turnOptions[0] as { outputSchema: Record<string, unknown> }).outputSchema;
+    expect(outputSchema.properties).toMatchObject({
+      verification: {
+        items: {
+          required: expect.arrayContaining(['name', 'status', 'evidence']),
+        },
+      },
+      localServer: {
+        required: expect.arrayContaining(['requested', 'persistentStarted', 'startCommand', 'url', 'healthUrl', 'notes']),
+      },
+    });
+    expect(progressDetails).toContain('Started a Codex SDK thread.');
+    expect(progressDetails).toContain('Codex SDK completed.');
+  });
+
+  it('times out Codex SDK runs when the SDK event stream stalls', async () => {
+    const codexSdkService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'codex-sdk',
+            name: 'OpenAI Codex SDK',
+            enabled: true,
+            adapterKind: 'codex_sdk',
+            executionHost: 'windows',
+            command: 'codex-sdk',
+            args: ['{{task}}'],
+            timeoutMs: 25,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'codex-sdk',
+      },
+      terminalControl: mock,
+    });
+    const progressDetails: string[] = [];
+    codexSdkService.subscribeProgress((event) => {
+      if (event.detail) progressDetails.push(event.detail);
+    });
+
+    const result = await codexSdkService.run({
+      task: 'hang without sdk completion',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+      requestId: 'req-sdk-timeout',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('timed_out');
+    expect(result.sdkThreadId).toBe('thread-test');
+    expect(result.resumable).toBe(true);
+    expect(result.output).toContain('Codex SDK did not finish before the timeout.');
+    expect(result.output).toContain('Thread ID: thread-test');
+    expect(result.output).toContain('Recent SDK progress:');
+    expect(result.output).toContain('Codex SDK is working in the attached workspace.');
+    expect(result.output).toContain('Resume: ask Guardian to continue the latest Codex SDK run');
+    expect(result.terminalTabId).toMatch(/^sdk:/);
+    expect(mock.openedTerminals).toHaveLength(0);
+    expect(codexSdkService.getStatus()[0].status).toBe('timed_out');
+    expect(codexSdkService.getStatus()[0].sdkThreadId).toBe('thread-test');
+    expect(codexSdkService.getStatus()[0].resumable).toBe(true);
+    expect(progressDetails).toContain('Started a Codex SDK thread.');
+    expect(progressDetails).toContain('Codex SDK did not finish before the timeout.');
+  });
+
+  it('resumes the latest timed-out Codex SDK thread for the current workspace', async () => {
+    const codexSdkService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'codex-sdk',
+            name: 'OpenAI Codex SDK',
+            enabled: true,
+            adapterKind: 'codex_sdk',
+            executionHost: 'windows',
+            command: 'codex-sdk',
+            args: ['{{task}}'],
+            timeoutMs: 25,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'codex-sdk',
+      },
+      terminalControl: mock,
+    });
+
+    const timedOut = await codexSdkService.run({
+      task: 'hang without sdk completion',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+      requestId: 'req-sdk-timeout',
+    });
+    expect(timedOut.status).toBe('timed_out');
+    expect(timedOut.sessionId).toBeDefined();
+    expect(timedOut.sdkThreadId).toBe('thread-test');
+
+    const resumed = await codexSdkService.run({
+      task: 'finish the previous SDK work',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+      requestId: 'req-sdk-resume',
+      resumeLatest: true,
+    });
+
+    expect(codexSdkMockState.resumedThreadIds).toEqual(['thread-test']);
+    expect(codexSdkMockState.tasks.at(-1)).toContain('This is a resumed SDK thread.');
+    expect(resumed.success).toBe(true);
+    expect(resumed.status).toBe('succeeded');
+    expect(resumed.sdkThreadId).toBe('thread-test');
+    expect(resumed.resumedFromSessionId).toBe(timedOut.sessionId);
+    expect(resumed.resumedFromThreadId).toBe('thread-test');
+    expect(resumed.resumable).toBe(false);
+  });
+
+  it('keeps an active Codex SDK project thread after success and resumes it for the next task', async () => {
+    const codexSdkService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'codex-sdk',
+            name: 'OpenAI Codex SDK',
+            enabled: true,
+            adapterKind: 'codex_sdk',
+            executionHost: 'windows',
+            command: 'codex-sdk',
+            args: ['{{task}}'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'codex-sdk',
+      },
+      terminalControl: mock,
+    });
+
+    const first = await codexSdkService.run({
+      task: 'Draft the design for the feature',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+      requestId: 'req-sdk-project-first',
+    });
+    expect(first.success).toBe(true);
+    expect(first.codexProject).toMatchObject({
+      activeThreadId: 'thread-test',
+      projectObjective: 'Draft the design for the feature',
+      lastRunStatus: 'succeeded',
+    });
+
+    const second = await codexSdkService.run({
+      task: 'Implement the first approved phase',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+      requestId: 'req-sdk-project-second',
+    });
+
+    expect(codexSdkMockState.resumedThreadIds).toEqual(['thread-test']);
+    expect(codexSdkMockState.tasks.at(-1)).toContain('active project-driver thread');
+    expect(codexSdkMockState.tasks.at(-1)).toContain('Project objective: Draft the design for the feature');
+    expect(codexSdkMockState.tasks.at(-1)).toContain('Last checkpoint: Codex SDK finished the delegated task.');
+    expect(second.success).toBe(true);
+    expect(second.resumedFromThreadId).toBe('thread-test');
+    expect(codexSdkService.getCodexProjectStatus('session-1')[0]).toMatchObject({
+      activeThreadId: 'thread-test',
+      projectObjective: 'Draft the design for the feature',
+      lastRunStatus: 'succeeded',
+    });
+  });
+
+  it('resumes the latest Codex SDK thread after backend session history is reloaded', async () => {
+    const stateRoot = await mkdtemp(join(tmpdir(), 'guardianagent-coding-backend-state-'));
+    const recentSessionsPath = join(stateRoot, 'coding-backend-sessions.json');
+    const config: CodingBackendsConfig = {
+      ...BASE_CONFIG,
+      backends: [
+        {
+          id: 'codex-sdk',
+          name: 'OpenAI Codex SDK',
+          enabled: true,
+          adapterKind: 'codex_sdk',
+          executionHost: 'windows',
+          command: 'codex-sdk',
+          args: ['{{task}}'],
+          timeoutMs: 25,
+          nonInteractive: true,
+        },
+      ],
+      defaultBackend: 'codex-sdk',
+    };
+
+    try {
+      const firstService = new CodingBackendService({
+        config,
+        terminalControl: mock,
+        recentSessionsPath,
+      });
+      const timedOut = await firstService.run({
+        task: 'hang without sdk completion',
+        codeSessionId: 'session-1',
+        workspaceRoot: '/workspace',
+        requestId: 'req-sdk-timeout',
+      });
+      expect(timedOut.status).toBe('timed_out');
+      expect(timedOut.sdkThreadId).toBe('thread-test');
+
+      const reloadedService = new CodingBackendService({
+        config,
+        terminalControl: mock,
+        recentSessionsPath,
+      });
+      expect(reloadedService.getStatus()[0]).toMatchObject({
+        status: 'timed_out',
+        sdkThreadId: 'thread-test',
+        resumable: true,
+      });
+
+      const resumed = await reloadedService.run({
+        task: 'finish the previous SDK work after restart',
+        codeSessionId: 'session-1',
+        workspaceRoot: '/workspace',
+        requestId: 'req-sdk-resume-after-reload',
+        resumeLatest: true,
+      });
+
+      expect(codexSdkMockState.resumedThreadIds).toEqual(['thread-test']);
+      expect(resumed.success).toBe(true);
+      expect(resumed.sdkThreadId).toBe('thread-test');
+      expect(resumed.resumedFromSessionId).toBe(timedOut.sessionId);
+    } finally {
+      await rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('refreshes persisted Codex SDK session history before resolving resumeLatest', async () => {
+    const stateRoot = await mkdtemp(join(tmpdir(), 'guardianagent-coding-backend-state-'));
+    const recentSessionsPath = join(stateRoot, 'coding-backend-sessions.json');
+    const config: CodingBackendsConfig = {
+      ...BASE_CONFIG,
+      backends: [
+        {
+          id: 'codex-sdk',
+          name: 'OpenAI Codex SDK',
+          enabled: true,
+          adapterKind: 'codex_sdk',
+          executionHost: 'windows',
+          command: 'codex-sdk',
+          args: ['{{task}}'],
+          timeoutMs: 5000,
+          nonInteractive: true,
+        },
+      ],
+      defaultBackend: 'codex-sdk',
+    };
+
+    try {
+      const staleService = new CodingBackendService({
+        config,
+        terminalControl: mock,
+        recentSessionsPath,
+      });
+      await writeFile(recentSessionsPath, JSON.stringify({
+        version: 1,
+        sessions: [
+          {
+            id: 'persisted-failed-sdk-run',
+            backendId: 'codex-sdk',
+            backendName: 'OpenAI Codex SDK',
+            codeSessionId: 'session-1',
+            terminalId: 'sdk:persisted-failed-sdk-run',
+            task: 'failed before resume',
+            status: 'failed',
+            startedAt: Date.now() - 1000,
+            completedAt: Date.now() - 500,
+            durationMs: 500,
+            sdkThreadId: 'thread-from-persisted-state',
+            resumable: true,
+          },
+        ],
+      }), 'utf8');
+
+      const resumed = await staleService.run({
+        task: 'finish persisted failed SDK work',
+        codeSessionId: 'session-1',
+        workspaceRoot: '/workspace',
+        requestId: 'req-sdk-resume-from-refreshed-state',
+        resumeLatest: true,
+      });
+
+      expect(codexSdkMockState.resumedThreadIds).toEqual(['thread-from-persisted-state']);
+      expect(resumed.success).toBe(true);
+      expect(resumed.sdkThreadId).toBe('thread-from-persisted-state');
+      expect(resumed.resumedFromSessionId).toBe('persisted-failed-sdk-run');
+    } finally {
+      await rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('resumes an explicit Codex SDK thread id without recent in-memory session state', async () => {
+    const codexSdkService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'codex-sdk',
+            name: 'OpenAI Codex SDK',
+            enabled: true,
+            adapterKind: 'codex_sdk',
+            executionHost: 'windows',
+            command: 'codex-sdk',
+            args: ['{{task}}'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'codex-sdk',
+      },
+      terminalControl: mock,
+    });
+
+    const result = await codexSdkService.run({
+      task: 'continue explicit thread',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+      requestId: 'req-sdk-explicit-thread',
+      resumeThreadId: 'thread-from-telegram',
+    });
+
+    expect(codexSdkMockState.resumedThreadIds).toEqual(['thread-from-telegram']);
+    expect(result.success).toBe(true);
+    expect(result.sdkThreadId).toBe('thread-from-telegram');
+    expect(result.resumedFromThreadId).toBe('thread-from-telegram');
+  });
+
+  it('selects an enabled Codex SDK backend for explicit thread resume even when the default backend is CLI', async () => {
+    const codexSdkService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'codex',
+            name: 'OpenAI Codex CLI',
+            enabled: true,
+            adapterKind: 'terminal_cli',
+            command: 'codex',
+            args: ['exec', '{{task}}'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+          {
+            id: 'codex-sdk',
+            name: 'OpenAI Codex SDK',
+            enabled: true,
+            adapterKind: 'codex_sdk',
+            executionHost: 'windows',
+            command: 'codex-sdk',
+            args: ['{{task}}'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'codex',
+      },
+      terminalControl: mock,
+    });
+
+    const result = await codexSdkService.run({
+      task: 'continue explicit thread',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+      requestId: 'req-sdk-explicit-thread',
+      resumeThreadId: 'thread-from-telegram',
+    });
+
+    expect(codexSdkMockState.resumedThreadIds).toEqual(['thread-from-telegram']);
+    expect(result.success).toBe(true);
+    expect(result.backendId).toBe('codex-sdk');
+    expect(mock.openedTerminals).toHaveLength(0);
+  });
+
+  it('treats Windows Codex SDK cleanup parse noise as success after turn completion', async () => {
+    const codexSdkService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'codex-sdk',
+            name: 'OpenAI Codex SDK',
+            enabled: true,
+            adapterKind: 'codex_sdk',
+            executionHost: 'windows',
+            command: 'codex-sdk',
+            args: ['{{task}}'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'codex-sdk',
+      },
+      terminalControl: mock,
+    });
+    const progressDetails: string[] = [];
+    codexSdkService.subscribeProgress((event) => {
+      if (event.detail) progressDetails.push(event.detail);
+    });
+
+    const result = await codexSdkService.run({
+      task: 'cleanup parse noise',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+      requestId: 'req-sdk-cleanup',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    expect(result.exitCode).toBe(0);
+    expect(result.assistantResponse).toBe('Codex SDK finished the delegated task.');
+    expect(result.output).toBe('Codex SDK finished the delegated task.');
+    expect(mock.openedTerminals).toHaveLength(0);
+    expect(progressDetails).toContain('Codex SDK completed; ignored Windows cleanup output.');
+  });
+
+  it('uses structured Codex SDK output to start requested local servers in a host terminal', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503 })
+      .mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const codexSdkService = new CodingBackendService({
+        config: {
+          ...BASE_CONFIG,
+          backends: [
+            {
+              id: 'codex-sdk',
+              name: 'OpenAI Codex SDK',
+              enabled: true,
+              adapterKind: 'codex_sdk',
+              executionHost: 'windows',
+              command: 'codex-sdk',
+              args: ['{{task}}'],
+              timeoutMs: 5000,
+              nonInteractive: true,
+            },
+          ],
+          defaultBackend: 'codex-sdk',
+        },
+        terminalControl: mock,
+      });
+      const progressDetails: string[] = [];
+      codexSdkService.subscribeProgress((event) => {
+        if (event.detail) progressDetails.push(event.detail);
+      });
+
+      const result = await codexSdkService.run({
+        task: 'structured host launch',
+        codeSessionId: 'session-1',
+        workspaceRoot: '/workspace',
+        requestId: 'req-sdk-structured-host',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('succeeded');
+      expect(result.terminalTabId).toBe('term-1');
+      expect(result.output).toContain('Codex SDK status: completed');
+      expect(result.output).toContain('Built a dependency-free prototype app.');
+      expect(result.output).toContain('Guardian host start:');
+      expect(result.output).toContain('Started in a Guardian terminal and verified HTTP 200.');
+      expect(mock.openedTerminals).toHaveLength(1);
+      expect(mock.openedTerminals[0]).toMatchObject({
+        terminalId: 'term-1',
+        codeSessionId: 'session-1',
+        cwd: '/workspace',
+      });
+      expect(mock.writtenInputs).toEqual([{ terminalId: 'term-1', input: 'node server.js\n' }]);
+      expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:5123/api/status', expect.any(Object));
+      expect(progressDetails).toContain('Codex SDK command completed exit 0: node --check server.js');
+      expect(progressDetails).toContain('Starting the local app in a Guardian-owned terminal.');
+      expect(progressDetails).toContain('Verified the local app over HTTP.');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not mark completed SDK work failed just because host persistent start is unavailable', async () => {
+    const codexSdkService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'codex-sdk',
+            name: 'OpenAI Codex SDK',
+            enabled: true,
+            adapterKind: 'codex_sdk',
+            executionHost: 'windows',
+            command: 'codex-sdk',
+            args: ['{{task}}'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'codex-sdk',
+      },
+      terminalControl: mock,
+    });
+
+    const result = await codexSdkService.run({
+      task: 'structured invalid host launch',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+      requestId: 'req-sdk-invalid-host',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toContain('Guardian host start:');
+    expect(result.output).toContain('Skipped host start because the SDK did not provide a loopback HTTP URL');
+    expect(result.output).toContain('Treat the URL as not currently live');
+    expect(result.codexProject).toMatchObject({
+      activeThreadId: 'thread-test',
+      lastRunStatus: 'succeeded',
+      lastHostFollowupStatus: 'failed',
+    });
+    expect(mock.openedTerminals).toHaveLength(0);
   });
 
   it('summarizes Codex terminal transcript progress without exposing raw execution logs', async () => {

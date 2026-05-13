@@ -16,7 +16,7 @@ import {
   sanitizeCodeSessionFileReferences,
   type CodeSessionFileReferenceInput,
 } from './runtime/code-session-file-references.js';
-import { CODING_BACKEND_PRESETS } from './runtime/coding-backend-presets.js';
+import { CODING_BACKEND_PRESETS, applyCodingBackendEnvironmentDefaults } from './runtime/coding-backend-presets.js';
 import {
   DEFAULT_ASSISTANT_SECURITY_AUTO_CONTAINMENT_CATEGORIES,
   DEFAULT_ASSISTANT_SECURITY_AUTO_CONTAINMENT_CONFIDENCE,
@@ -1529,7 +1529,7 @@ function mergeCloudConfigForValidation(
 
 function redactCodingBackendsConfig(config: GuardianAgentConfig): RedactedConfig['assistant']['tools']['codingBackends'] {
   const defaults = DEFAULT_CODING_BACKENDS_CONFIG;
-  const codingBackends = config.assistant.tools.codingBackends ?? defaults;
+  const codingBackends = applyCodingBackendEnvironmentDefaults(config.assistant.tools.codingBackends ?? defaults);
   const configuredIds = new Set(codingBackends?.backends.map((backend) => backend.id) ?? []);
   const mergedBackends: DashboardCodingBackendInfo[] = [];
 
@@ -1539,6 +1539,8 @@ function redactCodingBackendsConfig(config: GuardianAgentConfig): RedactedConfig
       ? {
           ...preset,
           enabled: backend.enabled,
+          ...(backend.adapterKind ? { adapterKind: backend.adapterKind } : {}),
+          ...(backend.executionHost ? { executionHost: backend.executionHost } : {}),
           ...(backend.shell ? { shell: backend.shell } : {}),
           ...(backend.env ? { env: { ...backend.env } } : {}),
           ...(typeof backend.timeoutMs === 'number' ? { timeoutMs: backend.timeoutMs } : {}),
@@ -1554,6 +1556,8 @@ function redactCodingBackendsConfig(config: GuardianAgentConfig): RedactedConfig
       configured: true,
       preset: !!preset,
       enabled: merged.enabled,
+      adapterKind: merged.adapterKind,
+      executionHost: merged.executionHost,
       shell: merged.shell,
       command: merged.command,
       args: [...merged.args],
@@ -1576,6 +1580,8 @@ function redactCodingBackendsConfig(config: GuardianAgentConfig): RedactedConfig
       configured: false,
       preset: true,
       enabled: false,
+      adapterKind: preset.adapterKind,
+      executionHost: preset.executionHost,
       shell: preset.shell,
       command: preset.command,
       args: [...preset.args],

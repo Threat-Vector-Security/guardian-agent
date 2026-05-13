@@ -4,6 +4,7 @@ import type { PendingActionRecord } from '../pending-actions.js';
 import type { ChatContinuationGraphResume } from './chat-continuation-graph.js';
 import type {
   AutomationAuthoringContinuationPayload,
+  CodeSessionCreateContinuationPayload,
   FilesystemSaveOutputContinuationPayload,
 } from './chat-continuation-payloads.js';
 import type { ToolLoopContinuationPayload } from './tool-loop-continuation.js';
@@ -40,6 +41,19 @@ export interface ExecuteChatContinuationPayloadInput {
     resume: AutomationAuthoringContinuationPayload,
     approvalResult?: ToolApprovalDecisionResult,
   ) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
+  executeStoredCodeSessionCreate: (input: {
+    workspaceRoot: string;
+    title: string;
+    attach: boolean;
+    originalUserContent: string;
+    userKey: string;
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    principalId?: string;
+    principalRole?: PrincipalRole;
+    requestId: string;
+  }) => Promise<ChatContinuationExecutionResult>;
   resumeStoredToolLoopContinuation: (
     pendingAction: PendingActionRecord,
     continuation: ToolLoopContinuationPayload,
@@ -65,6 +79,9 @@ export async function executeChatContinuationPayload(
       input.approvalResult,
     );
   }
+  if (payload.type === 'code_session_create') {
+    return input.executeStoredCodeSessionCreate(buildCodeSessionCreateContinuationInput(input.pendingAction, payload, input.createRequestId()));
+  }
   return await input.resumeStoredToolLoopContinuation(
     input.pendingAction,
     payload,
@@ -75,6 +92,26 @@ export async function executeChatContinuationPayload(
     },
   ) ?? {
     content: 'I could not resume the pending coding run after approval.',
+  };
+}
+
+function buildCodeSessionCreateContinuationInput(
+  pendingAction: PendingActionRecord,
+  payload: CodeSessionCreateContinuationPayload,
+  requestId: string,
+): Parameters<ExecuteChatContinuationPayloadInput['executeStoredCodeSessionCreate']>[0] {
+  return {
+    workspaceRoot: payload.workspaceRoot,
+    title: payload.title,
+    attach: payload.attach,
+    originalUserContent: payload.originalUserContent,
+    userKey: `${pendingAction.scope.userId}:${pendingAction.scope.channel}`,
+    userId: pendingAction.scope.userId,
+    channel: pendingAction.scope.channel,
+    surfaceId: pendingAction.scope.surfaceId,
+    principalId: payload.principalId ?? pendingAction.scope.userId,
+    principalRole: normalizePrincipalRole(payload.principalRole) ?? 'owner',
+    requestId,
   };
 }
 

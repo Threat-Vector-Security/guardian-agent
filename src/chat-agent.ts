@@ -12,6 +12,7 @@ import {
   compactQuarantinedToolResult,
   getCodeSessionPromptRelativePath,
   isRecord,
+  formatDirectCodeSessionLine,
   readCodeRequestMetadata,
   sameCodeWorkspaceWorkingSet,
   shouldRefreshCodeSessionFocus,
@@ -136,6 +137,7 @@ import {
 } from './runtime/chat-agent/direct-continuation-state.js';
 import {
   handleCodeSessionAttach as handleCodeSessionAttachHelper,
+  tryDirectCodeSessionControlFromGateway,
 } from './runtime/chat-agent/code-session-control.js';
 import {
   syncCodeSessionRuntimeState as syncCodeSessionRuntimeStateHelper,
@@ -1266,6 +1268,17 @@ interface DegradedDirectIntentResponseInput {
         channel,
         surfaceId,
         actionInput,
+      ),
+      setClarificationPendingAction: (userId, channel, surfaceId, actionInput) => this.setClarificationPendingAction(
+        userId,
+        channel,
+        surfaceId,
+        actionInput,
+      ),
+      setChatContinuationGraphPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setChatContinuationGraphPendingApprovalActionForRequest(
+        nextUserKey,
+        surfaceId,
+        action,
       ),
       getActivePendingAction: (userId, channel, surfaceId) => this.getActivePendingAction(userId, channel, surfaceId),
       completePendingAction: (actionId) => this.completePendingAction(actionId),
@@ -2963,6 +2976,7 @@ interface DegradedDirectIntentResponseInput {
       },
       contentPreview: normalized.content,
     });
+    this.completeSettledDirectExecution(input.message, normalizedMetadata, intentGateway);
     const metadata = {
       ...(this.buildImmediateResponseMetadata(
         input.activeSkills,
@@ -3027,6 +3041,7 @@ interface DegradedDirectIntentResponseInput {
       },
       contentPreview: normalized.content,
     });
+    this.completeSettledDirectExecution(input.message, normalizedMetadata, input.intentGateway);
     const gatewayMeta = toIntentGatewayClientMetadata(input.intentGateway);
     const metadata = {
       ...(this.buildImmediateResponseMetadata(
@@ -3042,6 +3057,26 @@ interface DegradedDirectIntentResponseInput {
       content: normalized.content,
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     };
+  }
+
+  private completeSettledDirectExecution(
+    message: UserMessage,
+    metadata: Record<string, unknown> | undefined,
+    intentGateway: IntentGatewayRecord | null | undefined,
+  ): void {
+    if (isRecord(metadata?.pendingAction)) {
+      return;
+    }
+    const executionIdentity = readExecutionIdentityMetadata(message.metadata) ?? {
+      executionId: message.id,
+      rootExecutionId: message.id,
+    };
+    const codeSessionId = toString(metadata?.codeSessionId);
+    this.completeExecutionTurn({
+      executionIdentity,
+      includeRoot: intentGateway?.decision.turnRelation === 'clarification_answer',
+      ...(codeSessionId ? { codeSessionId } : {}),
+    });
   }
 
   private tryDirectRecentToolReport(
@@ -3088,6 +3123,17 @@ interface DegradedDirectIntentResponseInput {
         channel,
         surfaceId,
         actionInput,
+      ),
+      setClarificationPendingAction: (userId, channel, surfaceId, actionInput) => this.setClarificationPendingAction(
+        userId,
+        channel,
+        surfaceId,
+        actionInput,
+      ),
+      setChatContinuationGraphPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setChatContinuationGraphPendingApprovalActionForRequest(
+        nextUserKey,
+        surfaceId,
+        action,
       ),
       getActivePendingAction: (userId, channel, surfaceId) => this.getActivePendingAction(userId, channel, surfaceId),
       completePendingAction: (actionId) => this.completePendingAction(actionId),
@@ -3274,6 +3320,15 @@ interface DegradedDirectIntentResponseInput {
     nowMs?: number;
   }): ExecutionRecord | null {
     return this.orchestrationState.updateExecutionFromIntent(input);
+  }
+
+  private completeExecutionTurn(input: {
+    executionIdentity: NonNullable<ReturnType<typeof readExecutionIdentityMetadata>>;
+    includeRoot?: boolean;
+    codeSessionId?: string;
+    nowMs?: number;
+  }): void {
+    this.orchestrationState.completeExecutionTurn(input);
   }
 
   private getActiveExecution(input: {
@@ -3996,6 +4051,7 @@ interface DegradedDirectIntentResponseInput {
         continuation,
         approvalResult,
       ),
+      executeStoredCodeSessionCreate: (request) => this.executeStoredCodeSessionCreate(request),
       resumeStoredToolLoopContinuation: (action, continuation, resumeOptions) => this.resumeStoredToolLoopContinuation(
         action,
         continuation,
@@ -4194,6 +4250,148 @@ interface DegradedDirectIntentResponseInput {
         fallbackContent,
       ),
     });
+  }
+
+  private async executeStoredCodeSessionCreate(input: {
+    workspaceRoot: string;
+    title: string;
+    attach: boolean;
+    originalUserContent: string;
+    userKey: string;
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    principalId?: string;
+    principalRole?: PrincipalRole;
+    requestId: string;
+  }): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    const message: UserMessage = {
+      id: input.requestId,
+      userId: input.userId,
+      channel: input.channel,
+      ...(input.surfaceId ? { surfaceId: input.surfaceId } : {}),
+      ...(input.principalId ? { principalId: input.principalId } : {}),
+      ...(input.principalRole ? { principalRole: input.principalRole } : {}),
+      content: input.originalUserContent,
+      timestamp: Date.now(),
+    };
+    const codingRoutes = buildChatDirectCodingRouteDeps({
+      agentId: this.id,
+      tools: this.tools,
+      codeSessionStore: this.codeSessionStore,
+      parsePendingActionUserKey: (key) => this.parsePendingActionUserKey(key),
+      recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, traceInput),
+      getPendingApprovalIds: (userId, channel, surfaceId) => this.getPendingApprovalIds(userId, channel, surfaceId),
+      setPendingApprovals: (key, ids, surfaceId, nowMs) => this.setPendingApprovals(key, ids, surfaceId, nowMs),
+      syncPendingApprovalsFromExecutor: (
+        sourceUserId,
+        sourceChannel,
+        targetUserId,
+        targetChannel,
+        surfaceId,
+        originalUserContent,
+      ) => this.syncPendingApprovalsFromExecutor(
+        sourceUserId,
+        sourceChannel,
+        targetUserId,
+        targetChannel,
+        surfaceId,
+        originalUserContent,
+      ),
+      setPendingApprovalAction: (userId, channel, surfaceId, actionInput) => this.setPendingApprovalAction(
+        userId,
+        channel,
+        surfaceId,
+        actionInput,
+      ),
+      setClarificationPendingAction: (userId, channel, surfaceId, actionInput) => this.setClarificationPendingAction(
+        userId,
+        channel,
+        surfaceId,
+        actionInput,
+      ),
+      setChatContinuationGraphPendingApprovalActionForRequest: (userKey, surfaceId, action) => this.setChatContinuationGraphPendingApprovalActionForRequest(
+        userKey,
+        surfaceId,
+        action,
+      ),
+      getActivePendingAction: (userId, channel, surfaceId) => this.getActivePendingAction(userId, channel, surfaceId),
+      completePendingAction: (actionId) => this.completePendingAction(actionId),
+      onMessage: (nextMessage, nextCtx) => this.onMessage(nextMessage, nextCtx),
+    });
+    const response = await tryDirectCodeSessionControlFromGateway({
+      ...codingRoutes.sessionControlDeps,
+      toolsEnabled: this.tools?.isEnabled() === true,
+      resumeCodingTask: buildDirectCodingTaskResumer(codingRoutes.backendDeps),
+      message,
+      ctx: {
+        agentId: this.id,
+        emit: async () => undefined,
+        checkAction: () => undefined,
+        capabilities: [],
+      },
+      decision: {
+        route: 'coding_session_control',
+        confidence: 'high',
+        operation: 'create',
+        summary: `Create coding session "${input.title}".`,
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'direct_assistant',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
+        simpleVsComplex: 'simple',
+        entities: {
+          path: input.workspaceRoot,
+          sessionTarget: input.title,
+          codeSessionResource: 'session',
+        },
+      },
+    });
+    if (response) {
+      return response;
+    }
+
+    const result = await this.tools?.executeModelTool(
+      'code_session_create',
+      { workspaceRoot: input.workspaceRoot, title: input.title, attach: input.attach },
+      {
+        origin: 'assistant',
+        agentId: this.id,
+        userId: input.userId,
+        channel: input.channel,
+        surfaceId: input.surfaceId,
+        principalId: input.principalId ?? input.userId,
+        principalRole: input.principalRole ?? 'owner',
+        requestId: input.requestId,
+      },
+    );
+    if (!result || !result.success) {
+      return {
+        content: toString(result?.error)
+          || toString(result?.message)
+          || `I could not create coding session "${input.title}".`,
+      };
+    }
+    const session = isRecord(result.output) && isRecord(result.output.session)
+      ? result.output.session
+      : null;
+    return {
+      content: session
+        ? `Created and attached to:\n${formatDirectCodeSessionLine(session, true)}`
+        : `Created and attached to a new coding session for ${input.workspaceRoot}.`,
+      metadata: session
+        ? {
+            codeSessionResolved: true,
+            codeSessionId: toString(session.id),
+            codeSessionFocusChanged: true,
+          }
+        : { codeSessionFocusChanged: true },
+    };
   }
 
   private async executeStoredFilesystemSave(input: {

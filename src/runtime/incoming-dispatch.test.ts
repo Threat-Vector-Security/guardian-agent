@@ -745,6 +745,99 @@ describe('createIncomingDispatchPreparer', () => {
     expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
   });
 
+  it('does not infer an active execution from stale rows when continuity only has a code-session ref', async () => {
+    const listForAssistantUser = vi.fn(() => [
+      {
+        executionId: 'old-running-execution',
+        requestId: 'old-request',
+        rootExecutionId: 'old-running-execution',
+        scope: {
+          assistantId: 'chat',
+          userId: 'web:alex',
+          channel: 'web',
+          surfaceId: 'config-panel',
+        },
+        status: 'running' as const,
+        intent: {
+          route: 'automation_control',
+          operation: 'delete',
+          summary: 'Old unrelated request.',
+          originalUserContent: 'remove old thing',
+        },
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    ]);
+    const routingIntentGateway = {
+      classify: vi.fn(async (input: IntentGatewayInput) => {
+        expect(input.continuity?.activeExecution).toBeUndefined();
+        expect(input.continuity?.activeExecutionRefs).toEqual(['code_session:session-1']);
+        return createGatewayRecord({
+          route: 'general_assistant',
+          operation: 'answer',
+          summary: 'Answer from the current turn.',
+          turnRelation: 'new_request',
+          executionClass: 'direct_assistant',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+        });
+      }),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      routingIntentGateway,
+      continuityThreadStore: {
+        get: vi.fn(() => ({
+          continuityKey: 'chat:web:alex',
+          scope: {
+            assistantId: 'chat',
+            userId: 'web:alex',
+          },
+          linkedSurfaces: [
+            {
+              channel: 'web',
+              surfaceId: 'config-panel',
+              active: true,
+              lastSeenAt: 1,
+            },
+          ],
+          activeExecutionRefs: [
+            { kind: 'code_session', id: 'session-1' },
+          ],
+          focusSummary: 'Current coding workspace is attached.',
+          createdAt: 1,
+          updatedAt: 2,
+          expiresAt: 4,
+        })),
+      },
+      executionStore: {
+        get: vi.fn(() => null),
+        listForAssistantUser,
+      },
+      summarizeContinuityThreadForGateway: vi.fn((thread) => thread ? ({
+        continuityKey: thread.continuityKey,
+        linkedSurfaceCount: thread.linkedSurfaces.length,
+        focusSummary: thread.focusSummary,
+        activeExecutionRefs: thread.activeExecutionRefs?.map((ref) => `${ref.kind}:${ref.id}`),
+      }) : null),
+      resolveSharedStateAgentId: vi.fn(() => 'chat'),
+      identity: {
+        resolveCanonicalUserId: () => 'web:alex',
+      },
+    }));
+
+    await prepareIncomingDispatch(undefined, {
+      content: 'What is the current coding workspace?',
+      userId: 'alex',
+      principalId: 'alex-principal',
+      channel: 'web',
+      surfaceId: 'config-panel',
+    });
+
+    expect(listForAssistantUser).not.toHaveBeenCalled();
+  });
+
   it('does not inject stale continuity history into fresh unlinked surfaces', async () => {
     const conversations = {
       getHistoryForContext: vi.fn(() => [

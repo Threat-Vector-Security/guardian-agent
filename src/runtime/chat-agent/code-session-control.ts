@@ -7,17 +7,28 @@ import {
   toBoolean,
   toString,
 } from '../../chat-agent-helpers.js';
+import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
 import { resolveCodingBackendSessionTarget } from '../coding-backend-session-target.js';
 import type { CodeSessionManagedSandbox, CodeSessionRecord, CodeSessionStore } from '../code-sessions.js';
 import type { RemoteExecutionTargetDescriptor, RemoteExecutionTargetDiagnostic } from '../remote-execution/policy.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
-import type { PendingActionRecord } from '../pending-actions.js';
+import {
+  type PendingActionApprovalSummary,
+  type PendingActionBlocker,
+  type PendingActionRecord,
+  toPendingActionClientMetadata,
+} from '../pending-actions.js';
 import { isWorkspaceSwitchPendingActionSatisfied } from '../pending-action-resume.js';
+import { CHAT_CONTINUATION_TYPE_CODE_SESSION_CREATE } from './chat-continuation-payloads.js';
+import type { PendingActionSetResult } from './orchestration-state.js';
 
 export type CodeSessionResponse = { content: string; metadata?: Record<string, unknown> };
 
 export type CodeSessionToolResult = {
   success?: unknown;
+  status?: unknown;
+  approvalId?: unknown;
+  jobId?: unknown;
   message?: unknown;
   error?: unknown;
   output?: unknown;
@@ -88,6 +99,58 @@ export interface CodeSessionControlDeps {
     channel: string,
     surfaceId?: string,
   ) => PendingActionRecord | null;
+  getApprovalSummaries?: (
+    ids: string[],
+  ) => Map<string, { toolName: string; argsPreview: string; actionLabel?: string }>;
+  setChatContinuationGraphPendingApprovalActionForRequest?: (
+    userKey: string,
+    surfaceId: string | undefined,
+    input: {
+      prompt: string;
+      approvalIds: string[];
+      approvalSummaries?: PendingActionApprovalSummary[];
+      originalUserContent: string;
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
+      entities?: Record<string, unknown>;
+      continuation: {
+        type: typeof CHAT_CONTINUATION_TYPE_CODE_SESSION_CREATE;
+        workspaceRoot: string;
+        title: string;
+        attach: boolean;
+        originalUserContent: string;
+        principalId?: string;
+        principalRole?: string;
+      };
+      codeSessionId?: string;
+    },
+  ) => PendingActionSetResult;
+  setClarificationPendingAction?: (
+    userId: string,
+    channel: string,
+    surfaceId: string | undefined,
+    input: {
+      blockerKind: PendingActionBlocker['kind'];
+      field?: string;
+      prompt: string;
+      originalUserContent: string;
+      options?: PendingActionBlocker['options'];
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
+      entities?: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    },
+  ) => PendingActionSetResult;
   completePendingAction: (actionId: string) => void;
   resumeCodingTask: CodingTaskResumer;
   onMessage: OnMessageFn;
@@ -544,10 +607,49 @@ async function handleCodeSessionDetach(input: {
   };
 }
 
-async function handleCodeSessionCreate(input: {
+async function handleCodeSessionDelete(input: {
   executeDirectCodeSessionTool: CodeSessionToolExecutor;
   message: UserMessage;
   ctx: AgentContext;
+  target: string;
+}): Promise<CodeSessionResponse> {
+  if (!input.target.trim()) {
+    return handleCodeSessionDetach(input);
+  }
+  const result = await input.executeDirectCodeSessionTool(
+    'code_session_delete',
+    { sessionId: input.target },
+    input.message,
+    input.ctx,
+  );
+  if (!toBoolean(result.success)) {
+    const failure = toString(result.error)
+      || toString(result.message)
+      || `No coding workspace matched "${input.target}".`;
+    return { content: failure };
+  }
+  const session = isRecord(result.output) && isRecord(result.output.session)
+    ? result.output.session
+    : null;
+  const title = session ? toString(session.title) : input.target;
+  return {
+    content: `Deleted coding session "${title}".`,
+    metadata: {
+      codeSessionFocusChanged: true,
+      codeSessionDeleted: true,
+      ...(session && toString(session.id) ? { codeSessionId: toString(session.id) } : {}),
+    },
+  };
+}
+
+async function handleCodeSessionCreate(input: {
+  executeDirectCodeSessionTool: CodeSessionToolExecutor;
+  getApprovalSummaries?: CodeSessionControlDeps['getApprovalSummaries'];
+  setChatContinuationGraphPendingApprovalActionForRequest?: CodeSessionControlDeps['setChatContinuationGraphPendingApprovalActionForRequest'];
+  setClarificationPendingAction?: CodeSessionControlDeps['setClarificationPendingAction'];
+  message: UserMessage;
+  ctx: AgentContext;
+  decision?: IntentGatewayDecision;
   target: string;
 }): Promise<CodeSessionResponse> {
   if (!input.target.trim()) {
@@ -555,15 +657,31 @@ async function handleCodeSessionCreate(input: {
   }
   const parts = input.target.split('|').map((part) => part.trim());
   const workspaceRoot = parts[0];
-  const title = parts[1] || undefined;
+  const title = parts[1] || inferCodeSessionTitleFromWorkspaceRoot(workspaceRoot);
   const result = await input.executeDirectCodeSessionTool(
     'code_session_create',
-    { workspaceRoot, ...(title ? { title } : {}), attach: true },
+    { workspaceRoot, title, attach: true },
     input.message,
     input.ctx,
   );
   if (!toBoolean(result.success)) {
     const failure = toString(result.error) || toString(result.message) || `Could not create coding session for "${input.target}".`;
+    if (isCodeSessionLimitFailure(failure)) {
+      return formatCodeSessionLimitCreateFailure({
+        ...input,
+        failure,
+        workspaceRoot,
+        title,
+      });
+    }
+    if (isAllowedPathFailure(failure)) {
+      return requestAllowedPathApprovalForCodeSessionCreate({
+        ...input,
+        workspaceRoot,
+        title,
+        failure,
+      });
+    }
     return { content: failure };
   }
   const session = isRecord(result.output) && isRecord(result.output.session)
@@ -583,6 +701,285 @@ async function handleCodeSessionCreate(input: {
       codeSessionFocusChanged: true,
     },
   };
+}
+
+async function requestAllowedPathApprovalForCodeSessionCreate(input: {
+  executeDirectCodeSessionTool: CodeSessionToolExecutor;
+  getApprovalSummaries?: CodeSessionControlDeps['getApprovalSummaries'];
+  setChatContinuationGraphPendingApprovalActionForRequest?: CodeSessionControlDeps['setChatContinuationGraphPendingApprovalActionForRequest'];
+  setClarificationPendingAction?: CodeSessionControlDeps['setClarificationPendingAction'];
+  message: UserMessage;
+  ctx: AgentContext;
+  decision?: IntentGatewayDecision;
+  workspaceRoot: string;
+  title: string;
+  failure: string;
+}): Promise<CodeSessionResponse> {
+  const policyResult = await input.executeDirectCodeSessionTool(
+    'update_tool_policy',
+    { action: 'add_path', value: input.workspaceRoot },
+    input.message,
+    input.ctx,
+  );
+  const status = toString(policyResult.status);
+  if (status === 'pending_approval') {
+    const approvalId = toString(policyResult.approvalId);
+    const pendingIds = approvalId ? [approvalId] : [];
+    const prompt = [
+      `I need approval to add ${input.workspaceRoot} to allowed paths before creating this coding session.`,
+      'Once approved, I will create and attach:',
+      `- ${input.title} — ${input.workspaceRoot}`,
+    ].join('\n');
+    const summaries = pendingIds.length > 0 ? input.getApprovalSummaries?.(pendingIds) : undefined;
+    const pendingActionResult = input.setChatContinuationGraphPendingApprovalActionForRequest
+      ? input.setChatContinuationGraphPendingApprovalActionForRequest(
+        `${input.message.userId}:${input.message.channel}`,
+        input.message.surfaceId,
+        {
+          prompt,
+          approvalIds: pendingIds,
+          approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+          originalUserContent: input.message.content,
+          route: input.decision?.route ?? 'coding_session_control',
+          operation: input.decision?.operation ?? 'create',
+          summary: input.decision?.summary ?? `Create coding session "${input.title}".`,
+          turnRelation: input.decision?.turnRelation ?? 'new_request',
+          resolution: input.decision?.resolution ?? 'ready',
+          missingFields: input.decision?.missingFields,
+          provenance: input.decision?.provenance,
+          entities: {
+            ...(input.decision?.entities ? { ...input.decision.entities } : {}),
+            path: input.workspaceRoot,
+            sessionTarget: input.title,
+            codeSessionResource: 'sessions',
+          },
+          continuation: {
+            type: CHAT_CONTINUATION_TYPE_CODE_SESSION_CREATE,
+            workspaceRoot: input.workspaceRoot,
+            title: input.title,
+            attach: true,
+            originalUserContent: input.message.content,
+            ...(input.message.principalId ? { principalId: input.message.principalId } : {}),
+            ...(input.message.principalRole ? { principalRole: input.message.principalRole } : {}),
+          },
+        },
+      )
+      : { action: null as PendingActionRecord | null };
+    return {
+      content: pendingActionResult.collisionPrompt ?? prompt,
+      metadata: {
+        ...(pendingActionResult.action ? { pendingAction: toPendingActionClientMetadata(pendingActionResult.action) } : {}),
+      },
+    };
+  }
+  if (toBoolean(policyResult.success)) {
+    return handleCodeSessionCreate({
+      executeDirectCodeSessionTool: input.executeDirectCodeSessionTool,
+      getApprovalSummaries: input.getApprovalSummaries,
+      setChatContinuationGraphPendingApprovalActionForRequest: input.setChatContinuationGraphPendingApprovalActionForRequest,
+      setClarificationPendingAction: input.setClarificationPendingAction,
+      message: input.message,
+      ctx: input.ctx,
+      decision: input.decision,
+      target: [input.workspaceRoot, input.title].join('|'),
+    });
+  }
+  const policyFailure = toString(policyResult.error)
+    || toString(policyResult.message)
+    || 'I could not request approval to add this workspace to allowed paths.';
+  return {
+    content: `${input.failure}\n\nI also could not request an allowed-path approval: ${policyFailure}`,
+  };
+}
+
+function isAllowedPathFailure(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return normalized.includes('outside allowed paths')
+    || normalized.includes('outside the authorized workspace root')
+    || normalized.includes('outside the authorized workspace');
+}
+
+async function formatCodeSessionLimitCreateFailure(input: {
+  executeDirectCodeSessionTool: CodeSessionToolExecutor;
+  setClarificationPendingAction?: CodeSessionControlDeps['setClarificationPendingAction'];
+  message: UserMessage;
+  ctx: AgentContext;
+  decision?: IntentGatewayDecision;
+  failure: string;
+  workspaceRoot: string;
+  title: string;
+}): Promise<CodeSessionResponse> {
+  const listResult = await input.executeDirectCodeSessionTool('code_session_list', { limit: 20 }, input.message, input.ctx);
+  if (!toBoolean(listResult.success)) {
+    return { content: input.failure };
+  }
+  const sessions = isRecord(listResult.output) && Array.isArray(listResult.output.sessions)
+    ? listResult.output.sessions.filter((session) => isRecord(session))
+    : [];
+  const existingSession = findExistingSessionForCreateRequest(sessions, input.workspaceRoot, input.title);
+  if (existingSession) {
+    return attachExistingSessionForCreateRequest({
+      executeDirectCodeSessionTool: input.executeDirectCodeSessionTool,
+      message: input.message,
+      ctx: input.ctx,
+      session: existingSession,
+    });
+  }
+  const lines = [input.failure];
+  if (sessions.length > 0) {
+    lines.push('');
+    lines.push('Available coding workspaces:');
+    for (const session of sessions) {
+      lines.push(formatDirectCodeSessionLine(session, false));
+    }
+    lines.push('');
+    lines.push(`Which session should I remove to make room for "${input.title}"?`);
+  }
+  const content = lines.join('\n');
+  const options = sessions
+    .map((session) => {
+      const title = toString(session.title).trim();
+      const id = toString(session.id).trim();
+      const value = title || id;
+      if (!value) return null;
+      const workspaceRoot = toString(session.resolvedRoot).trim()
+        || toString(session.workspaceRoot).trim();
+      return {
+        value,
+        label: title || id,
+        ...(workspaceRoot ? { description: workspaceRoot } : {}),
+      };
+    })
+    .filter((option): option is NonNullable<typeof option> => !!option);
+  const pendingActionResult = input.setClarificationPendingAction
+    ? input.setClarificationPendingAction(
+      input.message.userId,
+      input.message.channel,
+      input.message.surfaceId,
+      {
+        blockerKind: 'clarification',
+        field: 'session_target',
+        prompt: content,
+        originalUserContent: input.message.content,
+        route: 'coding_session_control',
+        operation: 'delete',
+        summary: `Remove a coding session to make room for "${input.title}".`,
+        turnRelation: 'new_request',
+        resolution: 'needs_clarification',
+        missingFields: ['session_target'],
+        provenance: input.decision?.provenance,
+        entities: {
+          ...(input.decision?.entities ? { ...input.decision.entities } : {}),
+          path: input.workspaceRoot,
+          query: input.title,
+          codeSessionResource: 'session',
+        },
+        ...(options.length > 0 ? { options } : {}),
+        metadata: {
+          continuationKind: 'code_session_create_after_delete',
+        },
+      },
+    )
+    : { action: null as PendingActionRecord | null };
+  const metadata = {
+    ...(pendingActionResult.action ? { pendingAction: toPendingActionClientMetadata(pendingActionResult.action) } : {}),
+  };
+  return {
+    content: pendingActionResult.collisionPrompt ?? content,
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
+}
+
+async function attachExistingSessionForCreateRequest(input: {
+  executeDirectCodeSessionTool: CodeSessionToolExecutor;
+  message: UserMessage;
+  ctx: AgentContext;
+  session: Record<string, unknown>;
+}): Promise<CodeSessionResponse> {
+  const sessionTarget = toString(input.session.id).trim()
+    || toString(input.session.title).trim();
+  if (!sessionTarget) {
+    return {
+      content: `A matching coding session already exists:\n${formatDirectCodeSessionLine(input.session, true)}`,
+      metadata: {
+        codeSessionFocusChanged: true,
+      },
+    };
+  }
+  const attachResult = await input.executeDirectCodeSessionTool(
+    'code_session_attach',
+    { sessionId: sessionTarget },
+    input.message,
+    input.ctx,
+  );
+  if (!toBoolean(attachResult.success)) {
+    const failure = toString(attachResult.error)
+      || toString(attachResult.message)
+      || `A matching coding session already exists, but I could not attach to "${sessionTarget}".`;
+    return { content: failure };
+  }
+  const attachedSession = isRecord(attachResult.output) && isRecord(attachResult.output.session)
+    ? attachResult.output.session
+    : input.session;
+  const sessionId = toString(attachedSession.id).trim() || sessionTarget;
+  return {
+    content: `This coding session already exists, so I attached to it:\n${formatDirectCodeSessionLine(attachedSession, true)}`,
+    metadata: {
+      codeSessionResolved: true,
+      codeSessionId: sessionId,
+      codeSessionFocusChanged: true,
+    },
+  };
+}
+
+function findExistingSessionForCreateRequest(
+  sessions: Record<string, unknown>[],
+  workspaceRoot: string,
+  title: string,
+): Record<string, unknown> | null {
+  const requestedWorkspaceRoot = normalizeCodeSessionWorkspaceMatchValue(workspaceRoot);
+  if (requestedWorkspaceRoot) {
+    return sessions.find((session) => {
+      const sessionWorkspaceRoot = normalizeCodeSessionWorkspaceMatchValue(
+        toString(session.resolvedRoot).trim() || toString(session.workspaceRoot).trim(),
+      );
+      return sessionWorkspaceRoot === requestedWorkspaceRoot;
+    }) ?? null;
+  }
+
+  const requestedTitle = normalizeCodeSessionTitleMatchValue(title);
+  if (!requestedTitle) {
+    return null;
+  }
+  return sessions.find((session) => normalizeCodeSessionTitleMatchValue(toString(session.title)) === requestedTitle)
+    ?? null;
+}
+
+function normalizeCodeSessionWorkspaceMatchValue(value: string): string {
+  return value
+    .trim()
+    .replace(/\//g, '\\')
+    .replace(/[\\]+$/g, '')
+    .toLowerCase();
+}
+
+function normalizeCodeSessionTitleMatchValue(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function isCodeSessionLimitFailure(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return normalized.includes('coding workspace portfolio capped')
+    || normalized.includes('code_session_limit_reached')
+    || normalized.includes('remove a session before adding another');
+}
+
+function inferCodeSessionTitleFromWorkspaceRoot(workspaceRoot: string): string {
+  const segments = workspaceRoot.split(/[\\/]+/).map((part) => part.trim()).filter(Boolean);
+  return segments[segments.length - 1] || 'Coding Session';
 }
 
 export async function handleCodeSessionAttach(input: {
@@ -700,7 +1097,26 @@ export async function tryDirectCodeSessionControlFromGateway(
     return handleCodeSessionCurrent(input);
   }
   if (operation === 'delete') {
-    return handleCodeSessionDetach(input);
+    const target = input.decision.entities.sessionTarget || input.decision.entities.query || '';
+    const deleteResponse = await handleCodeSessionDelete({
+      ...input,
+      target,
+    });
+    const continuationTarget = buildCreateAfterDeleteTarget(input.decision);
+    if (continuationTarget && deleteResponse.metadata?.codeSessionDeleted) {
+      const createResponse = await handleCodeSessionCreate({
+        ...input,
+        target: continuationTarget,
+      });
+      return {
+        content: `${deleteResponse.content}\n\n${createResponse.content}`,
+        metadata: {
+          ...deleteResponse.metadata,
+          ...(createResponse.metadata ?? {}),
+        },
+      };
+    }
+    return deleteResponse;
   }
   if (operation === 'update') {
     let target = input.decision.entities.sessionTarget || input.decision.entities.query || '';
@@ -719,7 +1135,11 @@ export async function tryDirectCodeSessionControlFromGateway(
     });
   }
   if (operation === 'create') {
-    let target = input.decision.entities.sessionTarget || input.decision.entities.path || input.decision.entities.query || '';
+    const title = input.decision.entities.sessionTarget?.trim() || '';
+    const path = input.decision.entities.path?.trim() || '';
+    let target = path
+      ? [path, title].filter(Boolean).join('|')
+      : title || input.decision.entities.query || '';
     if (!target.trim()) {
       const match = input.message.content.match(/\b(?:create|new|start)\s+(?:coding\s+)?(?:workspace|session)\s+(?:for|in|at)\s+(.*)/i);
       if (match?.[1]) {
@@ -736,6 +1156,18 @@ export async function tryDirectCodeSessionControlFromGateway(
   }
 
   return handleCodeSessionList(input);
+}
+
+function buildCreateAfterDeleteTarget(decision: IntentGatewayDecision): string | undefined {
+  if (decision.turnRelation !== 'clarification_answer') {
+    return undefined;
+  }
+  const path = decision.entities.path?.trim();
+  if (!path) {
+    return undefined;
+  }
+  const title = decision.entities.query?.trim() || '';
+  return [path, title].filter(Boolean).join('|');
 }
 
 function isManagedSandboxStatusDecision(decision: IntentGatewayDecision): boolean {

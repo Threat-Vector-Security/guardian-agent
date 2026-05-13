@@ -270,6 +270,73 @@ describe('direct coding backend delegation', () => {
     expect(response?.content).toContain('Duration: 11ms');
   });
 
+  it('routes explicit coding backend resume requests through resumeLatest', async () => {
+    const executeModelTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        success: true,
+        sessionId: 'cb-2',
+        backendId: 'codex-sdk',
+        backendName: 'Codex SDK',
+        sdkThreadId: 'thread-test',
+        resumedFromSessionId: 'cb-1',
+        assistantResponse: 'Resumed and finished the SDK work.',
+        durationMs: 35,
+      },
+    }));
+
+    const response = await tryDirectCodingBackendDelegation(
+      {
+        message: makeMessage('Continue the latest timed-out Codex SDK run.'),
+        ctx: TEST_CONTEXT,
+        userKey: 'user-1:web',
+        decision: makeDecision({
+          operation: 'update',
+          turnRelation: 'follow_up',
+          entities: {
+            codingBackend: 'codex-sdk',
+            codingBackendResumeRequested: true,
+          },
+        }),
+        codeContext: {
+          sessionId: 'code-1',
+          workspaceRoot: 'S:/Development/GuardianAgent',
+        },
+      },
+      makeDeps({
+        tools: {
+          isEnabled: () => true,
+          executeModelTool,
+          getApprovalSummaries: () => new Map(),
+        } as DirectCodingBackendDeps['tools'],
+      }),
+    );
+
+    expect(executeModelTool).toHaveBeenCalledWith(
+      'coding_backend_run',
+      {
+        task: 'Continue the latest timed-out Codex SDK run.',
+        backend: 'codex-sdk',
+        resumeLatest: true,
+      },
+      expect.objectContaining({
+        codeContext: {
+          sessionId: 'code-1',
+          workspaceRoot: 'S:/Development/GuardianAgent',
+        },
+      }),
+    );
+    expect(response?.content).toBe('Resumed and finished the SDK work.');
+    expect(response?.metadata).toMatchObject({
+      codingBackendDelegated: true,
+      codingBackendId: 'codex-sdk',
+      codingBackendResumeRequested: true,
+      codingBackendSessionId: 'cb-2',
+      codingBackendSdkThreadId: 'thread-test',
+    });
+  });
+
   it('stores pending coding backend approvals as shared pending actions', async () => {
     let capturedPendingActionInput: Record<string, unknown> | null = null;
     const setPendingApprovals = vi.fn();
@@ -313,11 +380,7 @@ describe('direct coding backend delegation', () => {
       }),
     );
 
-    expect(setPendingApprovals).toHaveBeenCalledWith(
-      'user-1:web',
-      ['approval-1'],
-      'web-guardian-chat',
-    );
+    expect(setPendingApprovals).not.toHaveBeenCalled();
     expect(capturedPendingActionInput).toMatchObject({
       approvalIds: ['approval-1'],
       originalUserContent: 'Ask Codex to make the architecture change.',

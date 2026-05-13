@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { CLIChannel } from '../channels/cli.js';
 import { TelegramChannel } from '../channels/telegram.js';
 import { WebChannel, type WebAuthRuntimeConfig } from '../channels/web.js';
-import type { DashboardCallbacks } from '../channels/web-types.js';
-import type { GuardianAgentConfig } from '../config/types.js';
+import type { CodingBackendTerminalControl, DashboardCallbacks } from '../channels/web-types.js';
+import type { CodingBackendsConfig, GuardianAgentConfig } from '../config/types.js';
 import { CodingBackendService } from '../runtime/coding-backend-service.js';
+import { applyCodingBackendEnvironmentDefaults } from '../runtime/coding-backend-presets.js';
 import type {
   IncomingDispatchMessage,
   PrepareIncomingDispatch,
@@ -79,6 +80,37 @@ function upsertChannelStop(
   channels.push({ name, stop });
 }
 
+function createUnavailableCodingBackendTerminalControl(): CodingBackendTerminalControl {
+  return {
+    async openTerminal(): Promise<{ terminalId: string }> {
+      throw new Error(
+        'Coding backend terminal control is unavailable because the web channel is not running. '
+        + 'Codex SDK can still run without terminal control, but host-started local app servers and terminal CLI backends need the web channel.',
+      );
+    },
+    writeTerminalInput(): void {},
+    closeTerminal(): void {},
+    onTerminalOutput(): () => void {
+      return () => {};
+    },
+    onTerminalExit(): () => void {
+      return () => {};
+    },
+  };
+}
+
+function shouldInstallHeadlessCodingBackendService(config: CodingBackendsConfig): boolean {
+  if (!config.enabled) return false;
+  const defaultBackend = config.defaultBackend
+    ? config.backends.find((backend) => backend.id === config.defaultBackend)
+    : undefined;
+  const candidates = defaultBackend ? [defaultBackend] : config.backends;
+  return candidates.some((backend) => backend.enabled && (
+    backend.adapterKind === 'codex_sdk'
+    || backend.id === 'codex-sdk'
+  ));
+}
+
 export async function startBootstrapChannels(args: {
   config: GuardianAgentConfig;
   configRef: { current: GuardianAgentConfig };
@@ -102,6 +134,7 @@ export async function startBootstrapChannels(args: {
   staticDir: string;
   codingBackendServiceRef: { current: CodingBackendService | null };
   codingBackendsDefaultConfig: NonNullable<GuardianAgentConfig['assistant']['tools']['codingBackends']>;
+  codingBackendRecentSessionsPath?: string;
   toolExecutor: { getRuntimeNotices: () => Array<{ message: string }>; setCodingBackendService: (service: CodingBackendService | undefined) => void };
   listAgents: () => Array<{
     id: string;
@@ -141,6 +174,18 @@ export async function startBootstrapChannels(args: {
     ?? ((options) => new CodingBackendService(options));
   const resolveConfiguredAgentId = args.resolveConfiguredAgentId
     ?? ((agentId?: string) => (typeof agentId === 'string' && agentId.trim() ? agentId.trim() : undefined));
+  const resolveCodingBackendConfig = (): CodingBackendsConfig => applyCodingBackendEnvironmentDefaults(
+    args.configRef.current.assistant.tools.codingBackends ?? args.codingBackendsDefaultConfig,
+  );
+  const installCodingBackendService = (terminalControl: CodingBackendTerminalControl): void => {
+    args.codingBackendServiceRef.current?.dispose();
+    args.codingBackendServiceRef.current = createCodingBackendService({
+      config: resolveCodingBackendConfig(),
+      terminalControl,
+      ...(args.codingBackendRecentSessionsPath ? { recentSessionsPath: args.codingBackendRecentSessionsPath } : {}),
+    });
+    args.toolExecutor.setCodingBackendService(args.codingBackendServiceRef.current);
+  };
 
   const canStartInteractiveCli = !!args.stdinIsTTY && !!args.stdoutIsTTY;
   if (args.config.channels.cli?.enabled && canStartInteractiveCli) {
@@ -262,6 +307,14 @@ export async function startBootstrapChannels(args: {
     }
   };
 
+  const bootstrapCodingBackendConfig = resolveCodingBackendConfig();
+  if (shouldInstallHeadlessCodingBackendService(bootstrapCodingBackendConfig)) {
+    installCodingBackendService(createUnavailableCodingBackendTerminalControl());
+    args.log.info({
+      defaultBackend: bootstrapCodingBackendConfig.defaultBackend,
+    }, 'Coding backend service enabled for headless channels');
+  }
+
   try {
     await startTelegram();
   } catch (err) {
@@ -331,11 +384,7 @@ export async function startBootstrapChannels(args: {
       staticDir: args.staticDir,
       dashboard: args.dashboardCallbacks,
     });
-    args.codingBackendServiceRef.current = createCodingBackendService({
-      config: args.configRef.current.assistant.tools.codingBackends ?? args.codingBackendsDefaultConfig,
-      terminalControl: web.getCodingBackendTerminalControl(),
-    });
-    args.toolExecutor.setCodingBackendService(args.codingBackendServiceRef.current);
+    installCodingBackendService(web.getCodingBackendTerminalControl());
     webChannel = web;
     await web.start(createChannelDispatchHandler({
       channelDefault: webDefaultAgent,

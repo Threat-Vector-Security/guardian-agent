@@ -76,11 +76,20 @@ export function inferExplicitCodingBackendRequest(
 export function inferRequestedCodingBackend(normalized: string): string | undefined {
   if (!normalized) return undefined;
   if (
+    isNegatedCodingBackendMention(normalized, '(?:openai\\s+)?codex\\s+sdk(?:\\s+(?:coding assistant|assistant))?')
+  ) {
+    return undefined;
+  }
+  if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to|continue|resume|retry|rerun|finish)\s+(?:the\s+|latest\s+)?(?:openai\s+)?codex\s+sdk(?:\s+(?:run|task|thread|job|work|coding assistant|assistant))?\b/.test(normalized)
+    || /\b(?:openai\s+)?codex\s+sdk\s+(?:run|task|thread|job|work)\b/.test(normalized)) {
+    return 'codex-sdk';
+  }
+  if (
     isNegatedCodingBackendMention(normalized, '(?:openai\\s+)?codex(?:\\s+(?:cli|coding assistant|assistant))?')
   ) {
     return undefined;
   }
-  if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?(?:openai\s+)?codex(?:\s+(?:cli|coding assistant|assistant))?\b/.test(normalized)) {
+  if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to|continue|resume|retry|rerun|finish)\s+(?:the\s+|latest\s+)?(?:openai\s+)?codex(?:\s+(?:cli|run|task|thread|job|work|coding assistant|assistant))?\b/.test(normalized)) {
     return 'codex';
   }
   if (
@@ -121,33 +130,51 @@ export function inferExplicitCodingBackendOperation(
   normalized: string,
 ): IntentGatewayOperation | null {
   if (!normalized) return null;
-  if (/\b(?:create|add|make|write|implement|build|generate)\b/.test(normalized)) {
-    return 'create';
-  }
-  if (/\b(?:update|edit|change|modify|fix|refactor|rename|patch)\b/.test(normalized)) {
-    return 'update';
-  }
-  if (/\b(?:delete|remove)\b/.test(normalized)) {
-    return 'delete';
-  }
-  if (/\b(?:search|find|grep|rg)\b/.test(normalized)) {
-    return 'search';
-  }
+  const positiveNormalized = stripNegatedCodingBackendMutationClauses(normalized);
+  const readOnlyRequested = positiveNormalized !== normalized
+    || /\b(?:read[\s-]*only|no\s+(?:editing|modifications?|changes?|writes?))\b/.test(normalized);
   if (
-    /\b(?:inspect|review|audit|analy[sz]e|check|evaluate|debug|investigate|explain|plan)\b/.test(normalized)
-    || /\blook\s+at\b/.test(normalized)
+    readOnlyRequested
+    && /\b(?:inspect|review|audit|analy[sz]e|check|evaluate|debug|investigate|explain|plan|design|assumptions?|phases?)\b/.test(positiveNormalized)
   ) {
     return 'inspect';
   }
-  if (/\b(?:read|show|open)\b/.test(normalized)) {
+  if (/\b(?:create|add|make|write|implement|build|generate)\b/.test(positiveNormalized)) {
+    return 'create';
+  }
+  if (/\b(?:update|edit|change|modify|fix|refactor|rename|patch)\b/.test(positiveNormalized)) {
+    return 'update';
+  }
+  if (/\b(?:delete|remove)\b/.test(positiveNormalized)) {
+    return 'delete';
+  }
+  if (/\b(?:search|find|grep|rg)\b/.test(positiveNormalized)) {
+    return 'search';
+  }
+  if (
+    /\b(?:inspect|review|audit|analy[sz]e|check|evaluate|debug|investigate|explain|plan)\b/.test(positiveNormalized)
+    || /\blook\s+at\b/.test(positiveNormalized)
+  ) {
+    return 'inspect';
+  }
+  if (/\b(?:read|show|open)\b/.test(positiveNormalized)) {
     return 'read';
   }
   return 'run';
 }
 
+function stripNegatedCodingBackendMutationClauses(normalized: string): string {
+  return normalized
+    .replace(/\b(?:do\s+not|don't|dont|never)\s+(?:create|update|archive|save|delete|remove|write|change|edit|modify)\b[^.!?\n]*/g, ' ')
+    .replace(/\bwithout\s+(?:creating|updating|archiving|saving|deleting|removing|writing|changing|editing|modifying)\b[^.!?\n]*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function extractCodingWorkspaceTarget(rawContent: string): string | undefined {
   if (!rawContent) return undefined;
   const patterns = [
+    /\b(?:delete|remove)\s+(?:the\s+)?(.+?)\s+(?:coding workspace|coding session|workspace|session)\b/i,
     /\b(?:switch|attach|use|change\s+to|connect)\s+(?:this\s+chat\s+)?(?:to\s+)?(?:the\s+)?(?:coding\s+)?(?:workspace|session)\s+(?:for|named|called)\s+(.+?)$/i,
     /\b(?:in|within)\s+(?:the\s+)?(.+?)\s+(?:coding workspace|coding session|workspace|session|repo(?:sitory)?|project)\b/i,
     /\b(?:for|against)\s+(?:the\s+)?(.+?)\s+(?:coding workspace|coding session|workspace|session|repo(?:sitory)?|project)\b/i,
@@ -169,10 +196,16 @@ export function inferCodeSessionControlOperation(
   if (isManagedSandboxStatusInspectionRequest(normalized, normalized)) {
     return 'inspect';
   }
+  if (
+    /\b(?:create|start)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:coding\s+)?session\b/.test(normalized)
+    || /\bnew\s+(?:coding\s+)?session\b/.test(normalized)
+  ) {
+    return 'create';
+  }
   if (/\b(?:switch|attach|use|change\s+to|connect)\b/.test(normalized)) {
     return 'update';
   }
-  if (/\b(?:detach|disconnect|leave)\b/.test(normalized)) {
+  if (/\b(?:detach|disconnect|leave|delete|remove)\b/.test(normalized)) {
     return 'delete';
   }
   if (/\b(?:create|new|start)\b/.test(normalized)) {

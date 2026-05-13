@@ -1082,6 +1082,8 @@ export interface DashboardCodingBackendInfo {
   configured: boolean;
   preset: boolean;
   enabled: boolean;
+  adapterKind?: 'terminal_cli' | 'codex_sdk';
+  executionHost?: 'auto' | 'windows' | 'wsl' | 'linux' | 'macos';
   shell?: string;
   command: string;
   args: string[];
@@ -1107,6 +1109,10 @@ export interface DashboardCodingBackendSession {
   completedAt?: number;
   exitCode?: number;
   durationMs?: number;
+  sdkThreadId?: string;
+  resumedFromSessionId?: string;
+  resumedFromThreadId?: string;
+  resumable?: boolean;
 }
 
 export interface ScheduledTaskHistoryStep {
@@ -2281,6 +2287,8 @@ export interface ConfigUpdate {
           id: string;
           name: string;
           enabled?: boolean;
+          adapterKind?: 'terminal_cli' | 'codex_sdk';
+          executionHost?: 'auto' | 'windows' | 'wsl' | 'linux' | 'macos';
           shell?: string;
           command: string;
           args: string[];

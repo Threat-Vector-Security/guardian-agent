@@ -805,6 +805,12 @@ Write-Host ""
 # This script already completed a TypeScript build, so using dist avoids
 # tsx-specific Windows process quirks and makes startup failures easier to spot.
 $env:NODE_NO_WARNINGS = "1"
+if (-not $env:GUARDIAN_CODEX_HOST) {
+    $env:GUARDIAN_CODEX_HOST = "windows"
+}
+if (-not $env:GUARDIAN_CODEX_BACKEND) {
+    $env:GUARDIAN_CODEX_BACKEND = "codex-sdk"
+}
 $entryPoint = Join-Path $Root "dist\index.js"
 if (-not (Test-Path $entryPoint)) {
     throw "Built entry point not found: $entryPoint"

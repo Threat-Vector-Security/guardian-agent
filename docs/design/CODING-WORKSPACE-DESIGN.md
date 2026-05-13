@@ -531,9 +531,15 @@ Guardian also supports optional external coding backends for bounded delegation 
 As built:
 
 - the runtime exposes `coding_backend_list`, `coding_backend_run`, and `coding_backend_status`
+- Codex can be configured through either the terminal CLI backend (`codex`) or the SDK-backed backend (`codex-sdk`); startup may select the host profile with `GUARDIAN_CODEX_HOST` and default backend with `GUARDIAN_CODEX_BACKEND`
 - delegation is opt-in and should only happen when the user explicitly asks to use an external coding tool such as Claude Code, Codex, Gemini CLI, or Aider
 - mentioning Codex or another backend as the subject of a question should not relaunch it by itself; explanation or investigation questions about backend-produced artifacts should stay on the normal Guardian chat path unless the user explicitly asks Guardian to use that backend
-- backend launches are tied to the current coding session and open a visible terminal tab so the operator can observe progress
+- backend launches are tied to the current coding session; terminal CLI backends open a visible terminal tab, while SDK backends can run headlessly and report progress through the shared run timeline
+- Codex SDK uses a project-driver model inside each coding session: Guardian stores the active SDK thread id, project objective, last checkpoint, recent changed files, verification, and local-server handoff state for the session
+- after a successful Codex SDK turn, later Codex SDK tasks in the same coding session resume the active SDK thread by default instead of starting from an unrelated blank worker
+- "continue the latest Codex SDK run" first resumes the active project-driver thread, then falls back to a recent timed-out or failed SDK thread if no active project thread is available
+- Guardian wraps each SDK turn with the current project objective and checkpoint so remote channels can drive natural phases such as design, implementation, test, review, and handoff without putting all of that complexity into the Intent Gateway
+- the Intent Gateway still owns only the coarse `coding_task` route and backend selection; Codex project-driver state, active-thread resolution, and checkpoint updates live in the coding backend runtime
 - approval copy for delegated backend runs names the active coding workspace before launch so the operator can verify the target repo
 - if a delegated coding request explicitly names a different saved coding workspace than the current attachment, Guardian should auto-switch that chat surface to the requested workspace before running the task there
 - if the requested coding workspace is ambiguous or cannot be matched, Guardian should stop instead of silently writing into the wrong repo
@@ -542,12 +548,24 @@ As built:
 - switching the focused coding workspace should not fork or clear the visible Guardian chat transcript on that surface; the transcript belongs to the chat surface and the coding workspace is attached execution context inside it
 - trace- and run-driven workbench deep links may open a different session for inspection and may land on an exact session-local timeline event, but they must not silently retarget the attached Guardian chat session
 - the web config surface for this lives at `Configuration > Integrations > Coding Assistants`
-- that config panel now shows a fixed built-in list of Claude Code, Codex, Gemini CLI, and Aider rather than a preset add/remove editor
+- that config panel now shows a fixed built-in list of Claude Code, Codex SDK, Codex CLI, Gemini CLI, and Aider rather than a preset add/remove editor
 - each built-in backend row supports `Enable` / `Disable` plus `Set Default`
 - the same panel owns orchestration enablement, max concurrent delegated runs, version-check interval, and auto-update controls
 - custom non-built-in backends may still exist in saved config, but the simplified web panel preserves them without exposing direct editing
 
 This keeps Guardian in control of approvals, audit, routing, and verification while still allowing explicit delegation to terminal-first coding agents when the operator wants that path.
+
+### Codex SDK Host Handoff
+
+Codex SDK workers own repo deliverables and worker-side verification. When an SDK worker returns a `localServer` handoff, Guardian may perform a host follow-up by starting the one-line command in a Guardian-owned terminal and probing the returned loopback health URL.
+
+Host follow-up status is tracked separately from SDK task status:
+
+- SDK task status records whether the Codex SDK turn completed, failed, blocked, or timed out
+- worker verification records what the SDK worker proved inside the target workspace
+- host follow-up records whether Guardian could keep a persistent local server reachable after the SDK turn
+
+A failed host follow-up does not rewrite a completed SDK turn into a failed SDK run. The final response must say that the worker completed and that the URL is not currently verified/live until the host start succeeds.
 
 ## Delegated Coding Verification
 

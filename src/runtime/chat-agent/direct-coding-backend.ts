@@ -122,6 +122,7 @@ export async function tryDirectCodingBackendDelegation(
   const { userId: pendingUserId, channel: pendingChannel } = deps.parsePendingActionUserKey(input.userKey);
   const backendId = normalizeCodingBackendSelection(decision.entities.codingBackend);
   const isCodingRunStatusCheck = decision.entities.codingRunStatusCheck === true;
+  const isCodingRunResume = decision.entities.codingBackendResumeRequested === true;
   let effectiveCodeContext = input.codeContext ? { ...input.codeContext } : undefined;
   let currentSessionRecord = effectiveCodeContext?.sessionId
     ? deps.codeSessionStore?.getSession(effectiveCodeContext.sessionId, input.message.userId?.trim())
@@ -145,7 +146,7 @@ export async function tryDirectCodingBackendDelegation(
     switchResponsePrefix = explicitWorkspaceTarget.switchResponse.content;
     switchResponseMetadata = explicitWorkspaceTarget.switchResponse.metadata;
   }
-  if (!backendId && !isCodingRunStatusCheck) return null;
+  if (!backendId && !isCodingRunStatusCheck && !isCodingRunResume) return null;
 
   if (decision.operation === 'inspect' && isCodingRunStatusCheck) {
     return handleCodingBackendStatusCheck({
@@ -182,6 +183,7 @@ export async function tryDirectCodingBackendDelegation(
     decision,
     backendId,
     delegatedTask,
+    resumeLatest: isCodingRunResume,
     effectiveCodeContext,
     currentSessionRecord,
     switchResponsePrefix,
@@ -252,6 +254,9 @@ async function handleCodingBackendStatusCheck(
   const sessions = (isRecord(statusResult.output) && Array.isArray(statusResult.output.sessions)
     ? statusResult.output.sessions
     : []) as Array<Record<string, unknown>>;
+  const codexProjects = (isRecord(statusResult.output) && Array.isArray(statusResult.output.codexProjects)
+    ? statusResult.output.codexProjects
+    : []) as Array<Record<string, unknown>>;
   const matches = sessions
     .filter((session) => !input.backendId || toString(session.backendId) === input.backendId)
     .sort((a, b) => {
@@ -273,6 +278,8 @@ async function handleCodingBackendStatusCheck(
   const task = toString(latest.task);
   const durationMs = toNumber(latest.durationMs);
   const exitCode = toNumber(latest.exitCode);
+  const sdkThreadId = toString(latest.sdkThreadId);
+  const resumable = toBoolean(latest.resumable);
   const statusLabel = status === 'running'
     ? 'is still running'
     : status === 'succeeded'
@@ -284,6 +291,17 @@ async function handleCodingBackendStatusCheck(
   if (task) lines.push(`Task: ${task}`);
   if (durationMs !== null) lines.push(`Duration: ${durationMs}ms`);
   if (exitCode !== null) lines.push(`Exit code: ${exitCode}`);
+  if (sdkThreadId) lines.push(`Codex SDK thread: ${sdkThreadId}`);
+  if (resumable) lines.push('This run can be resumed with the stored Codex SDK thread.');
+  const activeProject = codexProjects.find((project) => !input.backendId || toString(project.backendId) === input.backendId);
+  if (activeProject) {
+    const threadId = toString(activeProject.activeThreadId);
+    const checkpoint = toString(activeProject.lastCheckpoint);
+    lines.push('');
+    lines.push('Active Codex project driver:');
+    if (threadId) lines.push(`Thread: ${threadId}`);
+    if (checkpoint) lines.push(`Checkpoint: ${checkpoint}`);
+  }
   if (status === 'succeeded') {
     lines.push('If you want, I can also inspect the repo diff or recent changes from that run.');
   }
@@ -304,6 +322,7 @@ async function handleCodingBackendRun(
     decision: IntentGatewayDecision;
     backendId?: string;
     delegatedTask: string;
+    resumeLatest?: boolean;
     effectiveCodeContext?: { sessionId?: string; workspaceRoot: string };
     currentSessionRecord: CodeSessionRecord | null | undefined;
     switchResponsePrefix: string;
@@ -321,12 +340,14 @@ async function handleCodingBackendRun(
       workspaceRoot: input.effectiveCodeContext?.workspaceRoot,
     },
   });
+  const toolArgs = {
+    task: input.delegatedTask,
+    ...(input.backendId ? { backend: input.backendId } : {}),
+    ...(input.resumeLatest ? { resumeLatest: true } : {}),
+  };
   const result = await deps.tools!.executeModelTool(
     'coding_backend_run',
-    {
-      task: input.delegatedTask,
-      backend: input.backendId,
-    },
+    toolArgs,
     {
       origin: 'assistant',
       agentId: deps.agentId,
@@ -370,6 +391,10 @@ async function handleCodingBackendRun(
   const metadata: Record<string, unknown> = {
     codingBackendDelegated: true,
     codingBackendId: input.backendId,
+    ...(input.resumeLatest ? { codingBackendResumeRequested: true } : {}),
+    ...(toString(runResult?.sessionId) ? { codingBackendSessionId: toString(runResult?.sessionId) } : {}),
+    ...(toString(runResult?.sdkThreadId) ? { codingBackendSdkThreadId: toString(runResult?.sdkThreadId) } : {}),
+    ...(isRecord(runResult?.codexProject) ? { codingBackendCodexProject: runResult?.codexProject } : {}),
     responseSource: buildCodingBackendResponseSource({
       backendId: input.backendId,
       backendName,
@@ -418,7 +443,6 @@ function buildCodingBackendPendingApprovalResponse(
   if (approvalId) {
     const existingIds = deps.getPendingApprovalIds(input.pendingUserId, input.pendingChannel, input.message.surfaceId);
     pendingIds = [...new Set([...existingIds, approvalId])];
-    deps.setPendingApprovals(input.userKey, pendingIds, input.message.surfaceId);
   } else {
     deps.syncPendingApprovalsFromExecutor(
       input.message.userId,

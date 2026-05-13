@@ -119,6 +119,34 @@ describe('IntentGateway', () => {
     });
   });
 
+  it('uses a content-plan record for Guardian capability questions without calling the model', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: 'Can you access Codex?',
+        channel: 'cli',
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:guardian-capability-question');
+    expect(result.decision).toMatchObject({
+      route: 'general_assistant',
+      operation: 'inspect',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      preferredAnswerPath: 'direct',
+    });
+  });
+
   it('uses a content-plan record for explicit attached code-session workspace mutations', async () => {
     const gateway = new IntentGateway();
     let called = false;
@@ -1470,10 +1498,91 @@ describe('IntentGateway', () => {
     expect(result.decision.executionClass).toBe('repo_grounded');
     expect(result.decision.requiresRepoGrounding).toBe(true);
     expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.entities.codingBackendResumeRequested).toBe(true);
     expect(result.decision.provenance).toMatchObject({
       route: 'repair.continuity',
       operation: 'repair.continuity',
     });
+  });
+
+  it('routes explicit Codex SDK resume requests to the coding backend without model classification', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+
+    const result = await gateway.classify(
+      {
+        content: 'Continue the latest Codex SDK run in the current coding session, finish the interrupted work, verify it, and tell me the URL and what passed.',
+        channel: 'telegram',
+        continuity: {
+          continuityKey: 'telegram:owner',
+          linkedSurfaceCount: 2,
+          focusSummary: 'The chat is attached to Signal Garden SDK Smoke 2.',
+          activeExecutionRefs: ['execution:exec-1', 'code_session:session-1'],
+          activeExecution: {
+            executionId: 'exec-1',
+            status: 'completed',
+            route: 'coding_session_control',
+            operation: 'inspect',
+            summary: 'Show the current coding session.',
+            originalUserContent: 'What coding session is attached?',
+            codeSessionId: 'session-1',
+          },
+        },
+      },
+      async () => {
+        called = true;
+        throw new Error('intent classifier should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.available).toBe(true);
+    expect(result.model).toBe('content-plan');
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.turnRelation).toBe('follow_up');
+    expect(result.decision.executionClass).toBe('repo_grounded');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.entities.codingBackend).toBe('codex-sdk');
+    expect(result.decision.entities.codingBackendRequested).toBe(true);
+    expect(result.decision.entities.codingBackendResumeRequested).toBe(true);
+  });
+
+  it('routes explicit Codex SDK design delegation to the coding backend without model classification', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+
+    const result = await gateway.classify(
+      {
+        content: 'Ask Codex SDK to inspect the current coding workspace and draft a short design for a tiny notes dashboard. Do not edit files yet. Return the design, assumptions, proposed phases, and next recommended step.',
+        channel: 'telegram',
+        continuity: {
+          continuityKey: 'telegram:owner',
+          linkedSurfaceCount: 2,
+          focusSummary: 'The chat is attached to Codex Driver Smoke.',
+          activeExecutionRefs: ['code_session:session-1'],
+        },
+      },
+      async () => {
+        called = true;
+        throw new Error('intent classifier should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.available).toBe(true);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:coding-backend-delegation');
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.executionClass).toBe('repo_grounded');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.entities.codingBackend).toBe('codex-sdk');
+    expect(result.decision.entities.codingBackendRequested).toBe(true);
+    expect(result.decision.entities.codingBackendResumeRequested).toBeUndefined();
   });
 
   it('keeps vague context references as clarification blockers when routing is unavailable', async () => {
@@ -4271,6 +4380,207 @@ describe('IntentGateway', () => {
     expect(result.decision.route).toBe('coding_session_control');
     expect(result.decision.operation).toBe('update');
     expect(result.decision.entities.sessionTarget).toBe('Guardian project');
+  });
+
+  it('routes explicit coding session creation to direct session control without calling the model', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: 'Create a new coding session named Signal Garden Test for S:\\Development\\MyNewPrototype and attach it as the current coding workspace.',
+        channel: 'telegram',
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:code-session-create-control');
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.requiresToolSynthesis).toBe(false);
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+    expect(result.decision.entities.path).toBe('S:\\Development\\MyNewPrototype');
+    expect(result.decision.entities.sessionTarget).toBe('Signal Garden Test');
+  });
+
+  it('repairs classifier drift for explicit coding session creation into direct session control', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Create a new coding session named Signal Garden Test for S:\\Development\\MyNewPrototype and attach it as the current coding workspace.',
+        channel: 'telegram',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'create',
+          summary: 'Create a repo workspace session.',
+          executionClass: 'repo_grounded',
+          preferredAnswerPath: 'tool_loop',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.requiresRepoGrounding).toBe(false);
+    expect(result.decision.entities.path).toBe('S:\\Development\\MyNewPrototype');
+    expect(result.decision.entities.sessionTarget).toBe('Signal Garden Test');
+    expect(result.decision.provenance?.route).toBe('derived.workload');
+  });
+
+  it('uses recent session-limit context to route removal replies to coding session control', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: 'remove pantry planner',
+        channel: 'telegram',
+        recentHistory: [
+          {
+            role: 'user',
+            content: 'Create a new coding session named Signal Garden Test for S:\\Development\\MyNewPrototype and attach it as the current coding workspace.',
+          },
+          {
+            role: 'assistant',
+            content: [
+              'The path `S:\\Development\\MyNewPrototype` was added to allowed paths, but the coding session creation failed — you already have 4 sessions (the maximum):',
+              '1. Pantry Planner — `S:\\Development\\PantryPlanner`',
+              'Which session should I remove to make room for Signal Garden Test?',
+            ].join('\n'),
+          },
+        ],
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:code-session-removal-clarification');
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('delete');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.entities.sessionTarget).toBe('pantry planner');
+    expect(result.decision.entities.path).toBe('S:\\Development\\MyNewPrototype');
+    expect(result.decision.entities.query).toBe('Signal Garden Test');
+  });
+
+  it('uses pending session-limit clarification context to route removal replies to coding session control', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: 'remove signal garden test',
+        channel: 'telegram',
+        pendingAction: {
+          id: 'pending-code-session-cap',
+          status: 'pending',
+          blockerKind: 'clarification',
+          field: 'session_target',
+          route: 'coding_session_control',
+          operation: 'delete',
+          summary: 'Remove a coding session to make room for "Signal Garden SDK Smoke".',
+          resolution: 'needs_clarification',
+          missingFields: ['session_target'],
+          entities: {
+            path: 'S:\\Development\\SignalGardenSdkSmoke',
+            query: 'Signal Garden SDK Smoke',
+            codeSessionResource: 'session',
+          },
+          prompt: [
+            'Guardian keeps the coding workspace portfolio capped at 4 sessions. Remove a session before adding another.',
+            '',
+            'Which session should I remove to make room for "Signal Garden SDK Smoke"?',
+          ].join('\n'),
+          originalRequest: 'Create a new coding session named Signal Garden SDK Smoke for S:\\Development\\SignalGardenSdkSmoke and attach it as the current coding workspace.',
+          transferPolicy: 'linked_surfaces_same_user',
+        },
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:code-session-removal-clarification');
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('delete');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.entities.sessionTarget).toBe('signal garden test');
+    expect(result.decision.entities.path).toBe('S:\\Development\\SignalGardenSdkSmoke');
+    expect(result.decision.entities.query).toBe('Signal Garden SDK Smoke');
+  });
+
+  it('uses pending session-limit options to route pasted workspace rows to coding session control', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: '- Signal Garden SDK Smoke — S:\\Development\\SignalGardenSdkSmoke id=12488284-033e-474d-9f20-4334c72ce0ac',
+        channel: 'telegram',
+        pendingAction: {
+          id: 'pending-code-session-cap',
+          status: 'pending',
+          blockerKind: 'clarification',
+          field: 'session_target',
+          route: 'coding_session_control',
+          operation: 'delete',
+          summary: 'Remove a coding session to make room for "Signal Garden SDK Smoke".',
+          resolution: 'needs_clarification',
+          missingFields: ['session_target'],
+          entities: {
+            path: 'S:\\Development\\SignalGardenSdkSmoke',
+            query: 'Signal Garden SDK Smoke',
+            codeSessionResource: 'session',
+          },
+          options: [
+            {
+              value: 'Signal Garden SDK Smoke',
+              label: 'Signal Garden SDK Smoke',
+              description: 'S:\\Development\\SignalGardenSdkSmoke',
+            },
+            {
+              value: 'Guardian Agent',
+              label: 'Guardian Agent',
+              description: 'S:\\Development\\GuardianAgent',
+            },
+          ],
+          prompt: [
+            'Guardian keeps the coding workspace portfolio capped at 4 sessions. Remove a session before adding another.',
+            '',
+            'Which session should I remove to make room for "Signal Garden SDK Smoke"?',
+          ].join('\n'),
+          originalRequest: 'Create a new coding session named Signal Garden SDK Smoke for S:\\Development\\SignalGardenSdkSmoke and attach it as the current coding workspace.',
+          transferPolicy: 'linked_surfaces_same_user',
+        },
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:code-session-removal-clarification');
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('delete');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.entities.sessionTarget).toBe('Signal Garden SDK Smoke');
+    expect(result.decision.entities.path).toBe('S:\\Development\\SignalGardenSdkSmoke');
+    expect(result.decision.entities.query).toBe('Signal Garden SDK Smoke');
   });
 
   it('classifies current session query as coding_session_control with inspect operation', async () => {

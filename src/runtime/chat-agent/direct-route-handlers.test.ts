@@ -146,6 +146,7 @@ describe('chat direct route handlers', () => {
       setPendingApprovals: vi.fn(),
       syncPendingApprovalsFromExecutor: vi.fn(),
       setPendingApprovalAction: vi.fn(() => ({ action: null })),
+      setClarificationPendingAction: vi.fn(() => ({ action: null })),
       getActivePendingAction: vi.fn(() => null),
       completePendingAction: vi.fn(),
       onMessage: vi.fn(async () => ({ content: 'fallback' })),

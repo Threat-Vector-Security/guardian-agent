@@ -485,6 +485,67 @@ export class ChatAgentOrchestrationState {
     }, nowMs);
   }
 
+  completeExecutionTurn(input: {
+    executionIdentity: ExecutionIdentityMetadata;
+    includeRoot?: boolean;
+    codeSessionId?: string;
+    nowMs?: number;
+  }): void {
+    if (!this.executionStore) return;
+    const executionId = input.executionIdentity.executionId?.trim();
+    if (!executionId) return;
+    const nowMs = input.nowMs ?? Date.now();
+    const record = this.executionStore.get(executionId);
+    this.executionStore.complete(executionId, nowMs);
+    const completedExecutionIds = new Set<string>([executionId]);
+    if (input.includeRoot) {
+      const rootExecutionId = record?.rootExecutionId?.trim()
+        || input.executionIdentity.rootExecutionId?.trim();
+      if (rootExecutionId && rootExecutionId !== executionId) {
+        this.executionStore.complete(rootExecutionId, nowMs);
+        completedExecutionIds.add(rootExecutionId);
+      }
+    }
+    this.reconcileCompletedExecutionContinuityRefs(record, completedExecutionIds, input.codeSessionId, nowMs);
+  }
+
+  private reconcileCompletedExecutionContinuityRefs(
+    record: ExecutionRecord | null,
+    completedExecutionIds: ReadonlySet<string>,
+    codeSessionId: string | undefined,
+    nowMs: number,
+  ): void {
+    if (!record || !this.continuityThreadStore) return;
+    const continuityThread = this.getContinuityThread(record.scope.userId, nowMs);
+    if (!continuityThread?.activeExecutionRefs?.length) return;
+    const normalizedCodeSessionId = codeSessionId?.trim();
+    const retainedRefs = continuityThread.activeExecutionRefs.filter((ref) => {
+      if (ref.kind === 'execution' && completedExecutionIds.has(ref.id)) {
+        return false;
+      }
+      if (normalizedCodeSessionId && ref.kind === 'code_session') {
+        return false;
+      }
+      return true;
+    });
+    const nextRefs = mergeContinuityExecutionRefs(
+      retainedRefs,
+      normalizedCodeSessionId
+        ? [{
+            kind: 'code_session',
+            id: normalizedCodeSessionId,
+          }]
+        : [],
+    ) ?? null;
+    this.continuityThreadStore.upsert(
+      this.buildContinuityThreadScope(record.scope.userId),
+      {
+        activeExecutionRefs: nextRefs,
+      },
+      nowMs,
+    );
+  }
+
   private syncExecutionBlockerFromPendingAction(
     pendingAction: PendingActionRecord | null | undefined,
     nowMs: number = Date.now(),

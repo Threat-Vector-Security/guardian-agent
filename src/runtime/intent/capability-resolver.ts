@@ -103,6 +103,9 @@ function preferredCandidatesForDecision(
       if (decision.entities.codingBackend && decision.entities.codingBackendRequested === true) {
         return ['coding_backend'];
       }
+      if (decision.entities.codingBackendResumeRequested === true) {
+        return ['coding_backend'];
+      }
       if (decision.operation === 'search') {
         if (
           decision.executionClass === 'tool_orchestration'

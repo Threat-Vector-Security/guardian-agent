@@ -66,6 +66,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'code_session_create',
     'code_session_attach',
     'code_session_detach',
+    'code_session_delete',
     'code_symbol_search',
     'code_edit',
     'code_patch',

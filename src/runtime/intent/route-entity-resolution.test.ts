@@ -73,6 +73,19 @@ describe('resolveIntentGatewayEntities', () => {
     });
   });
 
+  it('infers Codex SDK as the SDK backend instead of the Codex CLI backend', () => {
+    expect(resolveIntentGatewayEntities(
+      {},
+      { sourceContent: 'Use Codex SDK to build a prototype app in this workspace.' },
+      'coding_task',
+      'create',
+      'classifier.primary',
+    ).entities).toMatchObject({
+      codingBackend: 'codex-sdk',
+      codingBackendRequested: true,
+    });
+  });
+
   it('does not treat negated backend mentions as delegated coding backend requests', () => {
     const result = resolveIntentGatewayEntities(
       {},

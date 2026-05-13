@@ -1612,7 +1612,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /config set <provider> <field> <value> Edit provider field\n');
     this.write('  /config add <name> <type> <model> [apiKey]  Add provider\n');
     this.write('  /config test [provider]                Test provider connectivity\n');
-    this.write('  /coding-backends [list|status|enable|disable|default|add|remove]  Manage external coding CLIs\n');
+    this.write('  /coding-backends [list|status|enable|disable|default|add|remove]  Manage external coding backends\n');
     this.write('  /auth [status|enable|disable|rotate|reveal]  Manage web auth/token settings\n');
     this.write('\n');
     this.write(this.bold('Tools\n'));

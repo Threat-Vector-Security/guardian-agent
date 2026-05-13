@@ -70,7 +70,7 @@ export const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
   {
     aliases: ['coding-backends', 'codingbackends'],
     title: '/coding-backends',
-    summary: 'Inspect and manage configured external coding CLI backends such as Claude Code, Codex, Gemini CLI, and Aider.',
+    summary: 'Inspect and manage configured external coding backends such as Claude Code, Codex SDK, Codex CLI, Gemini CLI, and Aider.',
     usage: [
       '/coding-backends',
       '/coding-backends list',

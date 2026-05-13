@@ -23,9 +23,12 @@ import {
 } from '../execution-graph/pending-action-adapter.js';
 import type { ExecutionArtifactRef, ExecutionGraph } from '../execution-graph/types.js';
 import {
+  CHAT_CONTINUATION_TYPE_CODE_SESSION_CREATE,
   readAutomationAuthoringContinuationPayload,
+  readCodeSessionCreateContinuationPayload,
   readFilesystemSaveOutputContinuationPayload,
   type AutomationAuthoringContinuationPayload,
+  type CodeSessionCreateContinuationPayload,
   type FilesystemSaveOutputContinuationPayload,
 } from './chat-continuation-payloads.js';
 import {
@@ -37,6 +40,7 @@ import {
 export type ChatContinuationPayload =
   | FilesystemSaveOutputContinuationPayload
   | AutomationAuthoringContinuationPayload
+  | CodeSessionCreateContinuationPayload
   | ToolLoopContinuationPayload;
 
 export interface ChatContinuationGraphResume {
@@ -473,6 +477,7 @@ function readChatContinuationArtifact(
   }
   return readFilesystemSaveOutputContinuationPayload(content.payload)
     ?? readAutomationAuthoringContinuationPayload(content.payload)
+    ?? readCodeSessionCreateContinuationPayload(content.payload)
     ?? readToolLoopContinuationPayload(content.payload)
     ?? readToolLoopCheckpointContinuationPayload(content.payload, getArtifact);
 }
@@ -606,7 +611,7 @@ function cloneChatContinuationPayload(
   }
   return {
     ...payload,
-    ...(payload.codeContext ? { codeContext: { ...payload.codeContext } } : {}),
+    ...('codeContext' in payload && payload.codeContext ? { codeContext: { ...payload.codeContext } } : {}),
   };
 }
 
@@ -656,6 +661,12 @@ function describeChatContinuationPayload(
         label: 'Automation authoring continuation',
         preview: 'Resume automation authoring after policy remediation.',
         refs: [],
+      };
+    case CHAT_CONTINUATION_TYPE_CODE_SESSION_CREATE:
+      return {
+        label: 'Code session create continuation',
+        preview: `Create coding session "${payload.title}" after policy approval.`,
+        refs: [payload.workspaceRoot],
       };
     case 'suspended_tool_loop':
       return {

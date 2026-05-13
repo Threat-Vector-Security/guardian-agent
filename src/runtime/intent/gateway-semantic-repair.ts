@@ -29,6 +29,7 @@ import { parseWebSearchIntent } from '../search-intent.js';
 import { getAmbiguousEmailProviderClarification } from '../email-provider-routing.js';
 import {
   isExplicitCodingExecutionRequest,
+  isExplicitCodingBackendResumeRequest,
   isExplicitCodingSessionControlRequest,
   isExplicitComplexPlanningRequest,
   isExplicitExternalPromptInjectionRequest,
@@ -69,6 +70,8 @@ export function repairStructuredIntentGatewayRoute(
   const explicitProviderConfig = isExplicitProviderConfigRequest(rawSourceContent);
   const rawCredentialDisclosure = isRawCredentialDisclosureRequest(rawSourceContent);
   const externalPromptInjection = isExplicitExternalPromptInjectionRequest(rawSourceContent);
+  const explicitCodingSessionControl = isExplicitCodingSessionControlRequest(rawSourceContent);
+  const explicitCodingBackendResume = isExplicitCodingBackendResumeRequest(rawSourceContent);
   const explicitCodingExecution = isExplicitCodingExecutionRequest(rawSourceContent);
   const explicitWorkspaceScopedRepoWork = isExplicitWorkspaceScopedRepoWorkRequest(rawSourceContent);
   const explicitRepoInspection = isExplicitRepoInspectionRequest(rawSourceContent);
@@ -89,10 +92,13 @@ export function repairStructuredIntentGatewayRoute(
     || explicitFilesystemOperation === 'delete'
     || explicitFilesystemOperation === 'save';
   const explicitCodingTaskRequest = explicitCodingExecution
+    || explicitCodingBackendResume
     || explicitWorkspaceScopedRepoWork
     || explicitRepoInspection
     || explicitRepoPlanning
     || explicitRemoteSandbox;
+  const parsedCodingBackendRequest = parsed?.codingBackendRequested === true
+    || typeof parsed?.codingBackend === 'string';
   const pagedListContinuationRoute = resolvePagedListContinuationRoute({
     continuationStateKind: repairContext?.continuity?.continuationStateKind,
     content: rawSourceContent,
@@ -124,11 +130,19 @@ export function repairStructuredIntentGatewayRoute(
     return 'email_task';
   }
   if (
+    (route === 'unknown' || route === 'general_assistant' || route === 'coding_task')
+    && explicitCodingSessionControl
+    && !parsedCodingBackendRequest
+  ) {
+    return 'coding_session_control';
+  }
+  if (
     (route === 'coding_session_control'
       || route === 'filesystem_task'
       || route === 'search_task'
       || route === 'personal_assistant_task')
     && explicitCodingTaskRequest
+    && !explicitCodingSessionControl
   ) {
     return 'coding_task';
   }
@@ -172,8 +186,9 @@ export function repairStructuredIntentGatewayRoute(
   }
   if (
     (route === 'unknown' || route === 'general_assistant' || route === 'coding_task')
-    && isExplicitCodingSessionControlRequest(rawSourceContent)
+    && explicitCodingSessionControl
     && !explicitCodingTaskRequest
+    && !parsedCodingBackendRequest
   ) {
     return 'coding_session_control';
   }
@@ -249,6 +264,11 @@ export function repairStructuredIntentGatewayOperation(
     return operation;
   }
   const normalizedSourceContent = rawSourceContent.toLowerCase();
+  const parsedCodingBackendRequest = parsed?.codingBackendRequested === true
+    || typeof parsed?.codingBackend === 'string';
+  if (route === 'coding_task' && parsedCodingBackendRequest && operation !== 'unknown') {
+    return operation;
+  }
   const inferredCodingTaskOperation = inferExplicitCodingTaskOperation(normalizedSourceContent, operation);
   if (
     route === 'coding_task'

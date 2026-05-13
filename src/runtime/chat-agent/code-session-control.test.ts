@@ -417,7 +417,6 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
       }
       throw new Error(`Unexpected tool ${toolName}`);
     });
-
     const result = await tryDirectCodeSessionControlFromGateway({
       toolsEnabled: true,
       executeDirectCodeSessionTool,
@@ -438,5 +437,508 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
     expect(result?.content).toContain('Available coding workspaces:');
     expect(result?.content).toContain('CURRENT: Harness Session');
     expect(result?.content).toContain('Scoped Session');
+  });
+
+  it('deletes a named coding session instead of detaching the current chat', async () => {
+    const executeDirectCodeSessionTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'code_session_delete') {
+        expect(args).toEqual({ sessionId: 'Pantry Planner' });
+        return {
+          success: true,
+          output: {
+            deleted: true,
+            session: {
+              id: 'session-pantry',
+              title: 'Pantry Planner',
+              workspaceRoot: 'S:\\Development\\PantryPlanner',
+              resolvedRoot: 'S:\\Development\\PantryPlanner',
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+    const result = await tryDirectCodeSessionControlFromGateway({
+      toolsEnabled: true,
+      executeDirectCodeSessionTool,
+      getActivePendingAction: vi.fn(() => null),
+      completePendingAction: vi.fn(),
+      resumeCodingTask: vi.fn(async () => null),
+      onMessage: vi.fn(async () => ({ content: 'unexpected' })),
+      message: createMessage({ content: 'remove pantry planner' }),
+      ctx: createCtx(),
+      decision: createDecision({
+        operation: 'delete',
+        turnRelation: 'clarification_answer',
+        entities: {
+          sessionTarget: 'Pantry Planner',
+        },
+      }),
+    });
+
+    expect(executeDirectCodeSessionTool).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      content: 'Deleted coding session "Pantry Planner".',
+      metadata: {
+        codeSessionFocusChanged: true,
+        codeSessionDeleted: true,
+        codeSessionId: 'session-pantry',
+      },
+    });
+  });
+
+  it('continues session creation after deleting the selected session-limit target', async () => {
+    const executeDirectCodeSessionTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'code_session_delete') {
+        expect(args).toEqual({ sessionId: 'Pantry Planner' });
+        return {
+          success: true,
+          output: {
+            deleted: true,
+            session: {
+              id: 'session-pantry',
+              title: 'Pantry Planner',
+              workspaceRoot: 'S:\\Development\\PantryPlanner',
+              resolvedRoot: 'S:\\Development\\PantryPlanner',
+            },
+          },
+        };
+      }
+      if (toolName === 'code_session_create') {
+        expect(args).toEqual({
+          workspaceRoot: 'S:\\Development\\MyNewPrototype',
+          title: 'Signal Garden Test',
+          attach: true,
+        });
+        return {
+          success: true,
+          output: {
+            session: {
+              id: 'session-signal',
+              title: 'Signal Garden Test',
+              workspaceRoot: 'S:\\Development\\MyNewPrototype',
+              resolvedRoot: 'S:\\Development\\MyNewPrototype',
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryDirectCodeSessionControlFromGateway({
+      toolsEnabled: true,
+      executeDirectCodeSessionTool,
+      getActivePendingAction: vi.fn(() => null),
+      completePendingAction: vi.fn(),
+      resumeCodingTask: vi.fn(async () => null),
+      onMessage: vi.fn(async () => ({ content: 'unexpected' })),
+      message: createMessage({ content: 'remove pantry planner' }),
+      ctx: createCtx(),
+      decision: createDecision({
+        operation: 'delete',
+        turnRelation: 'clarification_answer',
+        entities: {
+          sessionTarget: 'Pantry Planner',
+          path: 'S:\\Development\\MyNewPrototype',
+          query: 'Signal Garden Test',
+        },
+      }),
+    });
+
+    expect(executeDirectCodeSessionTool).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      content: [
+        'Deleted coding session "Pantry Planner".',
+        '',
+        'Created and attached to:',
+        '- CURRENT: Signal Garden Test — S:\\Development\\MyNewPrototype id=session-signal',
+      ].join('\n'),
+      metadata: {
+        codeSessionFocusChanged: true,
+        codeSessionDeleted: true,
+        codeSessionId: 'session-signal',
+        codeSessionResolved: true,
+      },
+    });
+  });
+
+  it('creates a named coding session from separate path and session target entities', async () => {
+    const executeDirectCodeSessionTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'code_session_create') {
+        expect(args).toEqual({
+          workspaceRoot: 'S:\\Development\\MyNewPrototype',
+          title: 'Signal Garden Test',
+          attach: true,
+        });
+        return {
+          success: true,
+          output: {
+            session: {
+              id: 'session-signal',
+              title: 'Signal Garden Test',
+              workspaceRoot: 'S:\\Development\\MyNewPrototype',
+              resolvedRoot: 'S:\\Development\\MyNewPrototype',
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryDirectCodeSessionControlFromGateway({
+      toolsEnabled: true,
+      executeDirectCodeSessionTool,
+      getActivePendingAction: vi.fn(() => null),
+      completePendingAction: vi.fn(),
+      resumeCodingTask: vi.fn(async () => null),
+      onMessage: vi.fn(async () => ({ content: 'unexpected' })),
+      message: createMessage({
+        content: 'Create a new coding session named Signal Garden Test for S:\\Development\\MyNewPrototype and attach it as the current coding workspace.',
+      }),
+      ctx: createCtx(),
+      decision: createDecision({
+        operation: 'create',
+        entities: {
+          path: 'S:\\Development\\MyNewPrototype',
+          sessionTarget: 'Signal Garden Test',
+        },
+      }),
+    });
+
+    expect(executeDirectCodeSessionTool).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      content: 'Created and attached to:\n- CURRENT: Signal Garden Test — S:\\Development\\MyNewPrototype id=session-signal',
+      metadata: {
+        codeSessionResolved: true,
+        codeSessionId: 'session-signal',
+        codeSessionFocusChanged: true,
+      },
+    });
+  });
+
+  it('requests resumable allowed-path approval before creating a session outside policy roots', async () => {
+    const executeDirectCodeSessionTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'code_session_create') {
+        expect(args).toEqual({
+          workspaceRoot: 'S:\\Development\\SignalGardenSdkSmoke',
+          title: 'Signal Garden SDK Smoke',
+          attach: true,
+        });
+        return {
+          success: false,
+          error: 'Path \'S:\\Development\\SignalGardenSdkSmoke\' is outside allowed paths. Allowed roots: S:\\Development\\GuardianAgent.',
+        };
+      }
+      if (toolName === 'update_tool_policy') {
+        expect(args).toEqual({
+          action: 'add_path',
+          value: 'S:\\Development\\SignalGardenSdkSmoke',
+        });
+        return {
+          success: false,
+          status: 'pending_approval',
+          approvalId: 'approval-path',
+          jobId: 'job-path',
+          message: 'Tool \'update_tool_policy\' is awaiting approval.',
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+    const setChatContinuationGraphPendingApprovalActionForRequest = vi.fn((_userKey, _surfaceId, input) => ({
+      action: {
+        id: 'pending-1',
+        scope: {
+          agentId: 'chat',
+          userId: 'owner',
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+        },
+        status: 'pending' as const,
+        transferPolicy: 'origin_surface_only' as const,
+        blocker: {
+          kind: 'approval' as const,
+          prompt: input.prompt,
+          approvalIds: input.approvalIds,
+        },
+        intent: {
+          route: input.route,
+          operation: input.operation,
+          summary: input.summary,
+          originalUserContent: input.originalUserContent,
+        },
+        resume: {
+          kind: 'execution_graph' as const,
+          payload: { graphId: 'graph-1' },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    }));
+
+    const result = await tryDirectCodeSessionControlFromGateway({
+      toolsEnabled: true,
+      executeDirectCodeSessionTool,
+      getApprovalSummaries: vi.fn(() => new Map()),
+      setChatContinuationGraphPendingApprovalActionForRequest,
+      getActivePendingAction: vi.fn(() => null),
+      completePendingAction: vi.fn(),
+      resumeCodingTask: vi.fn(async () => null),
+      onMessage: vi.fn(async () => ({ content: 'unexpected' })),
+      message: createMessage({
+        content: 'Create a new coding session named Signal Garden SDK Smoke for S:\\Development\\SignalGardenSdkSmoke and attach it as the current coding workspace.',
+      }),
+      ctx: createCtx(),
+      decision: createDecision({
+        operation: 'create',
+        entities: {
+          path: 'S:\\Development\\SignalGardenSdkSmoke',
+          sessionTarget: 'Signal Garden SDK Smoke',
+        },
+      }),
+    });
+
+    expect(executeDirectCodeSessionTool).toHaveBeenCalledTimes(2);
+    expect(setChatContinuationGraphPendingApprovalActionForRequest).toHaveBeenCalledWith(
+      'owner:web',
+      'web-guardian-chat',
+      expect.objectContaining({
+        approvalIds: ['approval-path'],
+        route: 'coding_session_control',
+        operation: 'create',
+        continuation: expect.objectContaining({
+          type: 'code_session_create',
+          workspaceRoot: 'S:\\Development\\SignalGardenSdkSmoke',
+          title: 'Signal Garden SDK Smoke',
+          attach: true,
+        }),
+      }),
+    );
+    expect(result?.content).toContain('I need approval to add S:\\Development\\SignalGardenSdkSmoke to allowed paths');
+    expect(result?.content).toContain('Once approved, I will create and attach:');
+    expect(result?.metadata?.pendingAction).toBeDefined();
+  });
+
+  it('attaches an existing matching session instead of asking for deletion after a session-cap failure', async () => {
+    const executeDirectCodeSessionTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'code_session_create') {
+        expect(args).toEqual({
+          workspaceRoot: 'S:\\Development\\SignalGardenSdkSmoke',
+          title: 'Signal Garden SDK Smoke',
+          attach: true,
+        });
+        return {
+          success: false,
+          error: 'Guardian keeps the coding workspace portfolio capped at 4 sessions. Remove a session before adding another.',
+        };
+      }
+      if (toolName === 'code_session_list') {
+        expect(args).toEqual({ limit: 20 });
+        return {
+          success: true,
+          output: {
+            sessions: [
+              {
+                id: 'session-signal',
+                title: 'Signal Garden SDK Smoke',
+                workspaceRoot: 'S:\\Development\\SignalGardenSdkSmoke',
+                resolvedRoot: 'S:\\Development\\SignalGardenSdkSmoke',
+              },
+            ],
+          },
+        };
+      }
+      if (toolName === 'code_session_attach') {
+        expect(args).toEqual({ sessionId: 'session-signal' });
+        return {
+          success: true,
+          output: {
+            session: {
+              id: 'session-signal',
+              title: 'Signal Garden SDK Smoke',
+              workspaceRoot: 'S:\\Development\\SignalGardenSdkSmoke',
+              resolvedRoot: 'S:\\Development\\SignalGardenSdkSmoke',
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+    const setClarificationPendingAction = vi.fn();
+
+    const result = await tryDirectCodeSessionControlFromGateway({
+      toolsEnabled: true,
+      executeDirectCodeSessionTool,
+      setClarificationPendingAction,
+      getActivePendingAction: vi.fn(() => null),
+      completePendingAction: vi.fn(),
+      resumeCodingTask: vi.fn(async () => null),
+      onMessage: vi.fn(async () => ({ content: 'unexpected' })),
+      message: createMessage({
+        content: 'Create a new coding session named Signal Garden SDK Smoke for S:\\Development\\SignalGardenSdkSmoke and attach it as the current coding workspace.',
+      }),
+      ctx: createCtx(),
+      decision: createDecision({
+        operation: 'create',
+        entities: {
+          path: 'S:\\Development\\SignalGardenSdkSmoke',
+          sessionTarget: 'Signal Garden SDK Smoke',
+        },
+      }),
+    });
+
+    expect(executeDirectCodeSessionTool).toHaveBeenCalledTimes(3);
+    expect(setClarificationPendingAction).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      content: 'This coding session already exists, so I attached to it:\n- CURRENT: Signal Garden SDK Smoke — S:\\Development\\SignalGardenSdkSmoke id=session-signal',
+      metadata: {
+        codeSessionResolved: true,
+        codeSessionId: 'session-signal',
+        codeSessionFocusChanged: true,
+      },
+    });
+  });
+
+  it('lists sessions and asks which one to remove when create hits the session cap', async () => {
+    const executeDirectCodeSessionTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'code_session_create') {
+        return {
+          success: false,
+          error: 'Guardian keeps the coding workspace portfolio capped at 4 sessions. Remove a session before adding another.',
+        };
+      }
+      if (toolName === 'code_session_list') {
+        return {
+          success: true,
+          output: {
+            sessions: [
+              {
+                id: 'session-pantry',
+                title: 'Pantry Planner',
+                workspaceRoot: 'S:\\Development\\PantryPlanner',
+                resolvedRoot: 'S:\\Development\\PantryPlanner',
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+    const setClarificationPendingAction = vi.fn((_userId, _channel, _surfaceId, input) => ({
+      action: {
+        id: 'pending-session-cap',
+        scope: {
+          agentId: 'chat',
+          userId: 'owner',
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+        },
+        status: 'pending' as const,
+        transferPolicy: 'linked_surfaces_same_user' as const,
+        blocker: {
+          kind: 'clarification' as const,
+          field: input.field,
+          prompt: input.prompt,
+          options: input.options,
+        },
+        intent: {
+          route: input.route,
+          operation: input.operation,
+          summary: input.summary,
+          missingFields: input.missingFields,
+          originalUserContent: input.originalUserContent,
+          entities: input.entities,
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    }));
+
+    const result = await tryDirectCodeSessionControlFromGateway({
+      toolsEnabled: true,
+      executeDirectCodeSessionTool,
+      setClarificationPendingAction,
+      getActivePendingAction: vi.fn(() => null),
+      completePendingAction: vi.fn(),
+      resumeCodingTask: vi.fn(async () => null),
+      onMessage: vi.fn(async () => ({ content: 'unexpected' })),
+      message: createMessage({
+        content: 'Create a new coding session named Signal Garden Test for S:\\Development\\MyNewPrototype and attach it as the current coding workspace.',
+      }),
+      ctx: createCtx(),
+      decision: createDecision({
+        operation: 'create',
+        entities: {
+          path: 'S:\\Development\\MyNewPrototype',
+          sessionTarget: 'Signal Garden Test',
+        },
+      }),
+    });
+
+    expect(executeDirectCodeSessionTool).toHaveBeenCalledWith(
+      'code_session_list',
+      { limit: 20 },
+      expect.any(Object),
+      expect.any(Object),
+    );
+    expect(result?.content).toContain('Guardian keeps the coding workspace portfolio capped at 4 sessions.');
+    expect(result?.content).toContain('Pantry Planner');
+    expect(result?.content).toContain('Which session should I remove to make room for "Signal Garden Test"?');
+    expect(setClarificationPendingAction).toHaveBeenCalledWith(
+      'owner',
+      'web',
+      'web-guardian-chat',
+      expect.objectContaining({
+        blockerKind: 'clarification',
+        field: 'session_target',
+        route: 'coding_session_control',
+        operation: 'delete',
+        missingFields: ['session_target'],
+        entities: expect.objectContaining({
+          path: 'S:\\Development\\MyNewPrototype',
+          query: 'Signal Garden Test',
+          codeSessionResource: 'session',
+        }),
+      }),
+    );
+    expect(result?.metadata?.pendingAction).toBeDefined();
+  });
+
+  it('still detaches when delete has no named target', async () => {
+    const executeDirectCodeSessionTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'code_session_detach') {
+        return {
+          success: true,
+          output: {
+            detached: true,
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryDirectCodeSessionControlFromGateway({
+      toolsEnabled: true,
+      executeDirectCodeSessionTool,
+      getActivePendingAction: vi.fn(() => null),
+      completePendingAction: vi.fn(),
+      resumeCodingTask: vi.fn(async () => null),
+      onMessage: vi.fn(async () => ({ content: 'unexpected' })),
+      message: createMessage({ content: 'detach from workspace' }),
+      ctx: createCtx(),
+      decision: createDecision({
+        operation: 'delete',
+        entities: {},
+      }),
+    });
+
+    expect(executeDirectCodeSessionTool).toHaveBeenCalledWith(
+      'code_session_detach',
+      {},
+      expect.any(Object),
+      expect.any(Object),
+    );
+    expect(result?.content).toBe('Detached this chat from the current coding workspace.');
   });
 });

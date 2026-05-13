@@ -1500,6 +1500,18 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
                       .filter((arg): arg is string => !!arg)
                     : [],
                 };
+                if (backend.adapterKind === 'terminal_cli' || backend.adapterKind === 'codex_sdk') {
+                  next.adapterKind = backend.adapterKind;
+                }
+                if (
+                  backend.executionHost === 'auto'
+                  || backend.executionHost === 'windows'
+                  || backend.executionHost === 'wsl'
+                  || backend.executionHost === 'linux'
+                  || backend.executionHost === 'macos'
+                ) {
+                  next.executionHost = backend.executionHost;
+                }
                 if (backend.shell?.trim()) next.shell = backend.shell.trim();
                 if (backend.versionCommand?.trim()) next.versionCommand = backend.versionCommand.trim();
                 if (backend.updateCommand?.trim()) next.updateCommand = backend.updateCommand.trim();

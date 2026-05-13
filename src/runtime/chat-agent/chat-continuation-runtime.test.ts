@@ -22,6 +22,7 @@ describe('chat continuation payload runtime', () => {
       createRequestId: () => 'request-resume-1',
       executeStoredFilesystemSave,
       executeStoredAutomationAuthoring: vi.fn(),
+      executeStoredCodeSessionCreate: vi.fn(),
       resumeStoredToolLoopContinuation: vi.fn(),
     });
 
@@ -59,6 +60,7 @@ describe('chat continuation payload runtime', () => {
       createRequestId: () => 'unused',
       executeStoredFilesystemSave: vi.fn(),
       executeStoredAutomationAuthoring,
+      executeStoredCodeSessionCreate: vi.fn(),
       resumeStoredToolLoopContinuation: vi.fn(),
     });
 
@@ -100,6 +102,7 @@ describe('chat continuation payload runtime', () => {
       createRequestId: () => 'unused',
       executeStoredFilesystemSave: vi.fn(),
       executeStoredAutomationAuthoring: vi.fn(),
+      executeStoredCodeSessionCreate: vi.fn(),
       resumeStoredToolLoopContinuation,
     });
 
@@ -113,6 +116,44 @@ describe('chat continuation payload runtime', () => {
         approvalResult: { approved: true },
       },
     );
+  });
+
+  it('dispatches code-session create continuations with scoped pending-action identity', async () => {
+    const executeStoredCodeSessionCreate = vi.fn(async () => ({ content: 'created session' }));
+
+    const result = await executeChatContinuationPayload({
+      pendingAction: pendingAction(),
+      resume: resume({
+        type: 'code_session_create',
+        workspaceRoot: 'S:\\Development\\SignalGardenSdkSmoke',
+        title: 'Signal Garden SDK Smoke',
+        attach: true,
+        originalUserContent: 'Create the session.',
+        principalRole: 'not-a-role',
+      }),
+      approvalId: 'approval-1',
+      approvalResult: { approved: true },
+      createRequestId: () => 'request-code-session',
+      executeStoredFilesystemSave: vi.fn(),
+      executeStoredAutomationAuthoring: vi.fn(),
+      executeStoredCodeSessionCreate,
+      resumeStoredToolLoopContinuation: vi.fn(),
+    });
+
+    expect(result).toEqual({ content: 'created session' });
+    expect(executeStoredCodeSessionCreate).toHaveBeenCalledWith({
+      workspaceRoot: 'S:\\Development\\SignalGardenSdkSmoke',
+      title: 'Signal Garden SDK Smoke',
+      attach: true,
+      originalUserContent: 'Create the session.',
+      userKey: 'user-1:web',
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'surface-1',
+      principalId: 'user-1',
+      principalRole: 'owner',
+      requestId: 'request-code-session',
+    });
   });
 });
 

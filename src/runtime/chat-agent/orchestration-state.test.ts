@@ -985,6 +985,88 @@ describe('ChatAgentOrchestrationState', () => {
     })?.executionId).toBe('exec-coding');
   });
 
+  it('clears completed direct execution refs and preserves the resolved code session ref', () => {
+    const nowMs = 1_710_000_000_000;
+    const continuityStore = createContinuityStore(nowMs);
+    const executionStore = createExecutionStore(nowMs);
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      continuityThreadStore: continuityStore,
+      executionStore,
+      tools: {
+        getApprovalSummaries: () => new Map(),
+      },
+    });
+    const scope = {
+      assistantId: 'assistant',
+      userId: 'user-1',
+      channel: 'telegram',
+      surfaceId: 'telegram:123:123',
+    };
+    executionStore.begin({
+      executionId: 'root-exec',
+      requestId: 'root-message',
+      scope,
+      originalUserContent: 'Create a coding session.',
+      status: 'running',
+    }, nowMs);
+    executionStore.begin({
+      executionId: 'child-exec',
+      requestId: 'child-message',
+      rootExecutionId: 'root-exec',
+      parentExecutionId: 'root-exec',
+      scope,
+      originalUserContent: 'old session',
+      status: 'running',
+    }, nowMs);
+    continuityStore.upsert(
+      {
+        assistantId: 'assistant',
+        userId: 'user-1',
+      },
+      {
+        touchSurface: {
+          channel: 'telegram',
+          surfaceId: 'telegram:123:123',
+        },
+        activeExecutionRefs: [
+          {
+            kind: 'execution',
+            id: 'root-exec',
+            label: 'Create a coding session.',
+          },
+          {
+            kind: 'code_session',
+            id: 'old-session',
+          },
+        ],
+      },
+      nowMs,
+    );
+
+    state.completeExecutionTurn({
+      executionIdentity: {
+        executionId: 'child-exec',
+        rootExecutionId: 'root-exec',
+      },
+      includeRoot: true,
+      codeSessionId: 'new-session',
+      nowMs: nowMs + 10,
+    });
+
+    expect(executionStore.get('child-exec')?.status).toBe('completed');
+    expect(executionStore.get('root-exec')?.status).toBe('completed');
+    expect(continuityStore.get({
+      assistantId: 'assistant',
+      userId: 'user-1',
+    }, nowMs + 10)?.activeExecutionRefs).toEqual([
+      {
+        kind: 'code_session',
+        id: 'new-session',
+      },
+    ]);
+  });
+
   it('drops internal fallback summaries from durable execution and continuity labels', () => {
     const nowMs = 1_710_000_000_100;
     const continuityStore = createContinuityStore(nowMs);

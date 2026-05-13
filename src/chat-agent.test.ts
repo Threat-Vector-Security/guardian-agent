@@ -5,6 +5,7 @@ import { ModelFallbackChain } from './llm/model-fallback.js';
 import { CodeSessionStore } from './runtime/code-sessions.js';
 import { ConversationService } from './runtime/conversation.js';
 import { ContinuityThreadStore } from './runtime/continuity-threads.js';
+import { ExecutionStore } from './runtime/executions.js';
 import { attachSelectedExecutionProfileMetadata } from './runtime/execution-profiles.js';
 import { ExecutionGraphStore } from './runtime/execution-graph/graph-store.js';
 import { recordGraphPendingActionInterrupt } from './runtime/execution-graph/pending-action-adapter.js';
@@ -137,6 +138,12 @@ function directCodingBackendDepsForAgent(agent: any) {
       originalUserContent,
     ),
     setPendingApprovalAction: (userId, channel, surfaceId, actionInput) => agent.setPendingApprovalAction(
+      userId,
+      channel,
+      surfaceId,
+      actionInput,
+    ),
+    setClarificationPendingAction: (userId, channel, surfaceId, actionInput) => agent.setClarificationPendingAction(
       userId,
       channel,
       surfaceId,
@@ -6648,6 +6655,111 @@ describe('LLMChatAgent direct intent metadata', () => {
 
     expect(response.content).toBe('There are no pending approvals.');
     expect(tools.executeModelTool).not.toHaveBeenCalled();
+  });
+
+  it('marks settled direct clarification-answer executions complete', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const nowMs = 1_710_000_000_000;
+    const executionStore = new ExecutionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-direct-execution-complete.test.sqlite',
+      now: () => nowMs,
+    });
+    const scope = {
+      assistantId: 'chat',
+      userId: 'owner',
+      channel: 'telegram',
+      surfaceId: 'telegram-chat',
+    };
+    executionStore.begin({
+      executionId: 'root-exec',
+      requestId: 'root-message',
+      scope,
+      originalUserContent: 'Create a new coding session.',
+      status: 'running',
+    }, nowMs);
+    executionStore.begin({
+      executionId: 'child-exec',
+      requestId: 'child-message',
+      parentExecutionId: 'root-exec',
+      rootExecutionId: 'root-exec',
+      scope,
+      originalUserContent: 'signal garden test',
+      status: 'running',
+    }, nowMs);
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).executionStore = executionStore;
+    const message: UserMessage = {
+      id: 'child-exec',
+      userId: 'owner',
+      channel: 'telegram',
+      surfaceId: 'telegram-chat',
+      content: 'signal garden test',
+      timestamp: nowMs,
+    };
+    const gateway: IntentGatewayRecord = {
+      available: true,
+      mode: 'primary',
+      model: 'content-plan',
+      latencyMs: 1,
+      decision: {
+        route: 'coding_session_control',
+        operation: 'delete',
+        confidence: 'high',
+        summary: 'Remove selected coding session and continue creation.',
+        turnRelation: 'clarification_answer',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'tool_orchestration',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
+        entities: {},
+      },
+    };
+
+    await (agent as any).buildDirectIntentResponse({
+      candidate: 'coding_session_control',
+      result: {
+        content: 'Deleted coding session "Signal Garden Test".\n\nCreated and attached to:\n- CURRENT: Signal Garden SDK Smoke',
+        metadata: {
+          codeSessionDeleted: true,
+          codeSessionResolved: true,
+          codeSessionId: 'session-signal',
+        },
+      },
+      message,
+      routingMessage: message,
+      intentGateway: gateway,
+      ctx: {
+        agentId: 'chat',
+        emit: vi.fn(async () => {}),
+        llm: { name: 'test-provider' } as never,
+        checkAction: vi.fn(),
+        capabilities: [],
+      },
+      activeSkills: [],
+      conversationKey: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'telegram',
+      },
+      surfaceUserId: 'owner',
+      surfaceChannel: 'telegram',
+      surfaceId: 'telegram-chat',
+    });
+
+    expect(executionStore.get('child-exec')?.status).toBe('completed');
+    expect(executionStore.get('root-exec')?.status).toBe('completed');
   });
 
   it('creates a local Second Brain calendar event with place and description directly', async () => {

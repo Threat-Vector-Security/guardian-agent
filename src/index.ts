@@ -676,6 +676,7 @@ function buildDashboardCallbacks(
   toolExecutorRef: { current: import('./tools/executor.js').ToolExecutor | null },
   pendingActionStore: PendingActionStore,
   continuityThreadStore: ContinuityThreadStore,
+  executionStore: ExecutionStore,
   codingBackendServiceRef: { current: CodingBackendService | null },
   prepareIncomingDispatch: (
     channelDefault: string | undefined,
@@ -1809,6 +1810,22 @@ function buildDashboardCallbacks(
     if (!displayMessage && !allowContinuation) {
       displayMessage = result.message;
     }
+    if (pendingActionForApproval?.executionId && !allowContinuation && !continuedResponse) {
+      const nowMs = Date.now();
+      const executionIds = [...new Set([
+        pendingActionForApproval.executionId,
+        pendingActionForApproval.rootExecutionId,
+      ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0))];
+      for (const executionId of executionIds) {
+        if (input.decision === 'denied' && result.success) {
+          executionStore.cancel(executionId, nowMs);
+        } else if (input.decision === 'approved' && result.success && result.executionSucceeded !== false) {
+          executionStore.complete(executionId, nowMs);
+        } else if (input.decision === 'approved' && result.success && result.executionSucceeded === false) {
+          executionStore.fail(executionId, nowMs);
+        }
+      }
+    }
     intentRoutingTrace.record({
       stage: 'approval_continuation_resolved',
       userId: input.userId,
@@ -2060,6 +2077,10 @@ function buildDashboardCallbacks(
         completedAt: session.completedAt,
         exitCode: session.exitCode,
         durationMs: session.durationMs,
+        sdkThreadId: session.sdkThreadId,
+        resumedFromSessionId: session.resumedFromSessionId,
+        resumedFromThreadId: session.resumedFromThreadId,
+        resumable: session.resumable,
       })) ?? []
     ),
 
@@ -3255,6 +3276,7 @@ async function main(): Promise<void> {
   const continuityThreadDbPath = resolveAssistantDbPath(undefined, 'assistant-continuity-threads.sqlite');
   const executionDbPath = resolveAssistantDbPath(undefined, 'assistant-executions.sqlite');
   const secondBrainDbPath = resolveAssistantDbPath(undefined, 'assistant-second-brain.sqlite');
+  const codingBackendSessionsPath = join(getGuardianBaseDir(), 'coding-backend-sessions.json');
   const conversations = new ConversationService({
     enabled: config.assistant.memory.enabled,
     sqlitePath: conversationDbPath,
@@ -6513,6 +6535,7 @@ async function main(): Promise<void> {
     { current: toolExecutor },
     pendingActionStore,
     continuityThreadStore,
+    executionStore,
     codingBackendServiceRef,
     prepareIncomingDispatch,
   );
@@ -6672,6 +6695,8 @@ async function main(): Promise<void> {
       tryDelete('audit/ (audit log)', join(baseDir, 'audit'), { recursive: true });
       tryDelete('device-inventory.json', join(baseDir, 'device-inventory.json'));
       tryDelete('scheduled-tasks.json', join(baseDir, 'scheduled-tasks.json'));
+      tryDelete('coding-backend-sessions.json', codingBackendSessionsPath);
+      tryDelete('coding-backend-sessions.json.tmp', `${codingBackendSessionsPath}.tmp`);
       tryDelete('execution-graphs.json', join(baseDir, 'execution-graphs.json'));
       tryDelete('execution-graphs.json.tmp', join(baseDir, 'execution-graphs.json.tmp'));
       tryDelete('network-baseline.json', join(baseDir, 'network-baseline.json'));
@@ -6899,6 +6924,7 @@ async function main(): Promise<void> {
     staticDir: join(__dirname, '..', 'web', 'public'),
     codingBackendServiceRef,
     codingBackendsDefaultConfig: DEFAULT_CODING_BACKENDS_CONFIG,
+    codingBackendRecentSessionsPath: codingBackendSessionsPath,
     toolExecutor,
     listAgents: () => runtime.registry.getAll().map(inst => ({
       id: inst.agent.id,

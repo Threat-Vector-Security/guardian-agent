@@ -795,6 +795,7 @@ function hasExplicitExecutionTarget(parsed: Record<string, unknown>): boolean {
   return (typeof parsed.toolName === 'string' && parsed.toolName.trim().length > 0)
     || typeof parsed.codingBackend === 'string'
     || parsed.codingBackendRequested === true
+    || parsed.codingBackendResumeRequested === true
     || parsed.codingRemoteExecRequested === true;
 }
 

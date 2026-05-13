@@ -27,6 +27,7 @@ export function deriveWorkloadMetadata(
   const personalItemType = normalizePersonalItemType(parsed.personalItemType);
   const uiSurface = normalizeUiSurface(parsed.uiSurface);
   const codingBackendRequested = parsed.codingBackendRequested === true;
+  const codingBackendResumeRequested = parsed.codingBackendResumeRequested === true;
   const codingRemoteExecRequested = parsed.codingRemoteExecRequested === true;
   const explicitToolName = typeof parsed.toolName === 'string' && parsed.toolName.trim()
     ? parsed.toolName.trim()
@@ -55,7 +56,7 @@ export function deriveWorkloadMetadata(
         simpleVsComplex: 'complex',
       };
     case 'coding_task':
-      if (parsed.codingBackend || codingBackendRequested || codingRemoteExecRequested) {
+      if (parsed.codingBackend || codingBackendRequested || codingBackendResumeRequested || codingRemoteExecRequested) {
         return {
           executionClass: 'repo_grounded',
           preferredTier: codingRemoteExecRequested ? 'external' : 'local',

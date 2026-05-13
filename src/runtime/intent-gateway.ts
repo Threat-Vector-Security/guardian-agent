@@ -17,6 +17,8 @@ import {
 } from './intent/entity-resolvers/automation.js';
 import {
   hasExplicitRepoPathReference,
+  inferCodeSessionControlOperation,
+  inferExplicitCodingBackendRequest,
   inferExplicitCodingTaskOperation,
   inferExplicitFilesystemTaskOperation,
 } from './intent/entity-resolvers/coding.js';
@@ -35,8 +37,12 @@ import {
   looksLikeSelfContainedDirectAnswerTurn,
   looksLikeContextDependentPromptSelectionTurn,
   isExplicitRepoInspectionRequest,
+  isExplicitCodingSessionControlRequest,
+  isExplicitCodingBackendResumeRequest,
+  inferExplicitCodingBackendResumeBackend,
   isExplicitWorkspaceAppBuildRequest,
   isExplicitWorkspaceScopedRepoWorkRequest,
+  looksLikeGuardianCapabilityQuestion,
 } from './intent/request-patterns.js';
 import {
   inferProviderConfigOperation,
@@ -156,11 +162,14 @@ export class IntentGateway {
     workingRecord = await confirmIntentGatewayDecisionIfNeeded(input, workingRecord, chat);
     decision = workingRecord.decision;
     decision = applyUncertainRepairedRouteGuard(input, decision);
+    decision = repairCodeSessionCreateControlDecision(input, decision);
+    decision = repairCodingBackendResumeDecision(input, decision);
     decision = repairCodeSessionGroundingDecision(input, decision);
     decision = repairMissingSearchQueryFromContent(input, decision);
     decision = applyMissingRepairedSearchTargetGuard(input, decision);
     decision = applyUnresolvedContextReferenceGuard(input, decision);
     decision = repairDiagnosticsTraceInspection(decision);
+    decision = repairCodeSessionClarificationFromRecentHistory(input, decision);
     decision = repairAutomationClarificationFromRecentHistory(input, decision);
     if (needsAutomationNameRepair(decision)) {
       const repairedName = await repairAutomationName(input, decision, chat);
@@ -368,6 +377,27 @@ function buildContentPlanIntentGatewayRecord(
     }, 'content-plan:self-contained-exact-answer');
   }
 
+  if (looksLikeGuardianCapabilityQuestion(sourceContent)) {
+    return normalize({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Answer a Guardian capability or configuration question directly.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'direct_assistant',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      entities: {},
+    }, 'content-plan:guardian-capability-question');
+  }
+
   if (isRawCredentialDisclosureRequest(sourceContent)) {
     return normalize({
       route: 'security_task',
@@ -408,6 +438,20 @@ function buildContentPlanIntentGatewayRecord(
       simpleVsComplex: 'simple',
       entities: {},
     }, 'content-plan:pending-approval-status');
+  }
+
+  const codeSessionCreateDirective = parseCodeSessionCreateDirective(sourceContent);
+  if (codeSessionCreateDirective) {
+    return normalize(buildCodeSessionCreateControlDecision(codeSessionCreateDirective), 'content-plan:code-session-create-control');
+  }
+
+  if (isExplicitCodingBackendResumeRequest(sourceContent)) {
+    return normalize(buildCodingBackendResumeDecision(sourceContent), 'content-plan:coding-backend-resume');
+  }
+
+  const codingBackendDelegation = buildExplicitCodingBackendDelegationDecision(sourceContent);
+  if (codingBackendDelegation) {
+    return normalize(codingBackendDelegation, 'content-plan:coding-backend-delegation');
   }
 
   if (isNarrowContentPlanRepoInspectionRequest(sourceContent)) {
@@ -487,6 +531,39 @@ function buildContentPlanIntentGatewayRecord(
         entities: {},
       }, 'content-plan:automation-control-read');
     }
+  }
+
+  const codeSessionRemovalTarget = inferCodeSessionRemovalClarificationAnswer(input);
+  if (codeSessionRemovalTarget) {
+    const codeSessionRemovalContext = readCodeSessionRemovalClarificationContext(input);
+    const codeSessionCreateDirective = buildCodeSessionCreateDirectiveFromRemovalContext(codeSessionRemovalContext);
+    return normalize({
+      route: 'coding_session_control',
+      confidence: 'high',
+      operation: 'delete',
+      summary: codeSessionCreateDirective
+        ? 'Remove the selected coding session and continue the requested coding-session creation.'
+        : 'Remove the selected coding session to resolve the coding-session limit.',
+      turnRelation: 'clarification_answer',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      sessionTarget: codeSessionRemovalTarget,
+      ...(codeSessionCreateDirective
+        ? {
+            path: codeSessionCreateDirective.workspaceRoot,
+            ...(codeSessionCreateDirective.title ? { query: codeSessionCreateDirective.title } : {}),
+            codeSessionResource: 'session',
+          }
+        : {}),
+    }, 'content-plan:code-session-removal-clarification');
   }
 
   if (isExplicitProviderConfigRequest(sourceContent) || isExplicitProviderStatusReadRequest(sourceContent)) {
@@ -1077,6 +1154,18 @@ function repairUnavailableActiveExecutionWork(
       expectedContextPressure: 'repair.continuity',
       preferredAnswerPath: 'repair.continuity',
       simpleVsComplex: 'repair.continuity',
+      entities: {
+        ...(decision.provenance?.entities ?? {}),
+        ...(route === 'coding_task' && hasExplicitExecutionContinuationRequest(input.content)
+          ? { codingBackendResumeRequested: 'repair.continuity' as const }
+          : {}),
+      },
+    },
+    entities: {
+      ...decision.entities,
+      ...(route === 'coding_task' && hasExplicitExecutionContinuationRequest(input.content)
+        ? { codingBackendResumeRequested: true }
+        : {}),
     },
   };
 }
@@ -1580,6 +1669,280 @@ function buildUncertainRepairedRoutePrompt(
   return 'I am not sure which task you want me to perform. What should I do, and what useful information should I bring back?';
 }
 
+interface CodeSessionCreateDirective {
+  title?: string;
+  workspaceRoot: string;
+  attach: boolean;
+}
+
+function parseCodeSessionCreateDirective(content: string | undefined): CodeSessionCreateDirective | null {
+  const raw = content?.trim() ?? '';
+  if (!raw) return null;
+  const normalized = raw.toLowerCase();
+  if (!/\b(?:create|new|start)\b[^.!?\n]{0,80}\b(?:coding\s+)?session\b/.test(normalized)) {
+    return null;
+  }
+  if (isExplicitWorkspaceAppBuildRequest(raw)) {
+    return null;
+  }
+  const workspaceRoot = extractCodeSessionCreateWorkspaceRoot(raw);
+  if (!workspaceRoot) {
+    return null;
+  }
+  const title = extractCodeSessionCreateTitle(raw);
+  return {
+    workspaceRoot,
+    ...(title ? { title } : {}),
+    attach: /\battach\b/i.test(raw) || /\bcurrent\s+(?:coding\s+)?workspace\b/i.test(raw),
+  };
+}
+
+function buildCodeSessionCreateControlDecision(
+  directive: CodeSessionCreateDirective,
+): Record<string, unknown> {
+  return {
+    route: 'coding_session_control',
+    confidence: 'high',
+    operation: 'create',
+    summary: directive.title
+      ? `Create and attach coding session "${directive.title}".`
+      : 'Create and attach a coding session.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+    executionClass: 'tool_orchestration',
+    preferredTier: 'local',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: false,
+    requireExactFileReferences: false,
+    expectedContextPressure: 'low',
+    preferredAnswerPath: 'direct',
+    simpleVsComplex: 'simple',
+    path: directive.workspaceRoot,
+    ...(directive.title ? { sessionTarget: directive.title } : {}),
+    codeSessionResource: 'session',
+  };
+}
+
+function buildCodingBackendResumeDecision(content: string | undefined): Record<string, unknown> {
+  const codingBackend = inferExplicitCodingBackendResumeBackend(content);
+  return {
+    route: 'coding_task',
+    confidence: 'high',
+    operation: 'update',
+    summary: 'Resume the latest coding backend run in the active coding workspace.',
+    turnRelation: 'follow_up',
+    resolution: 'ready',
+    missingFields: [],
+    executionClass: 'repo_grounded',
+    preferredTier: 'external',
+    requiresRepoGrounding: true,
+    requiresToolSynthesis: true,
+    requireExactFileReferences: false,
+    expectedContextPressure: 'high',
+    preferredAnswerPath: 'chat_synthesis',
+    simpleVsComplex: 'complex',
+    codingBackendRequested: true,
+    codingBackendResumeRequested: true,
+    ...(codingBackend ? { codingBackend } : {}),
+  };
+}
+
+function buildExplicitCodingBackendDelegationDecision(content: string | undefined): Record<string, unknown> | null {
+  const rawContent = content?.trim() ?? '';
+  if (!rawContent) return null;
+  const explicitBackend = inferExplicitCodingBackendRequest(
+    rawContent,
+    rawContent.toLowerCase(),
+    'unknown',
+  );
+  if (!explicitBackend) return null;
+  if (explicitBackend.codingBackend !== 'codex-sdk') return null;
+  const operation = explicitBackend.operation === 'unknown' ? 'run' : explicitBackend.operation;
+  const isWriteOperation = operation === 'create'
+    || operation === 'update'
+    || operation === 'delete'
+    || operation === 'save';
+  const isRunOperation = operation === 'run';
+  return {
+    route: 'coding_task',
+    confidence: 'high',
+    operation,
+    summary: 'Delegate the requested coding workspace task to the selected coding backend.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+    executionClass: 'repo_grounded',
+    preferredTier: 'external',
+    requiresRepoGrounding: true,
+    requiresToolSynthesis: true,
+    requireExactFileReferences: false,
+    expectedContextPressure: isWriteOperation || isRunOperation ? 'high' : 'medium',
+    preferredAnswerPath: 'tool_loop',
+    simpleVsComplex: isWriteOperation || isRunOperation ? 'complex' : 'simple',
+    plannedSteps: buildCodingBackendDelegationPlannedSteps(operation),
+    codingBackend: explicitBackend.codingBackend,
+    codingBackendRequested: true,
+    ...(explicitBackend.sessionTarget ? { sessionTarget: explicitBackend.sessionTarget } : {}),
+  };
+}
+
+function buildCodingBackendDelegationPlannedSteps(
+  operation: IntentGatewayDecision['operation'],
+): NonNullable<IntentGatewayDecision['plannedSteps']> {
+  if (operation === 'create' || operation === 'update' || operation === 'delete' || operation === 'save') {
+    return [
+      {
+        kind: 'read',
+        summary: 'Inspect the current workspace context before changing files.',
+        required: true,
+        expectedToolCategories: ['read', 'repo_inspect'],
+      },
+      {
+        kind: 'write',
+        summary: 'Apply the requested workspace change through the selected coding backend.',
+        required: true,
+        dependsOn: ['step_1'],
+        expectedToolCategories: ['coding_backend', 'repo_mutation'],
+      },
+      {
+        kind: 'answer',
+        summary: 'Report the coding backend result and verification evidence.',
+        required: true,
+        dependsOn: ['step_2'],
+        expectedToolCategories: ['answer'],
+      },
+    ];
+  }
+  if (operation === 'run') {
+    return [
+      {
+        kind: 'tool_call',
+        summary: 'Run the requested coding backend task in the active workspace.',
+        required: true,
+        expectedToolCategories: ['coding_backend'],
+      },
+      {
+        kind: 'answer',
+        summary: 'Report the coding backend result.',
+        required: true,
+        dependsOn: ['step_1'],
+        expectedToolCategories: ['answer'],
+      },
+    ];
+  }
+  return [
+    {
+      kind: 'read',
+      summary: 'Inspect the workspace through the selected coding backend.',
+      required: true,
+      expectedToolCategories: ['coding_backend', 'repo_inspect'],
+    },
+    {
+      kind: 'answer',
+      summary: 'Report the coding backend findings and recommended next step.',
+      required: true,
+      dependsOn: ['step_1'],
+      expectedToolCategories: ['answer'],
+    },
+  ];
+}
+
+function repairCodeSessionCreateControlDecision(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  const directive = parseCodeSessionCreateDirective(input.content);
+  if (!directive) {
+    return decision;
+  }
+  if (decision.route === 'security_task') {
+    return decision;
+  }
+  const normalized = normalizeIntentGatewayDecision(
+    buildCodeSessionCreateControlDecision(directive),
+    {
+      sourceContent: input.content,
+      recentHistory: input.recentHistory,
+      pendingAction: input.pendingAction,
+      continuity: input.continuity,
+    },
+    { classifierSource: 'repair.structured' },
+  );
+  return {
+    ...normalized,
+    provenance: {
+      ...(normalized.provenance ?? {}),
+      route: 'repair.structured',
+      operation: 'repair.structured',
+      executionClass: 'repair.structured',
+      preferredAnswerPath: 'repair.structured',
+      requiresRepoGrounding: 'repair.structured',
+      requiresToolSynthesis: 'repair.structured',
+    },
+  };
+}
+
+function repairCodingBackendResumeDecision(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  if (!isExplicitCodingBackendResumeRequest(input.content)) {
+    return decision;
+  }
+  if (decision.route === 'security_task') {
+    return decision;
+  }
+  const normalized = normalizeIntentGatewayDecision(
+    buildCodingBackendResumeDecision(input.content),
+    {
+      sourceContent: input.content,
+      recentHistory: input.recentHistory,
+      pendingAction: input.pendingAction,
+      continuity: input.continuity,
+    },
+    { classifierSource: 'repair.structured' },
+  );
+  return {
+    ...normalized,
+    provenance: {
+      ...(normalized.provenance ?? {}),
+      route: 'repair.structured',
+      operation: 'repair.structured',
+      executionClass: 'repair.structured',
+      preferredTier: 'repair.structured',
+      requiresRepoGrounding: 'repair.structured',
+      requiresToolSynthesis: 'repair.structured',
+      requireExactFileReferences: 'repair.structured',
+      expectedContextPressure: 'repair.structured',
+      preferredAnswerPath: 'repair.structured',
+      simpleVsComplex: 'repair.structured',
+    },
+  };
+}
+
+function extractCodeSessionCreateWorkspaceRoot(content: string): string | undefined {
+  const quoted = content.match(/\b(?:for|at|in)\s+["'`]([^"'`]+)["'`]/i)?.[1];
+  const windows = quoted ?? content.match(/\b(?:for|at|in)\s+([A-Za-z]:\\.+?)(?=\s+(?:and\s+)?(?:attach|as\s+the|use|switch)\b|[.!?]?$|$)/i)?.[1];
+  const unix = windows ?? content.match(/\b(?:for|at|in)\s+((?:\/|~\/|\.{1,2}[\\/]).+?)(?=\s+(?:and\s+)?(?:attach|as\s+the|use|switch)\b|[.!?]?$|$)/i)?.[1];
+  return cleanCodeSessionCreateValue(unix);
+}
+
+function extractCodeSessionCreateTitle(content: string): string | undefined {
+  const named = content.match(/\b(?:named|called)\s+(.+?)\s+(?:for|at|in)\s+(?=["'`]*[A-Za-z]:\\|["'`]*(?:\/|~\/|\.{1,2}[\\/]))/i)?.[1]
+    ?? content.match(/\b(?:named|called)\s+["'`]([^"'`]+)["'`]/i)?.[1];
+  return cleanCodeSessionCreateValue(named);
+}
+
+function cleanCodeSessionCreateValue(value: string | undefined): string | undefined {
+  const cleaned = value
+    ?.trim()
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/[.?!,;:]+$/g, '')
+    .trim();
+  return cleaned || undefined;
+}
+
 function repairEmailProviderDecisionIfNeeded(
   input: IntentGatewayInput,
   decision: IntentGatewayDecision,
@@ -1792,6 +2155,8 @@ function formatCodingBackendLabel(value: string | undefined): string {
   switch (value?.trim()) {
     case 'codex':
       return 'Codex';
+    case 'codex-sdk':
+      return 'Codex SDK';
     case 'claude-code':
       return 'Claude Code';
     case 'gemini-cli':
@@ -1801,6 +2166,253 @@ function formatCodingBackendLabel(value: string | undefined): string {
     default:
       return value?.trim() ?? '';
   }
+}
+
+const CODE_SESSION_REMOVE_CLARIFICATION_PROMPT_PATTERN = /(?:which|what)\s+(?:coding\s+)?session\s+should\s+i\s+remove(?:\s+to\s+make\s+room)?|session\s+creation\s+failed[^]*?\bsessions?\s+\(the\s+maximum\)|already\s+have\s+\d+\s+sessions?\s+\(the\s+maximum\)/i;
+const CODE_SESSION_REMOVE_VERB_PATTERN = /^(?:please\s+)?(?:remove|delete|drop|discard)\s+(?:the\s+)?/i;
+const CODE_SESSION_CONTROL_VERB_PATTERN = /\b(?:detach|disconnect|leave|delete|remove|switch|attach|connect|create|list|show|inspect|current|active)\b/i;
+
+function inferCodeSessionRemovalClarificationAnswer(
+  input: IntentGatewayInput,
+): string | null {
+  const context = readCodeSessionRemovalClarificationContext(input);
+  if (!context) {
+    return null;
+  }
+  return readCodeSessionRemovalAnswerFromPendingOptions(input.content, input.pendingAction)
+    ?? readCodeSessionRemovalAnswerName(input.content)
+    ?? null;
+}
+
+function repairCodeSessionClarificationFromRecentHistory(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  if (decision.turnRelation === 'correction') {
+    return decision;
+  }
+  if (
+    decision.route === 'coding_session_control'
+    && decision.turnRelation === 'clarification_answer'
+    && decision.operation !== 'unknown'
+    && decision.entities.sessionTarget?.trim()
+  ) {
+    return decision;
+  }
+
+  const context = readCodeSessionRemovalClarificationContext(input);
+  if (!context) {
+    return decision;
+  }
+  const sessionTarget = decision.entities.sessionTarget?.trim()
+    || readCodeSessionRemovalAnswerFromPendingOptions(input.content, input.pendingAction)
+    || readCodeSessionRemovalAnswerName(input.content);
+  if (!sessionTarget) {
+    return decision;
+  }
+  const operation = inferCodeSessionControlOperation(input.content.toLowerCase()) ?? 'delete';
+  const createDirective = buildCodeSessionCreateDirectiveFromRemovalContext(context);
+
+  return {
+    ...decision,
+    route: 'coding_session_control',
+    operation,
+    confidence: decision.confidence === 'low' ? 'medium' : decision.confidence,
+    turnRelation: 'clarification_answer',
+    resolution: 'ready',
+    missingFields: decision.missingFields.filter((field) => field !== 'session_target'),
+    executionClass: 'tool_orchestration',
+    preferredTier: 'local',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: false,
+    requireExactFileReferences: false,
+    expectedContextPressure: 'low',
+    preferredAnswerPath: 'direct',
+    simpleVsComplex: 'simple',
+    resolvedContent: decision.resolvedContent
+      ?? (createDirective
+        ? `Remove coding session ${sessionTarget}, then create the requested coding session.`
+        : `Remove coding session ${sessionTarget} to make room for the requested session.`),
+    entities: {
+      ...decision.entities,
+      sessionTarget,
+      ...(createDirective
+        ? {
+            path: createDirective.workspaceRoot,
+            ...(createDirective.title ? { query: createDirective.title } : {}),
+            codeSessionResource: 'session' as const,
+          }
+        : {}),
+    },
+    provenance: {
+      ...(decision.provenance ?? {}),
+      route: decision.provenance?.route ?? 'repair.structured',
+      operation: decision.provenance?.operation ?? 'repair.structured',
+      resolvedContent: decision.provenance?.resolvedContent ?? 'repair.structured',
+      entities: {
+        ...(decision.provenance?.entities ?? {}),
+        sessionTarget: decision.provenance?.entities?.sessionTarget ?? 'repair.structured',
+        ...(createDirective
+          ? {
+              path: decision.provenance?.entities?.path ?? 'repair.structured',
+              ...(createDirective.title ? { query: decision.provenance?.entities?.query ?? 'repair.structured' } : {}),
+              codeSessionResource: decision.provenance?.entities?.codeSessionResource ?? 'repair.structured',
+            }
+          : {}),
+      },
+    },
+  };
+}
+
+interface CodeSessionRemovalClarificationContext {
+  originalUserRequest?: string;
+  workspaceRoot?: string;
+  title?: string;
+}
+
+function buildCodeSessionCreateDirectiveFromRemovalContext(
+  context: CodeSessionRemovalClarificationContext | null,
+): CodeSessionCreateDirective | null {
+  if (!context) {
+    return null;
+  }
+  if (context.workspaceRoot) {
+    return {
+      workspaceRoot: context.workspaceRoot,
+      ...(context.title ? { title: context.title } : {}),
+      attach: true,
+    };
+  }
+  return context.originalUserRequest
+    ? parseCodeSessionCreateDirective(context.originalUserRequest)
+    : null;
+}
+
+function readCodeSessionRemovalClarificationContext(
+  input: IntentGatewayInput,
+): CodeSessionRemovalClarificationContext | null {
+  return readCodeSessionRemovalClarificationContextFromPendingAction(input.pendingAction)
+    ?? readCodeSessionRemovalClarificationContextFromHistory(input.recentHistory);
+}
+
+function readCodeSessionRemovalClarificationContextFromPendingAction(
+  pendingAction: IntentGatewayInput['pendingAction'],
+): CodeSessionRemovalClarificationContext | null {
+  if (!pendingAction || pendingAction.blockerKind !== 'clarification') {
+    return null;
+  }
+  if (pendingAction.route !== 'coding_session_control') {
+    return null;
+  }
+  const promptLooksRelevant = CODE_SESSION_REMOVE_CLARIFICATION_PROMPT_PATTERN.test(pendingAction.prompt);
+  if (pendingAction.field !== 'session_target' && !promptLooksRelevant) {
+    return null;
+  }
+  const workspaceRoot = typeof pendingAction.entities?.path === 'string'
+    ? pendingAction.entities.path.trim()
+    : '';
+  const title = typeof pendingAction.entities?.query === 'string'
+    ? pendingAction.entities.query.trim()
+    : typeof pendingAction.entities?.sessionTarget === 'string'
+      ? pendingAction.entities.sessionTarget.trim()
+      : '';
+  return {
+    ...(pendingAction.originalRequest?.trim() ? { originalUserRequest: pendingAction.originalRequest.trim() } : {}),
+    ...(workspaceRoot ? { workspaceRoot } : {}),
+    ...(title ? { title } : {}),
+  };
+}
+
+function readCodeSessionRemovalClarificationContextFromHistory(
+  recentHistory: IntentGatewayInput['recentHistory'],
+): CodeSessionRemovalClarificationContext | null {
+  if (!Array.isArray(recentHistory) || recentHistory.length === 0) {
+    return null;
+  }
+  for (let index = recentHistory.length - 1; index >= 0; index -= 1) {
+    const entry = recentHistory[index];
+    if (!entry || entry.role !== 'assistant') {
+      continue;
+    }
+    if (!CODE_SESSION_REMOVE_CLARIFICATION_PROMPT_PATTERN.test(entry.content)) {
+      continue;
+    }
+    for (let priorIndex = index - 1; priorIndex >= 0; priorIndex -= 1) {
+      const priorEntry = recentHistory[priorIndex];
+      if (priorEntry?.role === 'user' && priorEntry.content.trim()) {
+        return {
+          originalUserRequest: priorEntry.content.trim(),
+        };
+      }
+    }
+    return {};
+  }
+  return null;
+}
+
+function readCodeSessionRemovalAnswerName(content: string | undefined): string | undefined {
+  const raw = content?.trim() ?? '';
+  if (!raw || raw.length > 120) {
+    return undefined;
+  }
+  const cleaned = raw
+    .replace(CODE_SESSION_REMOVE_VERB_PATTERN, '')
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/[.?!]+$/g, '')
+    .trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  if (isExplicitCodingSessionControlRequest(cleaned) && !CODE_SESSION_REMOVE_VERB_PATTERN.test(raw)) {
+    return undefined;
+  }
+  if (CODE_SESSION_CONTROL_VERB_PATTERN.test(cleaned)) {
+    return undefined;
+  }
+  return cleaned.split(/\s+/).length <= 12 ? cleaned : undefined;
+}
+
+function readCodeSessionRemovalAnswerFromPendingOptions(
+  content: string | undefined,
+  pendingAction: IntentGatewayInput['pendingAction'],
+): string | undefined {
+  if (!pendingAction || pendingAction.blockerKind !== 'clarification') {
+    return undefined;
+  }
+  if (pendingAction.route !== 'coding_session_control' || pendingAction.field !== 'session_target') {
+    return undefined;
+  }
+  const normalizedContent = normalizeCodeSessionRemovalOptionText(content);
+  if (!normalizedContent) {
+    return undefined;
+  }
+  const options = pendingAction.options ?? [];
+  for (const option of options) {
+    const value = option.value.trim();
+    const label = option.label.trim();
+    const normalizedValue = normalizeCodeSessionRemovalOptionText(value);
+    const normalizedLabel = normalizeCodeSessionRemovalOptionText(label);
+    const normalizedDescription = normalizeCodeSessionRemovalOptionText(option.description);
+    const resolvedValue = value || label;
+    if (!resolvedValue) {
+      continue;
+    }
+    if ((normalizedValue && normalizedContent === normalizedValue)
+      || (normalizedLabel && normalizedContent === normalizedLabel)
+      || (normalizedLabel && normalizedContent.includes(normalizedLabel))
+      || (normalizedValue && normalizedContent.includes(normalizedValue))
+      || (normalizedDescription && normalizedContent.includes(normalizedDescription))) {
+      return resolvedValue;
+    }
+  }
+  return undefined;
+}
+
+function normalizeCodeSessionRemovalOptionText(content: string | undefined): string {
+  return (content ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 }
 
 const AUTOMATION_NAME_CLARIFICATION_PROMPT_PATTERN = /tell me which automation you want to inspect, run, rename, enable, disable, or edit/i;

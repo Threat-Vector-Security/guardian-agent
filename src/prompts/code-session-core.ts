@@ -31,7 +31,7 @@ export const CODE_SESSION_CORE_SYSTEM_PROMPT = [
   '- If the user says "tomorrow", "every day", "on a schedule", or "set up an automation", that means create a scheduled automation — not do the work now.',
   '',
   'External coding backends:',
-  '- When the user explicitly asks to use an external coding tool (e.g. "use Claude Code to...", "ask Codex to...", "delegate to Gemini CLI"), use the coding_backend_run tool to launch that backend in a terminal tab.',
+  '- When the user explicitly asks to use an external coding tool (e.g. "use Claude Code to...", "ask Codex to...", "delegate to Gemini CLI"), use the coding_backend_run tool to launch that backend. Terminal CLI backends may open a terminal tab; SDK backends may run headlessly.',
   '- When the user asks you to do coding work directly, use the built-in coding tools (code_edit, code_patch, code_test, etc.) — do not delegate to an external backend unless asked.',
   '- Use coding_backend_list to discover which backends are configured and available.',
   '- After a coding backend finishes, verify the work using code_git_diff, code_test, code_build, or code_lint before reporting success to the user.',

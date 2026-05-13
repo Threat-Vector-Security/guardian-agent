@@ -9668,6 +9668,51 @@ describe('ToolExecutor', () => {
     });
   });
 
+  it('creates a missing workspace directory before registering a coding session', async () => {
+    const root = createExecutorRoot();
+    const workspaceRoot = join(root, 'new-empty-workspace');
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, 'code-sessions.sqlite'),
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      codeSessionStore,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_session_create',
+      args: {
+        title: 'New Empty Workspace',
+        workspaceRoot,
+        attach: true,
+      },
+      origin: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    });
+
+    expect(result.success).toBe(true);
+    expect(existsSync(workspaceRoot)).toBe(true);
+    expect(result.output).toMatchObject({
+      attached: true,
+      workspaceCreated: true,
+      session: {
+        title: 'New Empty Workspace',
+        workspaceRoot,
+        resolvedRoot: workspaceRoot,
+      },
+    });
+  });
+
   it('returns an ambiguity error when multiple coding sessions match the attach target', async () => {
     const root = createExecutorRoot();
     const codeSessionStore = new CodeSessionStore({

@@ -23,6 +23,9 @@ Do not create or switch to a new branch unless the user explicitly asks for it. 
 - `npm run helper:windows`: rebuild the Windows native helper when touching `native/windows-helper/`.
 - **Integration Testing (CRITICAL):** Review `docs/guides/INTEGRATION-TEST-HARNESS.md` for full-stack API regression testing, including guidance for cross-platform (Windows/WSL) and Ollama configurations.
 
+## Runtime Restart Handoff (CRITICAL)
+After changing backend/runtime/startup code, rebuilding `dist/`, or modifying config that only loads at process start, always make the restart ownership explicit. State exactly one of these outcomes before handoff: "I restarted the Guardian backend" with the command/process used, or "I did not restart the Guardian backend; you need to restart it" with the exact command or UI action. If restarting the live Guardian process could interrupt Telegram, web dashboard, approvals, or active coding runs, do not restart it without an explicit user request; tell the user clearly that they must restart it. Never leave the user to infer whether source changes are already active in the running Windows `dist/index.js` process.
+
 ## Intent Gateway (CRITICAL)
 All user intent classification must go through the Intent Gateway (`src/runtime/intent-gateway.ts`). **Never use regex, keyword matching, string includes, or any ad-hoc pattern matching to determine what the user is asking for.** The Intent Gateway is an LLM classifier that routes requests via structured tool calls. New routes must be added to `IntentGatewayRoute`, the tool schema, the system prompt, `normalizeRoute`, `preferredCandidatesForDecision` in `direct-intent-routing.ts`, and the candidate dispatch loop in `src/index.ts`. Pre-gateway interception is only permitted for slash-command parsing in channel adapters and continuation/approval flow detection.
 

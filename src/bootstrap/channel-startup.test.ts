@@ -1,7 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DashboardCallbacks } from '../channels/web-types.js';
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
 import { startBootstrapChannels } from './channel-startup.js';
+
+const ORIGINAL_CODEX_BACKEND = process.env['GUARDIAN_CODEX_BACKEND'];
+const ORIGINAL_CODEX_HOST = process.env['GUARDIAN_CODEX_HOST'];
 
 function createConfig(): GuardianAgentConfig {
   return structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
@@ -72,6 +75,24 @@ function createBaseArgs(overrides: Partial<Parameters<typeof startBootstrapChann
 }
 
 describe('startBootstrapChannels', () => {
+  beforeEach(() => {
+    delete process.env['GUARDIAN_CODEX_BACKEND'];
+    delete process.env['GUARDIAN_CODEX_HOST'];
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_CODEX_BACKEND === undefined) {
+      delete process.env['GUARDIAN_CODEX_BACKEND'];
+    } else {
+      process.env['GUARDIAN_CODEX_BACKEND'] = ORIGINAL_CODEX_BACKEND;
+    }
+    if (ORIGINAL_CODEX_HOST === undefined) {
+      delete process.env['GUARDIAN_CODEX_HOST'];
+    } else {
+      process.env['GUARDIAN_CODEX_HOST'] = ORIGINAL_CODEX_HOST;
+    }
+  });
+
   it('starts the CLI channel and routes messages through dashboard dispatch', async () => {
     const config = createConfig();
     config.channels.cli = { enabled: true, defaultAgent: 'cli-agent' };
@@ -148,6 +169,69 @@ describe('startBootstrapChannels', () => {
     expect(resolveTelegramBotToken).toHaveBeenCalled();
     expect(reloadResult).toEqual({ success: true, message: 'Telegram channel reloaded.' });
     expect(result.getTelegramChannel()).toBe(secondTelegram);
+  });
+
+  it('installs a Codex SDK coding backend service for Telegram without requiring the web channel', async () => {
+    process.env['GUARDIAN_CODEX_BACKEND'] = 'codex-sdk';
+    process.env['GUARDIAN_CODEX_HOST'] = 'windows';
+    const config = createConfig();
+    config.channels.cli = { enabled: false } as never;
+    config.channels.web = { enabled: false } as never;
+    config.channels.telegram = {
+      enabled: true,
+      allowedChatIds: [123],
+      defaultAgent: 'telegram-agent',
+    } as never;
+
+    const telegram = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      send: vi.fn(async () => {}),
+      getKnownChatIds: vi.fn(() => [123]),
+    };
+    const createTelegramChannel = vi.fn(() => telegram);
+    const codingBackendService = { dispose: vi.fn() } as never;
+    const createCodingBackendService = vi.fn(() => codingBackendService);
+    const setCodingBackendService = vi.fn();
+
+    const args = createBaseArgs({
+      config,
+      configRef: { current: config },
+      resolveTelegramBotToken: vi.fn(() => 'telegram-token'),
+      createTelegramChannel,
+      createCodingBackendService,
+      toolExecutor: {
+        getRuntimeNotices: () => [],
+        setCodingBackendService,
+      },
+    });
+
+    await startBootstrapChannels(args);
+
+    expect(createCodingBackendService).toHaveBeenCalledOnce();
+    expect(createCodingBackendService).toHaveBeenCalledWith(expect.objectContaining({
+      config: expect.objectContaining({
+        enabled: true,
+        defaultBackend: 'codex-sdk',
+      }),
+    }));
+    const serviceOptions = createCodingBackendService.mock.calls[0]?.[0];
+    expect(serviceOptions?.config.backends).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'codex-sdk',
+        adapterKind: 'codex_sdk',
+        executionHost: 'windows',
+        enabled: true,
+      }),
+    ]));
+    await expect(serviceOptions?.terminalControl.openTerminal({
+      codeSessionId: 'session-1',
+      shell: 'powershell',
+      cwd: 'S:\\Development\\GuardianAgent',
+    })).rejects.toThrow('web channel is not running');
+    expect(setCodingBackendService).toHaveBeenCalledWith(codingBackendService);
+    expect(createTelegramChannel).toHaveBeenCalledOnce();
+    expect(telegram.start).toHaveBeenCalledOnce();
   });
 
   it('starts the web channel and installs the coding backend service', async () => {

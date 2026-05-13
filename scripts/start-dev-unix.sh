@@ -663,6 +663,18 @@ echo ""
 
 # Use tsx if available, otherwise node
 export NODE_NO_WARNINGS=1
+if [ -z "${GUARDIAN_CODEX_HOST:-}" ]; then
+  if grep -qi microsoft /proc/version 2>/dev/null; then
+    export GUARDIAN_CODEX_HOST=wsl
+  elif [ "$(uname -s)" = "Darwin" ]; then
+    export GUARDIAN_CODEX_HOST=macos
+  else
+    export GUARDIAN_CODEX_HOST=linux
+  fi
+fi
+if [ -z "${GUARDIAN_CODEX_BACKEND:-}" ]; then
+  export GUARDIAN_CODEX_BACKEND=codex-sdk
+fi
 if [ -x "node_modules/.bin/tsx" ]; then
   exec node_modules/.bin/tsx src/index.ts
 else

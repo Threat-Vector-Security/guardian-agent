@@ -166,6 +166,29 @@ interface CodingToolRegistrarContext {
   }) => Promise<RemoteExecutionRunResult>;
 }
 
+async function ensureCodeSessionWorkspaceRoot(
+  context: CodingToolRegistrarContext,
+  workspaceRoot: string,
+  request: ToolExecutionRequest,
+): Promise<{ workspaceRoot: string; created: boolean }> {
+  const safeWorkspaceRoot = await context.resolveAllowedPath(workspaceRoot, request);
+  try {
+    const existing = await stat(safeWorkspaceRoot);
+    if (!existing.isDirectory()) {
+      throw new Error(`Coding session workspace '${workspaceRoot}' exists but is not a directory.`);
+    }
+    return { workspaceRoot: safeWorkspaceRoot, created: false };
+  } catch (error) {
+    if ((error as { code?: unknown }).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  context.guardAction(request, 'write_file', { path: workspaceRoot });
+  await mkdir(safeWorkspaceRoot, { recursive: true });
+  return { workspaceRoot: safeWorkspaceRoot, created: true };
+}
+
 function normalizeCodeText(value: string): string {
   return value.replace(/\r\n/g, '\n');
 }
@@ -889,11 +912,13 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       if (!ownerUserId || !channel) {
         return { success: false, error: 'Current user context is unavailable.' };
       }
+      const requestedWorkspaceRoot = requireString(args.workspaceRoot, 'workspaceRoot');
+      const workspace = await ensureCodeSessionWorkspaceRoot(context, requestedWorkspaceRoot, request);
       const session = context.codeSessionStore.createSession({
         ownerUserId,
         ownerPrincipalId: request.principalId,
         title: requireString(args.title, 'title'),
-        workspaceRoot: requireString(args.workspaceRoot, 'workspaceRoot'),
+        workspaceRoot: workspace.workspaceRoot,
       });
       if (args.attach !== false) {
         context.codeSessionStore.attachSession({
@@ -910,6 +935,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         output: {
           session: context.summarizeCodeSession(session),
           attached: args.attach !== false,
+          workspaceCreated: workspace.created,
         },
       };
     },
@@ -999,6 +1025,59 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       return {
         success: true,
         output: { detached },
+      };
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'code_session_delete',
+      description: 'Delete a backend-owned coding session by id, title, or workspace path. This removes Guardian session metadata and attachments; it does not delete files from disk.',
+      shortDescription: 'Delete an owned coding session by id, title, or workspace path.',
+      risk: 'read_only',
+      category: 'coding',
+      parameters: {
+        type: 'object',
+        properties: {
+          sessionId: { type: 'string', description: 'The code session target to delete. This can be an id, title, or workspace path match.' },
+        },
+        required: ['sessionId'],
+      },
+    },
+    async (args, request) => {
+      if (!context.codeSessionStore) {
+        return { success: false, error: 'Code session store is not available.' };
+      }
+      let ownerUserId = request.userId?.trim();
+      if (ownerUserId?.startsWith('code-session:') || ownerUserId?.startsWith('delegated-task:') || ownerUserId?.startsWith('sched-task:')) {
+        ownerUserId = request.principalId?.trim() ?? ownerUserId;
+      }
+      if (!ownerUserId) {
+        return { success: false, error: 'Current user context is unavailable.' };
+      }
+      const target = requireString(args.sessionId, 'sessionId').trim();
+      const resolved = context.resolveOwnedCodeSessionTarget(target, request);
+      if (!resolved.session) {
+        return { success: false, error: resolved.error ?? `Code session '${target}' was not found for the current user.` };
+      }
+      const session = resolved.session;
+      if (session.workState.managedSandboxes.length > 0) {
+        return {
+          success: false,
+          error: `Coding session '${session.title}' still has managed sandboxes attached. Release those sandboxes before deleting the session.`,
+          output: {
+            session: context.summarizeCodeSession(session),
+            managedSandboxes: session.workState.managedSandboxes,
+          },
+        };
+      }
+      const deleted = context.codeSessionStore.deleteSession(session.id, ownerUserId);
+      return {
+        success: deleted,
+        output: {
+          deleted,
+          session: context.summarizeCodeSession(session),
+        },
       };
     },
   );
@@ -1608,7 +1687,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
   context.registry.register(
     {
       name: 'coding_backend_list',
-      description: 'List available external coding CLI backends (Claude Code, Codex, Gemini CLI, etc.) and their status.',
+      description: 'List available external coding backends (Claude Code, Codex SDK/CLI, Gemini CLI, etc.) and their status.',
       shortDescription: 'List configured coding backends.',
       risk: 'read_only',
       category: 'coding',
@@ -1641,8 +1720,8 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
   context.registry.register(
     {
       name: 'coding_backend_run',
-      description: 'Launch an external coding CLI (Claude Code, Codex, Gemini CLI, etc.) to perform a coding task in the current workspace. Opens a visible terminal tab so the user can observe progress. Returns structured results when the CLI finishes. After the backend completes, verify the work using code_git_diff, code_test, or code_build.',
-      shortDescription: 'Delegate a coding task to an external coding CLI.',
+      description: 'Launch an external coding backend (Claude Code, Codex SDK/CLI, Gemini CLI, etc.) to perform a coding task in the current workspace. Terminal CLI backends open a visible terminal tab; SDK backends may run headlessly. Returns structured results when the backend finishes. After the backend completes, verify the work using code_git_diff, code_test, or code_build.',
+      shortDescription: 'Delegate a coding task to an external coding backend.',
       risk: 'mutating',
       category: 'coding',
       deferLoading: true,
@@ -1650,7 +1729,10 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         type: 'object',
         properties: {
           task: { type: 'string', description: 'The coding task to delegate to the external CLI.' },
-          backend: { type: 'string', description: 'Backend id (e.g. claude-code, codex, gemini-cli). Uses the default backend if omitted.' },
+          backend: { type: 'string', description: 'Backend id (e.g. codex-sdk, codex, claude-code, gemini-cli). Uses the default backend if omitted.' },
+          resumeLatest: { type: 'boolean', description: 'For Codex SDK, resume the active project-driver thread for the current coding workspace, falling back to the latest timed-out or failed SDK thread.' },
+          resumeSessionId: { type: 'string', description: 'For Codex SDK, resume a specific Guardian coding backend session by id.' },
+          resumeThreadId: { type: 'string', description: 'For Codex SDK, resume a specific persisted Codex SDK thread id from ~/.codex/sessions.' },
         },
         required: ['task'],
       },
@@ -1681,6 +1763,9 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         codeSessionId,
         workspaceRoot,
         requestId: request.requestId,
+        resumeLatest: args.resumeLatest === true,
+        resumeSessionId: typeof args.resumeSessionId === 'string' ? args.resumeSessionId.trim() : undefined,
+        resumeThreadId: typeof args.resumeThreadId === 'string' ? args.resumeThreadId.trim() : undefined,
       });
       return {
         success: result.success,
@@ -1714,9 +1799,12 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       const sessions = codingBackendService
         .getStatus(sessionId)
         .filter((session) => sessionId || !codeSessionId || session.codeSessionId === codeSessionId);
+      const codexProjects = typeof codingBackendService.getCodexProjectStatus === 'function'
+        ? codingBackendService.getCodexProjectStatus(codeSessionId)
+        : [];
       return {
         success: true,
-        output: { sessions },
+        output: { sessions, codexProjects },
       };
     },
   );

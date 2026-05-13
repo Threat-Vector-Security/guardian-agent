@@ -677,6 +677,44 @@ describe('intent-gateway-orchestration', () => {
     expect(context.contextSuppressed).toBe(false);
   });
 
+  it('keeps clarification context when the user pastes a listed coding-session option row', () => {
+    const pendingAction = makePendingAction({
+      blocker: {
+        kind: 'clarification',
+        field: 'session_target',
+        prompt: 'Which session should I remove to make room for "Signal Garden SDK Smoke"?',
+        options: [
+          {
+            value: 'Signal Garden SDK Smoke',
+            label: 'Signal Garden SDK Smoke',
+            description: 'S:\\Development\\SignalGardenSdkSmoke',
+          },
+          {
+            value: 'Guardian Agent',
+            label: 'Guardian Agent',
+            description: 'S:\\Development\\GuardianAgent',
+          },
+        ],
+      },
+      intent: {
+        route: 'coding_session_control',
+        operation: 'delete',
+        originalUserContent: 'Create a new coding session named Signal Garden SDK Smoke for S:\\Development\\SignalGardenSdkSmoke and attach it as the current coding workspace.',
+      },
+    });
+    const continuityThread = makeContinuityThread();
+
+    const context = filterIntentGatewayClassificationContext({
+      content: '- Signal Garden SDK Smoke — S:\\Development\\SignalGardenSdkSmoke id=12488284-033e-474d-9f20-4334c72ce0ac',
+      pendingAction,
+      continuityThread,
+    });
+
+    expect(context.pendingAction).toBe(pendingAction);
+    expect(context.continuityThread).toBe(continuityThread);
+    expect(context.contextSuppressed).toBe(false);
+  });
+
   it('keeps search-surface clarification context for UI option aliases', () => {
     const pendingAction = makePendingAction({
       blocker: {

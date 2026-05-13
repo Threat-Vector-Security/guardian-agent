@@ -577,11 +577,16 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'External Coding Backends',
                 items: [
-                  'Configuration > Integrations > Coding Assistants shows the external coding assistants Guardian can launch: Claude Code, Codex, Gemini CLI, and Aider.',
+                  'Configuration > Integrations > Coding Assistants shows the external coding assistants Guardian can launch: Claude Code, Codex SDK, Codex CLI, Gemini CLI, and Aider.',
+                  'Startup scripts can select the local Codex execution host with GUARDIAN_CODEX_HOST and the default Codex backend with GUARDIAN_CODEX_BACKEND. The Windows script defaults to the Codex SDK backend on the Windows host; the Unix script marks WSL, Linux, or macOS based on the runtime host.',
+                  'Telegram can use the Codex SDK backend through the same guarded coding assistant flow, even when the web dashboard is not running. Terminal CLI backends still need the web channel for their visible terminal tab.',
                   'That panel is intentionally simple: enable or disable the assistants you want available and choose a default when needed.',
                   'Guardian only uses these assistants when you explicitly ask to delegate coding work to one of them. Direct coding requests still use Guardian’s built-in coding tools by default.',
                   'Mentioning Codex or another assistant as the subject of a question is not enough to launch it. Questions such as "Why did Codex do this?" stay in normal explanation or investigation flow unless you explicitly ask Guardian to use that assistant.',
+                  'Codex SDK keeps an active project-driver thread per coding session. After you ask Guardian to use Codex SDK in a workspace, later Codex SDK requests for that workspace resume the same thread with the last project checkpoint instead of starting cold each time.',
+                  'Use remote prompts such as "ask Codex SDK to draft a design, do not edit files yet", "have Codex SDK implement phase 1", "continue the current Codex SDK work", "ask Codex SDK to run tests and fix failures", and "summarize the Codex SDK checkpoint".',
                   'In web chat and CLI, delegated coding assistants can surface live activity updates while they work. Telegram stays better suited to remote one-shot follow-up than dense live logs, so it may send only sparse still-working updates before the final result.',
+                  'When Codex SDK builds a local app and returns a loopback URL plus start command, Guardian can try to start that app in a host terminal and verify it over HTTP. If host startup fails, Guardian reports the SDK work separately from the unavailable local URL.',
                   'Approval copy for delegated coding assistants includes the active coding workspace so you can see which repo Guardian will launch the CLI in before you approve it.',
                   'If a delegated coding request explicitly names a different saved coding workspace, Guardian switches to that workspace before it launches the assistant. If the target is ambiguous, it stops and asks.',
                 ],

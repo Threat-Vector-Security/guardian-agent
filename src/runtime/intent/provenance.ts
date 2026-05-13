@@ -26,6 +26,7 @@ const ENTITY_KEYS = [
   'personalItemType',
   'codingBackend',
   'codingBackendRequested',
+  'codingBackendResumeRequested',
   'codingRemoteExecRequested',
   'codingRunStatusCheck',
   'toolName',

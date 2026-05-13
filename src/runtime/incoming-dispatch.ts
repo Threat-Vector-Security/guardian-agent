@@ -178,7 +178,7 @@ export function createIncomingDispatchPreparer(args: {
   const now = args.now ?? Date.now;
   const classifierProviderCooldowns = new Map<string, number>();
   const classifierProviderFamilyCooldowns = new Map<string, number>();
-  const availableCodingBackends = args.availableCodingBackends ?? ['codex', 'claude-code', 'gemini-cli', 'aider'];
+  const availableCodingBackends = args.availableCodingBackends ?? ['codex-sdk', 'codex', 'claude-code', 'gemini-cli', 'aider'];
   const resolveConfiguredAgentId = args.resolveConfiguredAgentId ?? ((agentId?: string) => (
     resolveConfiguredAgentIdAlias(agentId, {
       defaultAgentId: args.defaultAgentId,
@@ -315,8 +315,11 @@ export function createIncomingDispatchPreparer(args: {
     if (isContinuableExecutionForGateway(record)) {
       return toActiveExecutionSummary(record);
     }
-    const fallbackRecord = findLatestContinuableExecutionForGateway(stateAgentId, canonicalUserId, executionId);
-    return fallbackRecord ? toActiveExecutionSummary(fallbackRecord) : undefined;
+    if (executionId) {
+      const fallbackRecord = findLatestContinuableExecutionForGateway(stateAgentId, canonicalUserId, executionId);
+      return fallbackRecord ? toActiveExecutionSummary(fallbackRecord) : undefined;
+    }
+    return undefined;
   };
 
   const listClassifierProvidersForMode = (

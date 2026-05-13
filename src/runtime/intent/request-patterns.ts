@@ -9,6 +9,10 @@ const CODE_REPO_TARGET_PATTERN = /\b(?:source|function|class|module|component|sy
 const REPO_DOCUMENT_ARTIFACT_PATTERN = /\b(?:(?:technical\s+)?implementation\s+plan|business\s+plan|design\s+(?:doc|docs|document|plan)|architecture\s+(?:doc|docs|document|plan)|requirements?\s+(?:doc|docs|document)|spec(?:ification)?|roadmap|changelog|readme|operator\s+guide|runbook)\b/;
 const GREENFIELD_APP_BUILD_PATTERN = /\b(?:build|create|make|implement|generate|scaffold)\b[^.!?\n]{0,180}\b(?:app|application|site|website|web\s*app|player|dashboard|ui)\b|\b(?:app|application|site|website|web\s*app|player|dashboard|ui)\b[^.!?\n]{0,180}\b(?:from scratch|runnable locally|local url|playback controls|browsing)\b/;
 const CODING_BACKEND_SCOPE_TARGET_PATTERN = /\b(?:top-level directory|root directory|workspace root|project root|repo root|directory|folder)\b/;
+const CODING_BACKEND_RESUME_ACTION_PATTERN = /\b(?:continue|resume|retry|rerun|try\s+again|finish|complete|pick\s+(?:it\s+)?back\s+up|carry\s+on|keep\s+going)\b|\b(?:where|when)\s+(?:you|it)\s+left\s+off\b|\bfrom\s+(?:where\s+)?(?:you|it)\s+left\s+off\b/;
+const CODING_BACKEND_RESUME_TARGET_PATTERN = /\b(?:coding\s+backend|backend\s+run|codex\s+sdk(?:\s+(?:run|task|thread|job|work))?|codex\s+(?:sdk\s+)?run|sdk\s+run|latest\s+(?:codex\s+sdk\s+)?run|interrupted\s+(?:run|task|job|work)|timed[-\s]*out\s+(?:run|task|job|work))\b/;
+const CODING_BACKEND_RESUME_NEGATION_PATTERN = /\b(?:do\s+not|don't|dont|without|avoid)\s+(?:continue|resum(?:e|ing)|retry|rerun|finish|complete)\b/;
+const CODING_BACKEND_STATUS_QUESTION_PATTERN = /^(?:did|has|have|is|are|was|were)\b[^.!?\n]{0,160}\b(?:finish|finished|complete|completed|done|running|working|pass(?:ed)?|fail(?:ed)?)\b\??$/;
 const SOURCE_TREE_PATH_PATTERN = /(?:^|\s)(?:src|docs|web|scripts|native|policies|skills)\//;
 const REPO_FILE_REFERENCE_PATTERN = /\b[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|rs|py|go|java|yml|yaml|txt|toml)\b/;
 const EXACT_FILE_REQUEST_PATTERN = /\b(?:which\s+(?:files?|pages?|modules?|components?)|what\s+(?:files?|pages?|modules?|components?)|exact\s+files?|exact\s+file\s+paths?|exact\s+file\s+names?|file\s+names?|code\s+paths?|client-side\s+code\s+paths?|cite\s+the\s+exact\s+files?)\b/i;
@@ -90,6 +94,23 @@ export function looksLikeSelfContainedDirectAnswerTurn(request: string | undefin
     .map((clause) => clause.trim())
     .filter(Boolean)
     .every((clause) => DIRECT_REPLY_CONTEXT_CLAUSE_PATTERN.test(clause));
+}
+
+export function looksLikeGuardianCapabilityQuestion(request: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(request);
+  if (!normalized || normalized.length > 180) return false;
+  if (/\b(?:to|for)\s+(?:add|build|change|create|debug|edit|fix|implement|modify|patch|refactor|run|test|update|write)\b/.test(normalized)) {
+    return false;
+  }
+  const subject = /\b(?:codex(?:\s+(?:sdk|cli))?|claude(?:\s+code)?|gemini(?:\s+cli)?|aider|coding\s+backends?|coding\s+assistants?|telegram|web\s+dashboard|dashboard)\b/;
+  const capabilityVerb = /\b(?:access|available|configured|connected|control|enabled|have|installed|reach|run|see|talk\s+to|use|using)\b/;
+  return subject.test(normalized)
+    && capabilityVerb.test(normalized)
+    && (
+      /^(?:can|could|do|does|are|is|have|has)\b/.test(normalized)
+      || /\b(?:can|could|do|does|are|is|have|has)\s+(?:you|guardian|guardian\s+agent)\b/.test(normalized)
+      || /\b(?:is|are)\s+(?:codex|telegram|the\s+web\s+dashboard|the\s+dashboard|coding\s+backends?|coding\s+assistants?)\b/.test(normalized)
+    );
 }
 
 export function isRawCredentialDisclosureRequest(request: string | undefined): boolean {
@@ -181,6 +202,25 @@ export function isExplicitWorkspaceScopedRepoWorkRequest(content: string | undef
     || (CODING_BACKEND_PATTERN.test(normalized) && REPO_EXECUTION_PATTERN.test(normalized));
 }
 
+export function isExplicitCodingBackendResumeRequest(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized || CODING_BACKEND_RESUME_NEGATION_PATTERN.test(normalized)) return false;
+  if (CODING_BACKEND_STATUS_QUESTION_PATTERN.test(normalized)) return false;
+  if (!CODING_BACKEND_RESUME_ACTION_PATTERN.test(normalized)) return false;
+  return CODING_BACKEND_RESUME_TARGET_PATTERN.test(normalized);
+}
+
+export function inferExplicitCodingBackendResumeBackend(content: string | undefined): string | undefined {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized || !isExplicitCodingBackendResumeRequest(normalized)) return undefined;
+  if (/\b(?:openai\s+)?codex\s+sdk\b/.test(normalized)) return 'codex-sdk';
+  if (/\b(?:openai\s+)?codex(?:\s+cli)?\b/.test(normalized)) return 'codex';
+  if (/\bclaude(?:\s+code)?\b/.test(normalized)) return 'claude-code';
+  if (/\bgemini(?:\s+cli)?\b/.test(normalized)) return 'gemini-cli';
+  if (/\baider\b/.test(normalized)) return 'aider';
+  return undefined;
+}
+
 export function isExplicitWorkspaceAppBuildRequest(content: string | undefined): boolean {
   const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized || !WORKSPACE_SCOPE_PATTERN.test(normalized)) return false;
@@ -192,6 +232,13 @@ export function isExplicitWorkspaceAppBuildRequest(content: string | undefined):
 export function isExplicitCodingSessionControlRequest(content: string | undefined): boolean {
   const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized) return false;
+  if (isExplicitCodingBackendResumeRequest(normalized)) {
+    return false;
+  }
+  if (/\b(?:create|start)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:coding\s+)?session\b/.test(normalized)
+    || /\bnew\s+(?:coding\s+)?session\b/.test(normalized)) {
+    return true;
+  }
   if (
     isExplicitRepoInspectionRequest(normalized)
     || isExplicitWorkspaceScopedRepoWorkRequest(normalized)
@@ -204,7 +251,7 @@ export function isExplicitCodingSessionControlRequest(content: string | undefine
     || /\b(?:current|active|attached)\s+(?:coding\s+)?(?:workspace|session)\b/.test(normalized)
     || /\bthis chat\b.*\battached\b/.test(normalized)
     || /\b(?:list|show)\s+(?:my|the)?\s*(?:coding\s+)?(?:workspaces|sessions)\b/.test(normalized)
-    || /\b(?:switch|attach|detach|connect|disconnect|create)\b.*\b(?:coding\s+)?(?:workspace|session)\b/.test(normalized)
+    || /\b(?:switch|attach|detach|connect|disconnect|create|delete|remove)\b.*\b(?:coding\s+)?(?:workspace|session)\b/.test(normalized)
     || /\b(?:switch|attach)\b.*\bthis chat\b/.test(normalized);
 }
 

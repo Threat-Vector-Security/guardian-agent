@@ -1524,7 +1524,10 @@ export interface AgentPolicyUpdatesConfig {
   toolPolicies: boolean;
 }
 
-/** Configuration for an external coding CLI backend (e.g. Claude Code, Codex, Gemini CLI). */
+export type CodingBackendAdapterKind = 'terminal_cli' | 'codex_sdk';
+export type CodingBackendExecutionHost = 'auto' | 'windows' | 'wsl' | 'linux' | 'macos';
+
+/** Configuration for an external coding backend (e.g. Claude Code, Codex, Gemini CLI). */
 export interface CodingBackendConfig {
   /** Unique backend id (e.g. 'claude-code', 'codex', 'gemini-cli'). */
   id: string;
@@ -1532,6 +1535,10 @@ export interface CodingBackendConfig {
   name: string;
   /** Enable/disable this backend (default: true). */
   enabled: boolean;
+  /** Adapter used to launch the backend. Defaults to terminal_cli for existing backends. */
+  adapterKind?: CodingBackendAdapterKind;
+  /** Host environment this backend is meant to control. Defaults to auto/current process. */
+  executionHost?: CodingBackendExecutionHost;
   /** Shell type for the PTY terminal: 'wsl', 'bash', 'zsh', etc. Defaults to platform default. */
   shell?: string;
   /** The CLI command to invoke. */

@@ -367,6 +367,10 @@ export function normalizeCodingBackend(value: unknown): string | undefined {
     case 'openai codex cli':
     case 'codex cli':
       return 'codex';
+    case 'codex sdk':
+    case 'codex-sdk':
+    case 'openai codex sdk':
+      return 'codex-sdk';
     case 'claude code':
     case 'claude-code':
       return 'claude-code';

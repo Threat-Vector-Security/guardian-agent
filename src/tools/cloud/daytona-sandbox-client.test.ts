@@ -5,6 +5,7 @@ import type { DaytonaRemoteExecutionResolvedTarget } from '../../runtime/remote-
 const {
   createMock,
   getMock,
+  listMock,
   disposeMock,
   getWorkDirMock,
   getUserHomeDirMock,
@@ -21,6 +22,7 @@ const {
 } = vi.hoisted(() => ({
   createMock: vi.fn(),
   getMock: vi.fn(),
+  listMock: vi.fn(),
   disposeMock: vi.fn(async () => undefined),
   getWorkDirMock: vi.fn(async () => '/home/daytona'),
   getUserHomeDirMock: vi.fn(async () => '/home/daytona'),
@@ -44,6 +46,7 @@ const {
   DaytonaCtor: class {
     create = createMock;
     get = getMock;
+    list = listMock;
     [Symbol.asyncDispose] = disposeMock;
   },
 }));
@@ -94,6 +97,7 @@ describe('DaytonaSandboxClient', () => {
   beforeEach(() => {
     createMock.mockReset();
     getMock.mockReset();
+    listMock.mockReset();
     disposeMock.mockClear();
     getWorkDirMock.mockClear();
     getUserHomeDirMock.mockClear();
@@ -148,6 +152,24 @@ describe('DaytonaSandboxClient', () => {
     expect(createMock).toHaveBeenCalledWith(expect.not.objectContaining({
       resources: expect.anything(),
     }), { timeout: 15 });
+  });
+
+  it('does not depend on deprecated Daytona list pagination for create or lookup', async () => {
+    createMock.mockResolvedValueOnce(createSandboxRecord());
+    getMock.mockResolvedValueOnce(createSandboxRecord());
+
+    const client = new DaytonaSandboxClient();
+    await client.createSandbox({
+      target: TARGET,
+      timeoutMs: 15_000,
+    });
+    await client.getSandbox({
+      target: TARGET,
+      sandboxId: 'sandbox_123',
+      remoteWorkspaceRootHint: '/home/daytona/guardian-workspace',
+    });
+
+    expect(listMock).not.toHaveBeenCalled();
   });
 
   it('fails closed when asked to use an unsupported domain allowlist', async () => {

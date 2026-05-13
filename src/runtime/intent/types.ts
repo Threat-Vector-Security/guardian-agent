@@ -134,6 +134,7 @@ export interface IntentGatewayEntities {
   personalItemType?: 'overview' | 'note' | 'task' | 'calendar' | 'person' | 'library' | 'routine' | 'brief' | 'unknown';
   codingBackend?: string;
   codingBackendRequested?: boolean;
+  codingBackendResumeRequested?: boolean;
   codingRemoteExecRequested?: boolean;
   codingRunStatusCheck?: boolean;
   toolName?: string;

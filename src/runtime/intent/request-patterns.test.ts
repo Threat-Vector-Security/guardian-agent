@@ -69,6 +69,9 @@ describe('request-patterns', () => {
       'Switch this chat to the coding workspace for Temp install test.',
     )).toBe(true);
     expect(isExplicitCodingSessionControlRequest(
+      'Create a new coding session named Signal Garden Test for S:\\Development\\MyNewPrototype and attach it as the current coding workspace.',
+    )).toBe(true);
+    expect(isExplicitCodingSessionControlRequest(
       'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
     )).toBe(false);
     expect(isExplicitCodingSessionControlRequest(

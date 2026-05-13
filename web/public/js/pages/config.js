@@ -209,7 +209,7 @@ const CONFIG_HELP = {
       howLinks: 'Successful setup here unlocks Google Workspace tools for use by the assistant and automation layer.',
     },
     'Coding Assistants': {
-      whatItIs: 'This section manages the external coding CLI backends Guardian can delegate work to, such as Claude Code, Codex, Gemini CLI, and Aider.',
+      whatItIs: 'This section manages the external coding backends Guardian can delegate work to, such as Claude Code, Codex SDK, Codex CLI, Gemini CLI, and Aider.',
       whatSeeing: 'You are seeing orchestration settings and a fixed list of the built-in coding assistants Guardian knows how to launch, each with enablement and default-routing controls.',
       whatCanDo: 'Turn the feature on, choose how many delegated coding runs may execute at once, and enable or disable the built-in assistants Guardian can launch.',
       howLinks: 'These backends are only used when the coding agent is explicitly asked to delegate work to an external coding CLI instead of editing directly.',
@@ -5993,7 +5993,9 @@ function createCodingBackendsPanel(config) {
               </td>
               <td>
                 <code>${esc(backend.command)}${backend.args.length > 0 ? ` ${esc(backend.args.join(' '))}` : ''}</code>
-                ${backend.shell ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;">shell: ${esc(backend.shell)}</div>` : ''}
+                ${backend.adapterKind ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;">adapter: ${esc(backend.adapterKind)}</div>` : ''}
+                ${backend.executionHost ? `<div style="font-size:0.72rem;color:var(--text-muted);">host: ${esc(backend.executionHost)}</div>` : ''}
+                ${backend.shell ? `<div style="font-size:0.72rem;color:var(--text-muted);">shell: ${esc(backend.shell)}</div>` : ''}
                 ${typeof backend.timeoutMs === 'number' ? `<div style="font-size:0.72rem;color:var(--text-muted);">timeout: ${esc(String(Math.round(backend.timeoutMs / 1000)))}s</div>` : ''}
               </td>
               <td>
@@ -6082,6 +6084,8 @@ function createCodingBackendsPanel(config) {
                     id: backend.id,
                     name: backend.name,
                     enabled: backend.enabled,
+                    ...(backend.adapterKind ? { adapterKind: backend.adapterKind } : {}),
+                    ...(backend.executionHost ? { executionHost: backend.executionHost } : {}),
                     ...(backend.shell ? { shell: backend.shell } : {}),
                     command: backend.command,
                     args: [...backend.args],
@@ -6094,6 +6098,8 @@ function createCodingBackendsPanel(config) {
                   id: backend.id,
                   name: backend.name,
                   enabled: backend.enabled,
+                  ...(backend.adapterKind ? { adapterKind: backend.adapterKind } : {}),
+                  ...(backend.executionHost ? { executionHost: backend.executionHost } : {}),
                   ...(backend.shell ? { shell: backend.shell } : {}),
                   command: backend.command,
                   args: [...backend.args],
@@ -6120,7 +6126,7 @@ function createCodingBackendsPanel(config) {
 
   renderBackends();
   applyInputTooltips(section, {
-    '#coding-backends-enabled': 'Master switch for delegated external coding assistants. Disable this if you do not want Guardian launching any external coding CLI.',
+    '#coding-backends-enabled': 'Master switch for delegated external coding assistants. Disable this if you do not want Guardian launching any external coding backend.',
     '#coding-backends-max-concurrent': 'Maximum number of delegated coding assistant runs allowed at the same time for one coding session.',
     '#coding-backends-version-hours': 'How often Guardian should check the built-in coding assistants for version information or available updates.',
     '#coding-backends-auto-update': 'Choose whether Guardian should automatically run the configured update command for built-in coding assistants when an update check says one is available.',

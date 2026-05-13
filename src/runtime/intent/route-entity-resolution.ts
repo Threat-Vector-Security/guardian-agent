@@ -272,6 +272,10 @@ export function resolveIntentGatewayEntities(
       ? classifierSource
       : 'resolver.coding';
   }
+  const codingBackendResumeRequested = typeof parsed.codingBackendResumeRequested === 'boolean'
+    ? parsed.codingBackendResumeRequested
+    : undefined;
+  if (typeof codingBackendResumeRequested === 'boolean') provenance.codingBackendResumeRequested = classifierSource;
   const inferredRemoteExecCommand = rawSourceContent && route === 'coding_task'
     ? extractExplicitRemoteExecCommand(rawSourceContent, normalizedSourceContent, operation)
     : undefined;
@@ -361,6 +365,7 @@ export function resolveIntentGatewayEntities(
     ...(personalItemType ? { personalItemType } : {}),
     ...(codingBackend ? { codingBackend } : {}),
     ...(typeof codingBackendRequested === 'boolean' ? { codingBackendRequested } : {}),
+    ...(typeof codingBackendResumeRequested === 'boolean' ? { codingBackendResumeRequested } : {}),
     ...(typeof codingRemoteExecRequested === 'boolean' ? { codingRemoteExecRequested } : {}),
     ...(typeof codingRunStatusCheck === 'boolean' ? { codingRunStatusCheck } : {}),
     ...(toolName ? { toolName } : {}),

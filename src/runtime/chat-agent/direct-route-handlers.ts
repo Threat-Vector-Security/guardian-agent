@@ -43,6 +43,7 @@ import { tryDirectFilesystemIntent } from './direct-route-runtime.js';
 import { tryDirectWebSearch } from './direct-web-search.js';
 import type { StoredFilesystemSaveInput } from './filesystem-save-resume.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
+import type { ChatContinuationPayload } from './chat-continuation-graph.js';
 import type { StoredToolLoopSanitizedResult } from './tool-loop-runtime.js';
 
 type DirectCodeContext = {
@@ -112,6 +113,27 @@ export interface BuildChatDirectCodingRouteDepsInput {
       codeSessionId?: string;
     },
   ) => PendingActionSetResult;
+  setChatContinuationGraphPendingApprovalActionForRequest?: (
+    userKey: string,
+    surfaceId: string | undefined,
+    input: {
+      prompt: string;
+      approvalIds: string[];
+      approvalSummaries?: PendingActionApprovalSummary[];
+      originalUserContent: string;
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
+      entities?: Record<string, unknown>;
+      continuation: ChatContinuationPayload;
+      codeSessionId?: string;
+    },
+  ) => PendingActionSetResult;
+  setClarificationPendingAction: DirectRuntimeDepsInput['setClarificationPendingAction'];
   getActivePendingAction: (
     userId: string,
     channel: string,
@@ -222,6 +244,11 @@ export function buildChatDirectCodingRouteDeps(
           ...(options?.refreshTargetHealth ? { refreshTargetHealth: options.refreshTargetHealth } : {}),
         })
         : undefined,
+      getApprovalSummaries: input.tools?.getApprovalSummaries
+        ? (ids) => input.tools!.getApprovalSummaries(ids)
+        : undefined,
+      setChatContinuationGraphPendingApprovalActionForRequest: input.setChatContinuationGraphPendingApprovalActionForRequest,
+      setClarificationPendingAction: input.setClarificationPendingAction,
       getActivePendingAction: input.getActivePendingAction,
       completePendingAction: input.completePendingAction,
       onMessage: input.onMessage,
