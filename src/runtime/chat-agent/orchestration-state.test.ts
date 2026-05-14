@@ -31,6 +31,60 @@ function createExecutionStore(nowMs = 1_710_000_000_000): ExecutionStore {
 }
 
 describe('ChatAgentOrchestrationState', () => {
+  it('stores recent Codex project artifacts from direct continuation metadata', () => {
+    const nowMs = 1_710_000_000_000;
+    const continuityStore = createContinuityStore(nowMs);
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      continuityThreadStore: continuityStore,
+      tools: {
+        getApprovalSummaries: () => new Map(),
+      },
+    });
+
+    const record = state.updateDirectContinuationState(
+      'user-1',
+      'telegram',
+      'chat-1',
+      {
+        kind: 'coding_backend_project',
+        payload: {
+          source: 'coding_backend_run',
+          codeSessionId: 'code-1',
+          filesChanged: ['index.html', 'styles.css', 'app.js'],
+        },
+      },
+    );
+
+    expect(record?.continuationState).toMatchObject({
+      kind: 'coding_backend_project',
+      payload: {
+        codeSessionId: 'code-1',
+        filesChanged: ['index.html', 'styles.css', 'app.js'],
+      },
+    });
+    expect(record?.recentArtifacts).toEqual([
+      {
+        kind: 'file',
+        path: 'index.html',
+        source: 'coding_backend_run',
+        codeSessionId: 'code-1',
+      },
+      {
+        kind: 'file',
+        path: 'styles.css',
+        source: 'coding_backend_run',
+        codeSessionId: 'code-1',
+      },
+      {
+        kind: 'file',
+        path: 'app.js',
+        source: 'coding_backend_run',
+        codeSessionId: 'code-1',
+      },
+    ]);
+  });
+
   it('does not return completed approval actions after reconciliation clears the live approval ids', () => {
     const nowMs = 1_710_000_000_000;
     const store = createStore(nowMs);

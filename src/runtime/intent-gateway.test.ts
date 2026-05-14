@@ -526,6 +526,63 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('direct');
   });
 
+  it('repairs recent SDK artifact read follow-ups into active coding workspace reads', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'can you show me the code from that index.html that was just created',
+        channel: 'telegram',
+        continuity: {
+          continuityKey: 'assistant:user-1',
+          linkedSurfaceCount: 1,
+          activeExecutionRefs: ['code_session:session-1'],
+          recentArtifacts: [
+            {
+              kind: 'file',
+              path: 'index.html',
+              source: 'coding_backend_run',
+              codeSessionId: 'session-1',
+            },
+            {
+              kind: 'file',
+              path: 'styles.css',
+              source: 'coding_backend_run',
+              codeSessionId: 'session-1',
+            },
+            {
+              kind: 'file',
+              path: 'app.js',
+              source: 'coding_backend_run',
+              codeSessionId: 'session-1',
+            },
+          ],
+        },
+      },
+      async () => ({
+        content: 'I am not sure what you want me to do. Could you clarify the request?',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision).toMatchObject({
+      route: 'coding_task',
+      operation: 'read',
+      turnRelation: 'follow_up',
+      resolution: 'ready',
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: true,
+      preferredAnswerPath: 'tool_loop',
+      entities: {
+        path: 'index.html',
+      },
+    });
+    expect(result.decision.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'answer']);
+  });
+
   it('uses a content-plan record for explicit repo inspection requests without calling the model', async () => {
     const gateway = new IntentGateway();
     let called = false;

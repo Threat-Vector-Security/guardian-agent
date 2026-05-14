@@ -810,6 +810,12 @@ export function buildIntentGatewayContextSections(input: IntentGatewayInput): st
         ...(input.continuity.linkedSurfaces?.length ? [`surface list: ${input.continuity.linkedSurfaces.join(', ')}`] : []),
         ...(input.continuity.continuationStateKind ? [`continuation state: ${input.continuity.continuationStateKind}`] : []),
         ...(input.continuity.activeExecutionRefs?.length ? [`active execution refs: ${input.continuity.activeExecutionRefs.join(', ')}`] : []),
+        ...(input.continuity.recentArtifacts?.length
+          ? [
+              'recent artifacts:',
+              ...input.continuity.recentArtifacts.slice(-8).map((artifact) => `- ${artifact.kind}: ${artifact.path}${artifact.source ? ` (${artifact.source})` : ''}`),
+            ]
+          : []),
         '',
       ].join('\n')
     : '';

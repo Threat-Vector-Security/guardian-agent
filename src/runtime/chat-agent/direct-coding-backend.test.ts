@@ -270,6 +270,70 @@ describe('direct coding backend delegation', () => {
     expect(response?.content).toContain('Duration: 11ms');
   });
 
+  it('publishes Codex project artifacts as shared continuation state', async () => {
+    const response = await tryDirectCodingBackendDelegation(
+      {
+        message: makeMessage('Ask Codex SDK to implement phase 1.'),
+        ctx: TEST_CONTEXT,
+        userKey: 'user-1:web',
+        decision: makeDecision({
+          entities: {
+            codingBackend: 'codex-sdk',
+          },
+        }),
+        codeContext: {
+          sessionId: 'code-1',
+          workspaceRoot: 'S:/Development/GuardianAgent',
+        },
+      },
+      makeDeps({
+        tools: {
+          isEnabled: () => true,
+          executeModelTool: async () => ({
+            success: true,
+            status: 'succeeded',
+            output: {
+              success: true,
+              sessionId: 'cb-2',
+              backendId: 'codex-sdk',
+              backendName: 'Codex SDK',
+              sdkThreadId: 'thread-test',
+              assistantResponse: 'Implemented phase 1.',
+              codexProject: {
+                codeSessionId: 'code-1',
+                workspaceRoot: 'S:/Development/GuardianAgent',
+                activeThreadId: 'thread-test',
+                lastRunSessionId: 'cb-2',
+                lastFilesChanged: ['index.html', 'styles.css', 'app.js'],
+              },
+            },
+          }),
+          getApprovalSummaries: () => new Map(),
+        } as DirectCodingBackendDeps['tools'],
+      }),
+    );
+
+    expect(response?.metadata).toMatchObject({
+      codingBackendId: 'codex-sdk',
+      codingBackendCodexProject: {
+        activeThreadId: 'thread-test',
+        lastFilesChanged: ['index.html', 'styles.css', 'app.js'],
+      },
+      continuationState: {
+        kind: 'coding_backend_project',
+        payload: {
+          source: 'coding_backend_run',
+          backendId: 'codex-sdk',
+          codeSessionId: 'code-1',
+          workspaceRoot: 'S:/Development/GuardianAgent',
+          activeThreadId: 'thread-test',
+          lastRunSessionId: 'cb-2',
+          filesChanged: ['index.html', 'styles.css', 'app.js'],
+        },
+      },
+    });
+  });
+
   it('routes explicit coding backend resume requests through resumeLatest', async () => {
     const executeModelTool = vi.fn(async () => ({
       success: true,

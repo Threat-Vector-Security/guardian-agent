@@ -1,7 +1,10 @@
 import { isRecord, toBoolean, toNumber, toString } from '../../chat-agent-helpers.js';
 import type { ToolApprovalDecisionResult } from '../../tools/executor.js';
 import { buildToolResultPayloadFromJob } from '../../tools/job-results.js';
-import { buildCodingBackendResponseSource } from './direct-intent-helpers.js';
+import {
+  buildCodingBackendProjectContinuationState,
+  buildCodingBackendResponseSource,
+} from './direct-intent-helpers.js';
 
 export function formatCodingBackendApprovalResult(
   approvalResult: ToolApprovalDecisionResult | undefined,
@@ -18,6 +21,13 @@ export function formatCodingBackendApprovalResult(
   const sessionId = toString(output?.codeSessionId).trim()
     || approvalResult.job?.codeSessionId
     || undefined;
+  const codexProject = isRecord(output?.codexProject) ? output.codexProject : null;
+  const continuationState = buildCodingBackendProjectContinuationState({
+    backendId,
+    sessionId,
+    workspaceRoot: toString(output?.workspaceRoot).trim() || undefined,
+    codexProject,
+  });
 
   if (!approvalResult.approved) {
     return {
@@ -38,6 +48,8 @@ export function formatCodingBackendApprovalResult(
       backendName,
       durationMs: toNumber(output?.durationMs) ?? approvalResult.job?.durationMs,
     }),
+    ...(codexProject ? { codingBackendCodexProject: codexProject } : {}),
+    ...(continuationState ? { continuationState } : {}),
     ...(sessionId ? { codeSessionResolved: true, codeSessionId: sessionId } : {}),
   };
 

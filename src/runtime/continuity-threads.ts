@@ -32,6 +32,13 @@ export interface ContinuityThreadContinuationState {
   payload: Record<string, unknown>;
 }
 
+export interface ContinuityThreadRecentArtifact {
+  kind: 'file';
+  path: string;
+  source?: string;
+  codeSessionId?: string;
+}
+
 export interface ContinuityThreadRecord {
   continuityKey: string;
   scope: ContinuityThreadScope;
@@ -39,6 +46,7 @@ export interface ContinuityThreadRecord {
   focusSummary?: string;
   lastActionableRequest?: string;
   activeExecutionRefs?: ContinuityThreadExecutionRef[];
+  recentArtifacts?: ContinuityThreadRecentArtifact[];
   continuationState?: ContinuityThreadContinuationState;
   safeSummary?: string;
   createdAt: number;
@@ -62,6 +70,7 @@ export interface ContinuityThreadUpsertInput {
   focusSummary?: string | null;
   lastActionableRequest?: string | null;
   activeExecutionRefs?: ContinuityThreadExecutionRef[] | null;
+  recentArtifacts?: ContinuityThreadRecentArtifact[] | null;
   continuationState?: ContinuityThreadContinuationState | null;
   safeSummary?: string | null;
 }
@@ -101,10 +110,20 @@ function cloneContinuationState(
   };
 }
 
+function cloneRecentArtifact(artifact: ContinuityThreadRecentArtifact): ContinuityThreadRecentArtifact {
+  return {
+    kind: artifact.kind,
+    path: artifact.path,
+    ...(artifact.source ? { source: artifact.source } : {}),
+    ...(artifact.codeSessionId ? { codeSessionId: artifact.codeSessionId } : {}),
+  };
+}
+
 function cloneRecord(record: ContinuityThreadRecord): ContinuityThreadRecord {
   const {
     focusSummary: _ignoredFocusSummary,
     activeExecutionRefs,
+    recentArtifacts,
     continuationState,
     safeSummary: _ignoredSafeSummary,
     ...rest
@@ -118,6 +137,9 @@ function cloneRecord(record: ContinuityThreadRecord): ContinuityThreadRecord {
     ...(focusSummary ? { focusSummary } : {}),
     ...(activeExecutionRefs
       ? { activeExecutionRefs: activeExecutionRefs.map(cloneExecutionRef) }
+      : {}),
+    ...(recentArtifacts
+      ? { recentArtifacts: recentArtifacts.map(cloneRecentArtifact) }
       : {}),
     ...(continuationState
       ? { continuationState: cloneContinuationState(continuationState) }
@@ -193,6 +215,21 @@ function normalizeContinuationState(
   };
 }
 
+function normalizeRecentArtifact(value: unknown): ContinuityThreadRecentArtifact | null {
+  if (!isRecord(value)) return null;
+  const kind = value.kind === 'file' ? value.kind : null;
+  const path = normalizeText(value.path, 240);
+  if (!kind || !path) return null;
+  const source = normalizeText(value.source, 80);
+  const codeSessionId = normalizeText(value.codeSessionId, 120);
+  return {
+    kind,
+    path,
+    ...(source ? { source } : {}),
+    ...(codeSessionId ? { codeSessionId } : {}),
+  };
+}
+
 function normalizeRecord(value: unknown): ContinuityThreadRecord | null {
   if (!isRecord(value) || !isRecord(value.scope)) return null;
   const assistantId = typeof value.scope.assistantId === 'string' ? value.scope.assistantId.trim() : '';
@@ -209,6 +246,11 @@ function normalizeRecord(value: unknown): ContinuityThreadRecord | null {
       .map(normalizeExecutionRef)
       .filter((item): item is ContinuityThreadExecutionRef => !!item)
     : [];
+  const recentArtifacts = Array.isArray(value.recentArtifacts)
+    ? value.recentArtifacts
+      .map(normalizeRecentArtifact)
+      .filter((item): item is ContinuityThreadRecentArtifact => !!item)
+    : [];
   const continuationState = normalizeContinuationState(value.continuationState);
   const focusSummary = normalizeUserFacingIntentGatewaySummary(normalizeText(value.focusSummary, 400));
   const safeSummary = normalizeUserFacingIntentGatewaySummary(normalizeText(value.safeSummary, 500));
@@ -219,6 +261,7 @@ function normalizeRecord(value: unknown): ContinuityThreadRecord | null {
     ...(focusSummary ? { focusSummary } : {}),
     ...(normalizeText(value.lastActionableRequest, 800) ? { lastActionableRequest: normalizeText(value.lastActionableRequest, 800) } : {}),
     ...(activeExecutionRefs.length > 0 ? { activeExecutionRefs } : {}),
+    ...(recentArtifacts.length > 0 ? { recentArtifacts } : {}),
     ...(continuationState ? { continuationState } : {}),
     ...(safeSummary ? { safeSummary } : {}),
     createdAt: typeof value.createdAt === 'number' && Number.isFinite(value.createdAt) ? value.createdAt : Date.now(),
@@ -245,6 +288,16 @@ function dedupeExecutionRefs(refs: ContinuityThreadExecutionRef[]): ContinuityTh
     seen.set(`${ref.kind}:${ref.id}`, cloneExecutionRef(ref));
   }
   return [...seen.values()];
+}
+
+function dedupeRecentArtifacts(artifacts: ContinuityThreadRecentArtifact[]): ContinuityThreadRecentArtifact[] {
+  const seen = new Map<string, ContinuityThreadRecentArtifact>();
+  for (const artifact of artifacts) {
+    const key = `${artifact.kind}:${artifact.codeSessionId ?? ''}:${artifact.path.toLowerCase()}`;
+    seen.delete(key);
+    seen.set(key, cloneRecentArtifact(artifact));
+  }
+  return [...seen.values()].slice(-20);
 }
 
 export function hasContinuityThreadSurfaceLink(input: {
@@ -294,6 +347,7 @@ export function summarizeContinuityThreadForGateway(
   focusSummary?: string;
   lastActionableRequest?: string;
   activeExecutionRefs?: string[];
+  recentArtifacts?: ContinuityThreadRecentArtifact[];
   continuationStateKind?: string;
 } | null {
   if (!record) return null;
@@ -307,6 +361,9 @@ export function summarizeContinuityThreadForGateway(
     ...(record.lastActionableRequest ? { lastActionableRequest: record.lastActionableRequest } : {}),
     ...(record.activeExecutionRefs?.length
       ? { activeExecutionRefs: record.activeExecutionRefs.map((ref) => `${ref.kind}:${ref.id}`) }
+      : {}),
+    ...(record.recentArtifacts?.length
+      ? { recentArtifacts: record.recentArtifacts.map(cloneRecentArtifact) }
       : {}),
     ...(record.continuationState?.kind
       ? { continuationStateKind: record.continuationState.kind }
@@ -327,6 +384,9 @@ export function toContinuityThreadClientMetadata(
     ...(record.lastActionableRequest ? { lastActionableRequest: record.lastActionableRequest } : {}),
     ...(record.activeExecutionRefs?.length
       ? { activeExecutionRefs: record.activeExecutionRefs.map((ref) => ({ ...ref })) }
+      : {}),
+    ...(record.recentArtifacts?.length
+      ? { recentArtifacts: record.recentArtifacts.map(cloneRecentArtifact) }
       : {}),
     ...(record.continuationState?.kind
       ? { continuationStateKind: record.continuationState.kind }
@@ -354,6 +414,12 @@ export function formatContinuityThreadForPrompt(
     lines.push('activeExecutionRefs:');
     for (const ref of record.activeExecutionRefs) {
       lines.push(`- ${ref.kind}: ${ref.label ?? ref.id}`);
+    }
+  }
+  if (record.recentArtifacts?.length) {
+    lines.push('recentArtifacts:');
+    for (const artifact of record.recentArtifacts.slice(-8)) {
+      lines.push(`- ${artifact.kind}: ${artifact.path}${artifact.source ? ` (${artifact.source})` : ''}`);
     }
   }
   if (lines.length === 0) return '';
@@ -510,6 +576,16 @@ export class ContinuityThreadStore {
         : existing?.activeExecutionRefs
           ? existing.activeExecutionRefs.map(cloneExecutionRef)
           : undefined;
+    const recentArtifacts = input.recentArtifacts === null
+      ? undefined
+      : input.recentArtifacts
+        ? dedupeRecentArtifacts([
+            ...(existing?.recentArtifacts ?? []),
+            ...input.recentArtifacts,
+          ].map(cloneRecentArtifact))
+        : existing?.recentArtifacts
+          ? existing.recentArtifacts.map(cloneRecentArtifact)
+          : undefined;
     const continuationState = input.continuationState === null
       ? undefined
       : input.continuationState
@@ -539,6 +615,7 @@ export class ContinuityThreadStore {
       ...(focusSummary ? { focusSummary } : {}),
       ...(lastActionableRequest ? { lastActionableRequest } : {}),
       ...(activeExecutionRefs?.length ? { activeExecutionRefs } : {}),
+      ...(recentArtifacts?.length ? { recentArtifacts } : {}),
       ...(continuationState ? { continuationState } : {}),
       ...(safeSummary ? { safeSummary } : {}),
       createdAt: existing?.createdAt ?? nowMs,

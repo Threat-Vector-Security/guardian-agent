@@ -34,6 +34,29 @@ describe('buildIntentGatewayContextSections', () => {
     expect(context).not.toContain('https://');
   });
 
+  it('includes recent continuity artifacts for follow-up routing context', () => {
+    const context = buildIntentGatewayContextSections({
+      content: 'show me the code from index.html',
+      channel: 'telegram',
+      continuity: {
+        continuityKey: 'assistant:user-1',
+        linkedSurfaceCount: 1,
+        activeExecutionRefs: ['code_session:code-1'],
+        recentArtifacts: [
+          {
+            kind: 'file',
+            path: 'index.html',
+            source: 'coding_backend_run',
+            codeSessionId: 'code-1',
+          },
+        ],
+      },
+    }).join('\n');
+
+    expect(context).toContain('recent artifacts:');
+    expect(context).toContain('- file: index.html (coding_backend_run)');
+  });
+
   it('keeps fallback routing prompts aligned with diagnostics route ownership', async () => {
     const prompts: string[] = [];
     const result = await classifyIntentGatewayPass(

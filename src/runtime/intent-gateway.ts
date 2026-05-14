@@ -991,6 +991,10 @@ function repairUnavailableUnknownWithConversationContext(
   }
   const hasResumableActiveExecution = canRepairFromActiveExecution(input);
   const hasExplicitActiveExecutionContinuation = canRepairFromExplicitActiveExecutionContinuation(input);
+  const recentArtifactRepair = repairUnavailableRecentArtifactReferenceWork(input, decision);
+  if (recentArtifactRepair) {
+    return recentArtifactRepair;
+  }
   if (
     !hasResumableActiveExecution
     && !hasExplicitActiveExecutionContinuation
@@ -1257,6 +1261,123 @@ function summaryForActiveExecutionRoute(route: IntentGatewayDecision['route']): 
     return 'Continue the active planning request from execution state.';
   }
   return 'Continue the active execution from shared orchestration state.';
+}
+
+function repairUnavailableRecentArtifactReferenceWork(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision | null {
+  const artifact = resolveRecentArtifactReference(input);
+  if (!artifact) return null;
+  return {
+    ...decision,
+    route: 'coding_task',
+    confidence: 'medium',
+    operation: 'read',
+    plannedSteps: [
+      {
+        kind: 'read',
+        summary: `Read ${artifact.path} from the active coding workspace.`,
+        required: true,
+        expectedToolCategories: ['repo_inspection'],
+      },
+      {
+        kind: 'answer',
+        summary: 'Show the requested file content or a concise excerpt from repo evidence.',
+        required: true,
+      },
+    ],
+    summary: 'Read a recently changed file from the active coding workspace.',
+    turnRelation: 'follow_up',
+    resolution: 'ready',
+    missingFields: [],
+    resolvedContent: input.content,
+    executionClass: 'repo_grounded',
+    preferredTier: 'external',
+    requiresRepoGrounding: true,
+    requiresToolSynthesis: true,
+    requireExactFileReferences: true,
+    expectedContextPressure: 'medium',
+    preferredAnswerPath: 'tool_loop',
+    simpleVsComplex: 'simple',
+    provenance: {
+      ...(decision.provenance ?? {}),
+      route: 'repair.continuity',
+      operation: 'repair.continuity',
+      resolvedContent: 'repair.continuity',
+      executionClass: 'repair.continuity',
+      preferredTier: 'repair.continuity',
+      requiresRepoGrounding: 'repair.continuity',
+      requiresToolSynthesis: 'repair.continuity',
+      requireExactFileReferences: 'repair.continuity',
+      expectedContextPressure: 'repair.continuity',
+      preferredAnswerPath: 'repair.continuity',
+      simpleVsComplex: 'repair.continuity',
+      entities: {
+        ...(decision.provenance?.entities ?? {}),
+        path: 'repair.continuity',
+      },
+    },
+    entities: {
+      ...decision.entities,
+      path: artifact.path,
+    },
+  };
+}
+
+function resolveRecentArtifactReference(
+  input: IntentGatewayInput,
+): { kind: 'file'; path: string; source?: string; codeSessionId?: string } | null {
+  const artifacts = input.continuity?.recentArtifacts
+    ?.filter((artifact) => artifact.kind === 'file' && artifact.path.trim().length > 0)
+    ?? [];
+  if (artifacts.length === 0) {
+    return null;
+  }
+  const content = input.content.trim();
+  if (!looksLikeRecentArtifactReadRequest(content)) {
+    return null;
+  }
+  const normalizedContent = normalizeArtifactReferenceText(content);
+  const matches = artifacts.filter((artifact) => {
+    const normalizedPath = normalizeArtifactReferenceText(artifact.path);
+    const basename = normalizedPath.split('/').pop() ?? normalizedPath;
+    return normalizedContent.includes(normalizedPath)
+      || (!!basename && normalizedContent.includes(basename));
+  });
+  if (matches.length !== 1) {
+    return null;
+  }
+  const [match] = matches;
+  if (!match) {
+    return null;
+  }
+  return {
+    kind: 'file',
+    path: match.path,
+    ...(match.source ? { source: match.source } : {}),
+    ...(match.codeSessionId ? { codeSessionId: match.codeSessionId } : {}),
+  };
+}
+
+function looksLikeRecentArtifactReadRequest(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (/\b(?:edit|change|modify|update|fix|patch|write|add|remove|delete|replace|overwrite)\b/.test(normalized)) {
+    return false;
+  }
+  return /\b(?:show|read|display|open|view|cat|print|paste|quote|excerpt|inspect)\b/.test(normalized)
+    && /\b(?:code|content|file|html|css|js|ts|tsx|jsx|json|md|markdown|created|changed|just\s+created|just\s+changed)\b/.test(normalized);
+}
+
+function normalizeArtifactReferenceText(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\\/g, '/')
+    .replace(/`/g, '');
 }
 
 function repairUnavailableCodeSessionWork(

@@ -3,6 +3,7 @@ import type { ToolExecutor } from '../../tools/executor.js';
 import {
   type ContinuityThreadExecutionRef,
   type ContinuityThreadContinuationState,
+  type ContinuityThreadRecentArtifact,
   type ContinuityThreadRecord,
   type ContinuityThreadScope,
   ContinuityThreadStore,
@@ -729,6 +730,7 @@ export class ChatAgentOrchestrationState {
           surfaceId: resolveSurfaceId(normalizedChannel, surfaceId, normalizedUserId),
         },
         continuationState,
+        ...buildRecentArtifactsUpdateFromContinuationState(continuationState),
       },
     );
   }
@@ -1395,4 +1397,39 @@ export class ChatAgentOrchestrationState {
 
 function isContinuityStatusCheck(content: string): boolean {
   return CONTINUITY_STATUS_CHECK_PATTERN.test(content.trim());
+}
+
+function buildRecentArtifactsUpdateFromContinuationState(
+  continuationState: ContinuityThreadContinuationState | null,
+): { recentArtifacts?: ContinuityThreadRecentArtifact[] | null } {
+  if (continuationState === null) {
+    return { recentArtifacts: null };
+  }
+  if (continuationState?.kind !== 'coding_backend_project') {
+    return {};
+  }
+  const payload = continuationState.payload;
+  const filesChanged = Array.isArray(payload.filesChanged)
+    ? payload.filesChanged
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => value.trim())
+      .slice(0, 50)
+    : [];
+  if (filesChanged.length === 0) {
+    return {};
+  }
+  const source = typeof payload.source === 'string' && payload.source.trim()
+    ? payload.source.trim()
+    : 'coding_backend_project';
+  const codeSessionId = typeof payload.codeSessionId === 'string' && payload.codeSessionId.trim()
+    ? payload.codeSessionId.trim()
+    : undefined;
+  return {
+    recentArtifacts: filesChanged.map((path) => ({
+      kind: 'file' as const,
+      path,
+      source,
+      ...(codeSessionId ? { codeSessionId } : {}),
+    })),
+  };
 }

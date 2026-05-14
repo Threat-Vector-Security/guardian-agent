@@ -117,6 +117,14 @@ describe('ContinuityThreadStore', () => {
       focusSummary: 'Continue the coding task in the current workspace.',
       lastActionableRequest: 'Use Codex to create the smoke test file.',
       activeExecutionRefs: [{ kind: 'code_session', id: 'session-1', label: 'Test Tactical Game App' }],
+      recentArtifacts: [
+        {
+          kind: 'file',
+          path: 'index.html',
+          source: 'coding_backend_run',
+          codeSessionId: 'session-1',
+        },
+      ],
       continuationState: {
         kind: 'retry_after_failure',
         payload: { source: 'sandbox_prerequisite' },
@@ -129,6 +137,14 @@ describe('ContinuityThreadStore', () => {
       focusSummary: 'Continue the coding task in the current workspace.',
       lastActionableRequest: 'Use Codex to create the smoke test file.',
       activeExecutionRefs: ['code_session:session-1'],
+      recentArtifacts: [
+        {
+          kind: 'file',
+          path: 'index.html',
+          source: 'coding_backend_run',
+          codeSessionId: 'session-1',
+        },
+      ],
       continuationStateKind: 'retry_after_failure',
     });
     expect(summarizeContinuityThreadForGateway(record)?.activeExecutionRefs).not.toContain('code_session:Test Tactical Game App');
@@ -136,10 +152,19 @@ describe('ContinuityThreadStore', () => {
       continuityKey: record.continuityKey,
       focusSummary: 'Continue the coding task in the current workspace.',
       activeExecutionRefs: [{ kind: 'code_session', id: 'session-1', label: 'Test Tactical Game App' }],
+      recentArtifacts: [
+        {
+          kind: 'file',
+          path: 'index.html',
+          source: 'coding_backend_run',
+          codeSessionId: 'session-1',
+        },
+      ],
       continuationStateKind: 'retry_after_failure',
     });
     expect(formatContinuityThreadForPrompt(record)).toContain('<continuity-context>');
     expect(formatContinuityThreadForPrompt(record)).toContain('lastActionableRequest:');
+    expect(formatContinuityThreadForPrompt(record)).toContain('- file: index.html (coding_backend_run)');
   });
 
   it('filters placeholder execution labels and summaries from stored continuity state', () => {

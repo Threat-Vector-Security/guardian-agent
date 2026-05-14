@@ -19,6 +19,7 @@ import type {
 } from '../pending-actions.js';
 import { toPendingActionClientMetadata } from '../pending-actions.js';
 import {
+  buildCodingBackendProjectContinuationState,
   buildCodingBackendResponseSource,
   selectCodingBackendDelegatedTask,
 } from './direct-intent-helpers.js';
@@ -387,6 +388,13 @@ async function handleCodingBackendRun(
   const assistantResponse = toString(runResult?.assistantResponse)?.trim();
   const backendOutput = toString(runResult?.output)?.trim();
   const sessionId = input.effectiveCodeContext?.sessionId || toString(runResult?.codeSessionId);
+  const codexProject = isRecord(runResult?.codexProject) ? runResult.codexProject : null;
+  const continuationState = buildCodingBackendProjectContinuationState({
+    backendId: input.backendId,
+    sessionId,
+    workspaceRoot: input.effectiveCodeContext?.workspaceRoot,
+    codexProject,
+  });
 
   const metadata: Record<string, unknown> = {
     codingBackendDelegated: true,
@@ -394,7 +402,8 @@ async function handleCodingBackendRun(
     ...(input.resumeLatest ? { codingBackendResumeRequested: true } : {}),
     ...(toString(runResult?.sessionId) ? { codingBackendSessionId: toString(runResult?.sessionId) } : {}),
     ...(toString(runResult?.sdkThreadId) ? { codingBackendSdkThreadId: toString(runResult?.sdkThreadId) } : {}),
-    ...(isRecord(runResult?.codexProject) ? { codingBackendCodexProject: runResult?.codexProject } : {}),
+    ...(codexProject ? { codingBackendCodexProject: codexProject } : {}),
+    ...(continuationState ? { continuationState } : {}),
     responseSource: buildCodingBackendResponseSource({
       backendId: input.backendId,
       backendName,

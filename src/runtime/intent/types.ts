@@ -238,6 +238,12 @@ export interface IntentGatewayInput {
     focusSummary?: string;
     lastActionableRequest?: string;
     activeExecutionRefs?: string[];
+    recentArtifacts?: Array<{
+      kind: 'file';
+      path: string;
+      source?: string;
+      codeSessionId?: string;
+    }>;
     activeExecution?: {
       executionId: string;
       status: 'running' | 'blocked' | 'completed' | 'failed' | 'cancelled';

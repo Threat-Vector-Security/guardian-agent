@@ -761,6 +761,40 @@ function buildCodingBackendResponseSource(input: {
   };
 }
 
+function buildCodingBackendProjectContinuationState(input: {
+  backendId?: string;
+  sessionId?: string;
+  workspaceRoot?: string;
+  codexProject: Record<string, unknown> | null | undefined;
+}): ContinuityThreadContinuationState | undefined {
+  if (!input.codexProject) return undefined;
+  const filesChanged = Array.isArray(input.codexProject.lastFilesChanged)
+    ? input.codexProject.lastFilesChanged
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => value.trim())
+      .slice(0, 50)
+    : [];
+  if (filesChanged.length === 0) return undefined;
+  const workspaceRoot = toString(input.codexProject.workspaceRoot).trim() || input.workspaceRoot?.trim();
+  const codeSessionId = toString(input.codexProject.codeSessionId).trim() || input.sessionId?.trim();
+  return {
+    kind: 'coding_backend_project',
+    payload: {
+      source: 'coding_backend_run',
+      ...(input.backendId ? { backendId: input.backendId } : {}),
+      ...(codeSessionId ? { codeSessionId } : {}),
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      ...(toString(input.codexProject.activeThreadId).trim()
+        ? { activeThreadId: toString(input.codexProject.activeThreadId).trim() }
+        : {}),
+      ...(toString(input.codexProject.lastRunSessionId).trim()
+        ? { lastRunSessionId: toString(input.codexProject.lastRunSessionId).trim() }
+        : {}),
+      filesChanged,
+    },
+  };
+}
+
 function shouldPreferCurrentCodingBackendTask(
   currentTask: string,
   resolvedTask: string,
@@ -1583,6 +1617,7 @@ export type {
 };
 
 export {
+  buildCodingBackendProjectContinuationState,
   buildCodingBackendResponseSource,
   buildDirectHandlerResponseSource,
   buildRoutineSemanticHints,

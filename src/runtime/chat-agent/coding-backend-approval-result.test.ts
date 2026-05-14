@@ -92,4 +92,68 @@ describe('coding backend approval result formatting', () => {
       },
     });
   });
+
+  it('preserves Codex project artifacts from approved coding backend runs', () => {
+    const result = formatCodingBackendApprovalResult({
+      success: true,
+      approved: true,
+      message: 'Approved.',
+      executionSucceeded: true,
+      job: {
+        id: 'job-1',
+        toolName: 'coding_backend_run',
+        risk: 'mutating',
+        origin: 'assistant',
+        codeSessionId: 'code-1',
+        argsPreview: '{"backend":"codex-sdk"}',
+        argsRedacted: { backend: 'codex-sdk' },
+        status: 'succeeded',
+        createdAt: 1,
+        requiresApproval: true,
+      },
+      result: {
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-1',
+        message: 'Codex SDK completed.',
+        output: {
+          success: true,
+          backendId: 'codex-sdk',
+          backendName: 'OpenAI Codex SDK',
+          assistantResponse: 'Created index.html.',
+          codexProject: {
+            codeSessionId: 'code-1',
+            workspaceRoot: 'S:/Development/Smoke',
+            activeThreadId: 'thread-1',
+            lastRunSessionId: 'cb-1',
+            lastFilesChanged: ['index.html'],
+          },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      content: 'Created index.html.',
+      metadata: {
+        codingBackendDelegated: true,
+        codingBackendId: 'codex-sdk',
+        codingBackendCodexProject: {
+          activeThreadId: 'thread-1',
+          lastFilesChanged: ['index.html'],
+        },
+        continuationState: {
+          kind: 'coding_backend_project',
+          payload: {
+            source: 'coding_backend_run',
+            backendId: 'codex-sdk',
+            codeSessionId: 'code-1',
+            workspaceRoot: 'S:/Development/Smoke',
+            activeThreadId: 'thread-1',
+            lastRunSessionId: 'cb-1',
+            filesChanged: ['index.html'],
+          },
+        },
+      },
+    });
+  });
 });
