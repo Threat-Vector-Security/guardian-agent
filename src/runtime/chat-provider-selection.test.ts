@@ -10,6 +10,8 @@ import {
 
 function createConfig(): GuardianAgentConfig {
   const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+  config.llm.ollama.enabled = true;
+  config.defaultProvider = 'ollama';
   config.llm['ollama-cloud-direct'] = {
     provider: 'ollama_cloud',
     model: 'minimax-m2.1',

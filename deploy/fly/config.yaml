@@ -1,0 +1,28 @@
+llm:
+  ollama:
+    provider: ollama
+    enabled: false
+    baseUrl: http://127.0.0.1:11434
+    model: gpt-oss:120b
+
+defaultProvider: ''
+
+channels:
+  cli:
+    enabled: false
+  telegram:
+    enabled: false
+  web:
+    enabled: true
+    host: 0.0.0.0
+    port: 3000
+    auth:
+      mode: bearer_required
+      token: ${GUARDIAN_WEB_AUTH_TOKEN}
+      rotateOnStartup: false
+
+assistant:
+  hostMonitoring:
+    enabled: false
+  gatewayMonitoring:
+    enabled: false

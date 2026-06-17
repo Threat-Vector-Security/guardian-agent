@@ -339,10 +339,10 @@ describe('validateConfig', () => {
     expect(errors).toContain("assistant.connectors.playbook 'invalid-tool-step' step 'search' evidenceMode/citationStyle are only valid for instruction steps");
   });
 
-  it('should fail when defaultProvider is missing', () => {
+  it('should allow defaultProvider to be empty when no provider is enabled yet', () => {
     const config = { ...DEFAULT_CONFIG, defaultProvider: '' };
     const errors = validateConfig(config);
-    expect(errors).toContain('defaultProvider is required');
+    expect(errors).not.toContain('defaultProvider is required');
   });
 
   it('should fail when defaultProvider references missing provider', () => {
@@ -1319,6 +1319,118 @@ describe('validateConfig', () => {
     };
     const errors = validateConfig(config);
     expect(errors).toContain("channels.web.allowedOrigins must not contain '*' because the web API is auth-protected and served on localhost");
+  });
+
+  it('should accept voice channel config with ElevenLabs transcription credentials', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      channels: {
+        ...DEFAULT_CONFIG.channels,
+        voice: {
+          ...DEFAULT_CONFIG.channels.voice!,
+          enabled: true,
+          auth: { mode: 'bearer_required', tokenCredentialRef: 'voice.channel.token' },
+          allowedDeviceIds: ['box-3b'],
+          transcription: {
+            provider: 'elevenlabs',
+            elevenLabs: {
+              credentialRef: 'voice.elevenlabs.primary',
+              modelId: 'scribe_v2',
+            },
+          },
+        },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'voice.channel.token': { source: 'env', env: 'GUARDIAN_VOICE_TOKEN' },
+            'voice.elevenlabs.primary': { source: 'env', env: 'ELEVENLABS_API_KEY' },
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
+  it('should reject voice ElevenLabs transcription without a credential ref', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      channels: {
+        ...DEFAULT_CONFIG.channels,
+        voice: {
+          ...DEFAULT_CONFIG.channels.voice!,
+          enabled: true,
+          auth: { mode: 'bearer_required', token: 'voice-token' },
+          transcription: {
+            provider: 'elevenlabs',
+            elevenLabs: { modelId: 'scribe_v2' },
+          },
+        },
+      },
+    };
+
+    const errors = validateConfig(config);
+    expect(errors).toContain('channels.voice.transcription.elevenLabs.credentialRef is required when provider is elevenlabs');
+  });
+
+  it('should accept voice channel config with OpenRouter transcription credentials', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      channels: {
+        ...DEFAULT_CONFIG.channels,
+        voice: {
+          ...DEFAULT_CONFIG.channels.voice!,
+          enabled: true,
+          auth: { mode: 'bearer_required', tokenCredentialRef: 'voice.channel.token' },
+          transcription: {
+            provider: 'openrouter',
+            openRouter: {
+              credentialRef: 'voice.openrouter.primary',
+              model: 'openai/whisper-large-v3',
+              baseUrl: 'https://openrouter.ai/api/v1',
+            },
+          },
+        },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'voice.channel.token': { source: 'env', env: 'GUARDIAN_VOICE_TOKEN' },
+            'voice.openrouter.primary': { source: 'env', env: 'OPENROUTER_API_KEY' },
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
+  it('should accept voice channel config with a local transcription command', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      channels: {
+        ...DEFAULT_CONFIG.channels,
+        voice: {
+          ...DEFAULT_CONFIG.channels.voice!,
+          enabled: true,
+          auth: { mode: 'disabled' },
+          transcription: {
+            provider: 'local_command',
+            localCommand: {
+              command: 'whisper-cli',
+              args: ['--model', 'base.en', '{{audioPath}}'],
+              outputFormat: 'text',
+              timeoutMs: 30_000,
+            },
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
   });
 });
 

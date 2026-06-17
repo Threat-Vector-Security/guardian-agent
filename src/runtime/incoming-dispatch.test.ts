@@ -9,7 +9,14 @@ import { createIncomingDispatchPreparer } from './incoming-dispatch.js';
 import type { MessageRouter } from './message-router.js';
 
 function createConfig(): GuardianAgentConfig {
-  return structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+  const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+  config.llm.ollama.enabled = true;
+  config.defaultProvider = 'ollama';
+  config.assistant.tools.preferredProviders = {
+    ...config.assistant.tools.preferredProviders,
+    local: 'ollama',
+  };
+  return config;
 }
 
 function createGatewayRecord(

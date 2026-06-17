@@ -189,10 +189,6 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     }
   };
 
-  if (!config.defaultProvider) {
-    errors.push('defaultProvider is required');
-  }
-
   if (config.defaultProvider && !config.llm[config.defaultProvider]) {
     errors.push(`defaultProvider '${config.defaultProvider}' not found in llm configuration`);
   }
@@ -443,6 +439,103 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   }
   if (config.channels.web?.enabled && config.channels.web.allowedOrigins?.includes('*')) {
     errors.push("channels.web.allowedOrigins must not contain '*' because the web API is auth-protected and served on localhost");
+  }
+
+  const voice = config.channels.voice;
+  if (voice) {
+    if (voice.port !== undefined && (!Number.isInteger(voice.port) || voice.port < 1 || voice.port > 65535)) {
+      errors.push('channels.voice.port must be an integer between 1 and 65535');
+    }
+    if (voice.maxBodyBytes !== undefined && (!Number.isInteger(voice.maxBodyBytes) || voice.maxBodyBytes < 1024)) {
+      errors.push('channels.voice.maxBodyBytes must be an integer >= 1024');
+    }
+    const voiceAuth = voice.auth;
+    if (voiceAuth?.mode && voiceAuth.mode !== 'bearer_required' && voiceAuth.mode !== 'disabled') {
+      errors.push("channels.voice.auth.mode must be 'bearer_required' or 'disabled'");
+    }
+    assertCredentialRef(voiceAuth?.tokenCredentialRef, 'channels.voice.auth.tokenCredentialRef');
+    const voiceAuthMode = voiceAuth?.mode ?? 'bearer_required';
+    if (voice.enabled && voiceAuthMode === 'bearer_required' && !voiceAuth?.token?.trim() && !voiceAuth?.tokenCredentialRef?.trim()) {
+      errors.push('channels.voice.auth.token or channels.voice.auth.tokenCredentialRef is required when the voice channel is enabled with bearer auth');
+    }
+    for (const deviceId of voice.allowedDeviceIds ?? []) {
+      if (!/^[A-Za-z0-9._:-]{1,128}$/.test(deviceId)) {
+        errors.push(`channels.voice.allowedDeviceIds contains invalid device ID '${deviceId}'`);
+      }
+    }
+
+    const transcription = voice.transcription;
+    const provider = transcription?.provider ?? 'none';
+    if (!['none', 'elevenlabs', 'openrouter', 'local_command', 'openai_compatible'].includes(provider)) {
+      errors.push("channels.voice.transcription.provider must be one of: none, elevenlabs, openrouter, local_command, openai_compatible");
+    }
+    if (transcription?.timeoutMs !== undefined && (!Number.isInteger(transcription.timeoutMs) || transcription.timeoutMs < 1000)) {
+      errors.push('channels.voice.transcription.timeoutMs must be an integer >= 1000');
+    }
+
+    const elevenLabs = transcription?.elevenLabs;
+    if (elevenLabs?.apiKey?.trim()) {
+      errors.push('channels.voice.transcription.elevenLabs.apiKey is not allowed in config. Use channels.voice.transcription.elevenLabs.credentialRef with assistant.credentials.refs instead.');
+    }
+    assertCredentialRef(elevenLabs?.credentialRef, 'channels.voice.transcription.elevenLabs.credentialRef');
+    if (provider === 'elevenlabs') {
+      if (!elevenLabs?.credentialRef?.trim()) {
+        errors.push('channels.voice.transcription.elevenLabs.credentialRef is required when provider is elevenlabs');
+      }
+      if (elevenLabs?.fileFormat && !['pcm_s16le_16', 'other'].includes(elevenLabs.fileFormat)) {
+        errors.push("channels.voice.transcription.elevenLabs.fileFormat must be 'pcm_s16le_16' or 'other'");
+      }
+    }
+
+    const openRouter = transcription?.openRouter;
+    if (openRouter?.apiKey?.trim()) {
+      errors.push('channels.voice.transcription.openRouter.apiKey is not allowed in config. Use channels.voice.transcription.openRouter.credentialRef with assistant.credentials.refs instead.');
+    }
+    assertCredentialRef(openRouter?.credentialRef, 'channels.voice.transcription.openRouter.credentialRef');
+    if (provider === 'openrouter') {
+      if (!openRouter?.credentialRef?.trim()) {
+        errors.push('channels.voice.transcription.openRouter.credentialRef is required when provider is openrouter');
+      }
+      if (!openRouter?.model?.trim()) {
+        errors.push('channels.voice.transcription.openRouter.model is required when provider is openrouter');
+      }
+      if (openRouter?.temperature !== undefined && (typeof openRouter.temperature !== 'number' || openRouter.temperature < 0 || openRouter.temperature > 2)) {
+        errors.push('channels.voice.transcription.openRouter.temperature must be between 0 and 2');
+      }
+    }
+
+    const localCommand = transcription?.localCommand;
+    if (provider === 'local_command') {
+      if (!localCommand?.command?.trim()) {
+        errors.push('channels.voice.transcription.localCommand.command is required when provider is local_command');
+      }
+      if (localCommand?.outputFormat && !['text', 'json'].includes(localCommand.outputFormat)) {
+        errors.push("channels.voice.transcription.localCommand.outputFormat must be 'text' or 'json'");
+      }
+      if (localCommand?.timeoutMs !== undefined && (!Number.isInteger(localCommand.timeoutMs) || localCommand.timeoutMs < 1000)) {
+        errors.push('channels.voice.transcription.localCommand.timeoutMs must be an integer >= 1000');
+      }
+    }
+
+    const openAICompatible = transcription?.openAICompatible;
+    if (openAICompatible?.apiKey?.trim()) {
+      errors.push('channels.voice.transcription.openAICompatible.apiKey is not allowed in config. Use channels.voice.transcription.openAICompatible.credentialRef with assistant.credentials.refs instead.');
+    }
+    assertCredentialRef(openAICompatible?.credentialRef, 'channels.voice.transcription.openAICompatible.credentialRef');
+    if (provider === 'openai_compatible') {
+      if (!openAICompatible?.baseUrl?.trim()) {
+        errors.push('channels.voice.transcription.openAICompatible.baseUrl is required when provider is openai_compatible');
+      }
+      if (!openAICompatible?.model?.trim()) {
+        errors.push('channels.voice.transcription.openAICompatible.model is required when provider is openai_compatible');
+      }
+      if (
+        openAICompatible?.responseFormat
+        && !['json', 'text', 'verbose_json'].includes(openAICompatible.responseFormat)
+      ) {
+        errors.push("channels.voice.transcription.openAICompatible.responseFormat must be 'json', 'text', or 'verbose_json'");
+      }
+    }
   }
 
   const assistant = config.assistant;

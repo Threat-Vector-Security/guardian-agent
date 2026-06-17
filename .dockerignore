@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+coverage/
+tmp/
+.guardianagent/
+.git/
+.worktrees/
+.env
+.env.*
+*.log
+*.tgz
+native/windows-helper/target/
+web/public/vendor/monaco/

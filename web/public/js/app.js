@@ -17,7 +17,9 @@ import { confirmCodeRouteLeave, renderCode, updateCode, teardownCode } from './p
 import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
 import { initTheme } from './theme.js';
+import { initFocusedShell } from './focused-shell.js';
 import { initWorkstationShell, installClassicChatRailResize } from './workstation/workstation-shell.js';
+import { SHELL_LAYER_EVENT } from './shell-layout.js';
 
 const content = document.getElementById('content');
 const chatPanel = document.getElementById('chat-panel');
@@ -39,6 +41,7 @@ let navigationInFlight = false;
 let navigationQueued = false;
 let sseDisconnectTimer = null;
 let workstationShell = null;
+let focusedShell = null;
 const DENSE_CHAT_PANEL_ROUTES = new Set(['automations', 'config']);
 
 // ─── Auth ────────────────────────────────────────────────
@@ -372,6 +375,11 @@ async function refreshCurrentRoute(options = {}) {
     return;
   }
 
+  if (focusedShell?.isActive()) {
+    await focusedShell.refreshActiveRoute(options);
+    return;
+  }
+
   // Preserve scroll position across hot reload
   const scrollTop = content.scrollTop;
   const activeEl = document.activeElement;
@@ -471,7 +479,14 @@ async function navigate() {
     return;
   }
 
+  if (focusedShell?.isActive()) {
+    content.innerHTML = '';
+    await focusedShell.renderActiveRoute({ tab: params.get('tab') });
+    return;
+  }
+
   workstationShell?.restoreClassicChat();
+  focusedShell?.restoreClassicContent();
 
   // Render page, passing options like tab deep-link.
   await route.render(content, { tab: params.get('tab') });
@@ -569,6 +584,22 @@ function startApp() {
     });
   }
 
+  focusedShell = initFocusedShell({
+    app,
+    routes,
+    chatPanel,
+    layout,
+    content,
+    getRouteState,
+    updateChatContext: setChatContext,
+    renderRoute: async ({ route, params, container, options }) => {
+      await route.render(container, {
+        ...(options || {}),
+        tab: params?.get?.('tab') || options?.tab || null,
+      });
+    },
+  });
+
   workstationShell = initWorkstationShell({
     app,
     routes,
@@ -586,6 +617,9 @@ function startApp() {
   });
 
   window.addEventListener('hashchange', () => {
+    scheduleNavigation();
+  });
+  window.addEventListener(SHELL_LAYER_EVENT, () => {
     scheduleNavigation();
   });
   scheduleNavigation();

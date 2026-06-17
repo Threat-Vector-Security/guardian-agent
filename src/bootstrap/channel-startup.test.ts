@@ -291,6 +291,89 @@ describe('startBootstrapChannels', () => {
     expect(args.channels.at(-1)?.name).toBe('web');
   });
 
+  it('starts the voice channel and routes device transcripts through dashboard dispatch', async () => {
+    const config = createConfig();
+    config.channels.cli = { enabled: false } as never;
+    config.channels.telegram = { enabled: false } as never;
+    config.channels.web = { enabled: false } as never;
+    config.channels.voice = {
+      enabled: true,
+      host: '127.0.0.1',
+      port: 3107,
+      defaultAgent: 'voice-agent',
+      auth: { mode: 'bearer_required', token: 'voice-token' },
+    } as never;
+
+    let startHandler: ((msg: { content: string; channel: string; id?: string }) => Promise<{ content: string; metadata?: Record<string, unknown> }>) | null = null;
+    const voiceChannel = {
+      start: vi.fn(async (handler) => {
+        startHandler = handler;
+      }),
+      stop: vi.fn(async () => {}),
+      send: vi.fn(async () => {}),
+      getDevices: vi.fn(() => []),
+    };
+    const createVoiceChannel = vi.fn(() => voiceChannel);
+    const prepareIncomingDispatch = vi.fn(async (_channelDefault, msg) => ({
+      requestId: msg.requestId ?? 'voice-req',
+      decision: { agentId: 'prepared-voice-agent', confidence: 'high', reason: 'prepared' },
+      gateway: null,
+      routedMessage: msg,
+    }));
+
+    const args = createBaseArgs({
+      config,
+      configRef: { current: config },
+      createVoiceChannel,
+      prepareIncomingDispatch,
+    });
+
+    const result = await startBootstrapChannels(args);
+    await startHandler?.({ content: 'hello from voice', channel: 'voice', id: 'voice-id' });
+
+    expect(createVoiceChannel).toHaveBeenCalledWith(expect.objectContaining({
+      host: '127.0.0.1',
+      port: 3107,
+      defaultAgent: 'voice-agent',
+      auth: { mode: 'bearer_required', token: 'voice-token' },
+    }));
+    expect(result.voiceChannel).toBe(voiceChannel);
+    expect(args.channels.at(-1)?.name).toBe('voice');
+    expect(prepareIncomingDispatch).toHaveBeenCalledWith('voice-agent', expect.objectContaining({
+      content: 'hello from voice',
+      channel: 'voice',
+      requestId: 'voice-id',
+    }));
+    expect(args.runtime.dispatchMessage).toHaveBeenCalledWith('prepared-voice-agent', expect.objectContaining({
+      id: 'voice-id',
+      channel: 'voice',
+    }));
+  });
+
+  it('skips the voice channel when bearer auth is enabled and no token resolves', async () => {
+    const config = createConfig();
+    config.channels.cli = { enabled: false } as never;
+    config.channels.telegram = { enabled: false } as never;
+    config.channels.web = { enabled: false } as never;
+    config.channels.voice = {
+      enabled: true,
+      auth: { mode: 'bearer_required', tokenCredentialRef: 'voice.token' },
+    } as never;
+
+    const createVoiceChannel = vi.fn();
+    const args = createBaseArgs({
+      config,
+      configRef: { current: config },
+      createVoiceChannel,
+    });
+
+    const result = await startBootstrapChannels(args);
+
+    expect(createVoiceChannel).not.toHaveBeenCalled();
+    expect(result.voiceChannel).toBeNull();
+    expect(args.log.error).toHaveBeenCalledWith('Voice channel skipped because bearer authentication is enabled but no token resolved');
+  });
+
   it('normalizes reserved channel default aliases before wiring the web channel', async () => {
     const config = createConfig();
     config.channels.cli = { enabled: false } as never;

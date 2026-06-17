@@ -144,6 +144,8 @@ class MetadataRelayAgent extends BaseAgent {
 
 function createMultiProviderConfig(): GuardianAgentConfig {
   const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+  config.llm.ollama.enabled = true;
+  config.defaultProvider = 'ollama';
   config.llm['ollama-cloud-general'] = {
     provider: 'ollama_cloud',
     model: 'gpt-oss:120b',
@@ -193,11 +195,22 @@ function createMultiProviderConfig(): GuardianAgentConfig {
   return config;
 }
 
+function createLocalOllamaConfig(): GuardianAgentConfig {
+  const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+  config.llm.ollama.enabled = true;
+  config.defaultProvider = 'ollama';
+  config.assistant.tools.preferredProviders = {
+    ...config.assistant.tools.preferredProviders,
+    local: 'ollama',
+  };
+  return config;
+}
+
 describe('Runtime', () => {
   let runtime: Runtime;
 
   beforeEach(() => {
-    runtime = new Runtime();
+    runtime = new Runtime(createLocalOllamaConfig());
   });
 
   afterEach(async () => {

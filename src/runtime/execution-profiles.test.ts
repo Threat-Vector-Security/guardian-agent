@@ -114,7 +114,6 @@ describe('execution profiles', () => {
       'ollama-cloud-direct',
       'ollama-cloud-coding',
       'anthropic',
-      'ollama',
     ]);
   });
 
@@ -551,8 +550,37 @@ describe('execution profiles', () => {
     expect(profile).toMatchObject({
       providerName: 'ollama-cloud-direct',
       providerModel: 'minimax-m2.1',
+      providerLocality: 'external',
       providerTier: 'managed_cloud',
       id: 'managed_cloud_tool',
+    });
+  });
+
+  it('routes to cloud Ollama when local Ollama is disabled', () => {
+    const config = createConfig();
+    config.llm.ollama.enabled = false;
+
+    const profile = selectExecutionProfile({
+      config,
+      routeDecision: { tier: 'local' },
+      gatewayDecision: createGatewayDecision({
+        route: 'general_assistant',
+        operation: 'inspect',
+        executionClass: 'direct_assistant',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'ollama-cloud-direct',
+      providerType: 'ollama_cloud',
+      providerLocality: 'external',
+      providerTier: 'managed_cloud',
     });
   });
 

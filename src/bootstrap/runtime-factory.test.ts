@@ -10,7 +10,8 @@ import {
 describe('runtime bootstrap helpers', () => {
   it('builds the default bootstrap config yaml with expected starter sections', () => {
     const yaml = buildDefaultBootstrapConfigYaml();
-    expect(yaml).toContain('defaultProvider: ollama');
+    expect(yaml).toContain('enabled: false');
+    expect(yaml).toContain("defaultProvider: ''");
     expect(yaml).toContain('channels:');
     expect(yaml).toContain('assistant:');
     expect(yaml.endsWith('\n')).toBe(true);

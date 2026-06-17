@@ -10490,6 +10490,395 @@ tr:hover td {
   }
 }
 
+/* ─── Focused Chat Shell ───────────────────────────────────
+   Icon rail + full-height assistant surface. Route pages render into the
+   focused modal window so page ownership stays with the existing modules. */
+
+body.focused-mode {
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 4%, transparent), transparent 30%),
+    var(--bg-primary);
+}
+
+body.focused-mode .header {
+  position: fixed;
+  top: 0.7rem;
+  right: 0.8rem;
+  z-index: 340;
+  height: auto;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+body.focused-mode .header::after,
+body.focused-mode .header-left,
+body.focused-mode .header-clock {
+  display: none;
+}
+
+body.focused-mode .header-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+body.focused-mode .indicator,
+body.focused-mode .btn-workstation-toggle,
+body.focused-mode .btn-killswitch {
+  min-width: 34px;
+  height: 34px;
+  justify-content: center;
+  padding: 0;
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+}
+
+body.focused-mode .indicator {
+  width: 34px;
+  overflow: hidden;
+  color: var(--success);
+  font-size: 0;
+}
+
+body.focused-mode .indicator.disconnected {
+  color: var(--error);
+}
+
+body.focused-mode .indicator::before {
+  width: 0.48rem;
+  height: 0.48rem;
+}
+
+body.focused-mode .btn-workstation-toggle span,
+body.focused-mode .btn-killswitch span {
+  display: none;
+}
+
+body.focused-mode .layout,
+body.focused-mode .layout.layout-chat-wide,
+body.focused-mode .layout.layout-code-page {
+  grid-template-columns: 56px minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+  height: 100vh !important;
+}
+
+body.focused-mode #app-sidebar.sidebar,
+body.focused-mode #app-sidebar.sidebar.is-collapsed {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  width: 56px !important;
+  min-width: 56px !important;
+  max-width: 56px !important;
+  height: 100vh !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch;
+  overflow-x: visible !important;
+  overflow-y: auto !important;
+  padding: 0.55rem 0.25rem !important;
+  border-right: 1px solid var(--border) !important;
+  border-bottom: 0 !important;
+  background: color-mix(in srgb, var(--bg-panel) 94%, var(--bg-primary));
+}
+
+body.focused-mode #app-sidebar .nav-item,
+body.focused-mode #app-sidebar.sidebar.is-collapsed .nav-item {
+  position: relative;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 44px !important;
+  min-height: 44px !important;
+  justify-content: center !important;
+  padding: 0 !important;
+  border-left: 0 !important;
+  border-bottom: 0 !important;
+  border-radius: var(--radius-sm);
+}
+
+body.focused-mode #app-sidebar .nav-item:hover {
+  background: var(--nav-hover-bg);
+}
+
+body.focused-mode #app-sidebar .nav-item.active {
+  color: var(--accent);
+  background: var(--nav-active-bg);
+}
+
+body.focused-mode #app-sidebar .nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: -0.25rem;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+body.focused-mode #app-sidebar .nav-label,
+body.focused-mode #app-sidebar .sidebar-toggle {
+  display: none !important;
+}
+
+body.focused-mode #app-sidebar .nav-icon,
+body.focused-mode #app-sidebar.sidebar.is-collapsed .nav-icon {
+  width: 1.08rem;
+  height: 1.08rem;
+  margin: 0;
+}
+
+body.focused-mode #content {
+  display: none !important;
+}
+
+body.focused-mode #chat-panel {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  align-items: center;
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+  height: 100vh;
+  padding: 0 clamp(0.75rem, 3vw, 2rem);
+  border-left: 1px solid var(--border);
+  border-top: 0;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 3%, transparent), transparent 26%),
+    var(--bg-surface);
+}
+
+body.focused-mode #chat-panel .chat-container {
+  width: min(100%, 1360px);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+body.focused-mode .chat-panel-header {
+  padding-right: 9.5rem;
+}
+
+body.focused-mode .chat-panel-header__meta {
+  overflow: hidden;
+  max-width: 12rem;
+  text-overflow: ellipsis;
+}
+
+body.focused-mode .chat-rail-resizer {
+  display: none;
+}
+
+.focused-route-modal {
+  position: fixed;
+  inset: 0 0 0 56px;
+  z-index: 300;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: clamp(2.75rem, 7vh, 4.75rem) clamp(0.75rem, 3vw, 2.5rem) 1rem;
+  background: color-mix(in srgb, var(--bg-primary) 48%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.focused-route-modal.is-chat-cooperative-route {
+  padding-bottom: clamp(7.5rem, 18vh, 10rem);
+  background: color-mix(in srgb, var(--bg-primary) 36%, transparent);
+  pointer-events: none;
+}
+
+.focused-route-modal[hidden] {
+  display: none !important;
+}
+
+.focused-route-modal__window {
+  width: min(1180px, calc(100vw - 104px));
+  max-height: calc(100vh - clamp(4.5rem, 10vh, 6rem));
+  min-height: min(620px, calc(100vh - 6rem));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.5), 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
+  pointer-events: auto;
+}
+
+.focused-route-modal.is-chat-cooperative-route .focused-route-modal__window {
+  max-height: calc(100vh - clamp(10.5rem, 24vh, 14rem));
+  min-height: min(540px, calc(100vh - clamp(11rem, 25vh, 14.5rem)));
+}
+
+.focused-route-modal__header {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0 0.85rem 0 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-header-bg);
+}
+
+.focused-route-modal__title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.focused-route-modal__label {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: var(--font-label-tracking);
+  text-overflow: ellipsis;
+  text-transform: var(--font-label-transform);
+  white-space: nowrap;
+}
+
+.focused-route-modal__path {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  white-space: nowrap;
+}
+
+.focused-route-modal__close {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.focused-route-modal__close:hover {
+  border-color: var(--error);
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+}
+
+.focused-route-modal__close svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.focused-route-modal__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--content-inset);
+  background: var(--bg-primary);
+}
+
+.focused-route-modal__body > .page-title:first-child,
+.focused-route-modal__body > .layout-heading:first-child {
+  display: none;
+}
+
+.focused-route-modal__body.content-code-page {
+  overflow: hidden;
+  padding: 0;
+}
+
+@media (max-width: 900px) {
+  body.focused-mode .header {
+    top: 0.45rem;
+    right: 0.5rem;
+  }
+
+  body.focused-mode .indicator {
+    display: none;
+  }
+
+  body.focused-mode .layout,
+  body.focused-mode .layout.layout-chat-wide,
+  body.focused-mode .layout.layout-code-page {
+    grid-template-columns: 48px minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+    height: 100vh !important;
+  }
+
+  body.focused-mode #app-sidebar.sidebar,
+  body.focused-mode #app-sidebar.sidebar.is-collapsed {
+    width: 48px !important;
+    min-width: 48px !important;
+    max-width: 48px !important;
+    height: 100vh !important;
+    min-height: 0 !important;
+    flex-direction: column !important;
+    border-right: 1px solid var(--border) !important;
+    border-bottom: 0 !important;
+  }
+
+  body.focused-mode #app-sidebar .nav-item,
+  body.focused-mode #app-sidebar.sidebar.is-collapsed .nav-item {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 42px !important;
+    min-height: 42px !important;
+    border-bottom: 0 !important;
+  }
+
+  body.focused-mode #chat-panel {
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+    min-height: 0;
+    height: 100vh;
+    padding: 0;
+    border-left: 1px solid var(--border);
+    border-top: 0;
+  }
+
+  body.focused-mode #chat-panel .chat-container {
+    width: 100%;
+    border-right: 0;
+  }
+
+  body.focused-mode .chat-panel-header {
+    padding-right: 6.25rem;
+  }
+
+  body.focused-mode .chat-panel-header__meta {
+    display: none;
+  }
+
+  .focused-route-modal {
+    left: 48px;
+    padding: 3.4rem 0.55rem 0.6rem;
+  }
+
+  .focused-route-modal.is-chat-cooperative-route {
+    padding-bottom: clamp(6.5rem, 22vh, 8rem);
+  }
+
+  .focused-route-modal__window {
+    width: calc(100vw - 59px);
+    min-height: min(560px, calc(100vh - 4rem));
+    max-height: calc(100vh - 4rem);
+  }
+
+  .focused-route-modal.is-chat-cooperative-route .focused-route-modal__window {
+    min-height: min(460px, calc(100vh - 9rem));
+    max-height: calc(100vh - 9rem);
+  }
+}
+
 
 /* ─── Memory Page ────────────────────────────────────────── */
 

@@ -1209,7 +1209,7 @@ export function selectExecutionProfile(input: {
     providerName: effectiveProviderName,
     providerType: effectiveProviderType,
     ...(effectiveProviderModel ? { providerModel: effectiveProviderModel } : {}),
-    providerLocality: getProviderLocality(effectiveProviderName) ?? (tierSelection.tier === 'local' ? 'local' : 'external'),
+    providerLocality: getProviderLocality(effectiveProviderType) ?? (tierSelection.tier === 'local' ? 'local' : 'external'),
     providerTier: getProviderTier(effectiveProviderType) ?? tierSelection.tier,
     requestedTier: tierSelection.requestedTier,
     preferredAnswerPath,

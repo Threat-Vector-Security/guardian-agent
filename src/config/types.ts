@@ -367,6 +367,100 @@ export interface ChannelsConfig {
     /** Maximum request body size in bytes (default: 1 MB). */
     maxBodyBytes?: number;
   };
+  /** Voice device channel configuration for ESP32-style microphones and bridge services. */
+  voice?: {
+    enabled: boolean;
+    /** Port to listen on. */
+    port?: number;
+    /** Host to bind to. Use a LAN address or 0.0.0.0 only on trusted networks. */
+    host?: string;
+    /** Default agent to route messages to. */
+    defaultAgent?: string;
+    /** Bearer authentication for voice device requests. */
+    auth?: {
+      /** Auth mode for voice device endpoints. */
+      mode?: 'bearer_required' | 'disabled';
+      /** Bearer token value (supports ${ENV_VAR} interpolation). Prefer tokenCredentialRef. */
+      token?: string;
+      /** Reference into assistant.credentials.refs for the bearer token. */
+      tokenCredentialRef?: string;
+      /** Runtime metadata about where the active token came from. */
+      tokenSource?: 'config' | 'env' | 'local' | 'ephemeral';
+    };
+    /** Explicit device IDs allowed to use the channel. Empty means any authenticated device may register. */
+    allowedDeviceIds?: string[];
+    /** Automatically register a device when it first sends authenticated input. */
+    autoRegister?: boolean;
+    /** Maximum request body size in bytes (default: 10 MB). */
+    maxBodyBytes?: number;
+    /** Speech-to-text provider used when devices send audio instead of transcripts. */
+    transcription?: {
+      provider?: 'none' | 'elevenlabs' | 'openrouter' | 'local_command' | 'openai_compatible';
+      timeoutMs?: number;
+      elevenLabs?: {
+        /** Runtime-only resolved API key. Do not persist raw values in config files; use credentialRef instead. */
+        apiKey?: string;
+        /** Reference into assistant.credentials.refs for the ElevenLabs API key. */
+        credentialRef?: string;
+        /** ElevenLabs API base URL. */
+        apiBaseUrl?: string;
+        /** ElevenLabs STT model ID. */
+        modelId?: string;
+        /** Optional language hint. */
+        languageCode?: string;
+        /** Whether ElevenLabs may tag non-speech audio events. */
+        tagAudioEvents?: boolean;
+        /** Remove filler words and false starts when supported. */
+        noVerbatim?: boolean;
+        /** Input audio format hint for lower-latency PCM uploads. */
+        fileFormat?: 'pcm_s16le_16' | 'other';
+        /** ElevenLabs logging/retention flag. */
+        enableLogging?: boolean;
+      };
+      openRouter?: {
+        /** Runtime-only resolved API key. Do not persist raw values in config files; use credentialRef instead. */
+        apiKey?: string;
+        /** Reference into assistant.credentials.refs for the OpenRouter API key. */
+        credentialRef?: string;
+        /** OpenRouter API base URL. */
+        baseUrl?: string;
+        /** OpenRouter STT model identifier. */
+        model?: string;
+        /** Optional language hint. */
+        languageCode?: string;
+        /** Optional input audio format override, for example wav or mp3. */
+        audioFormat?: string;
+        /** Optional sampling temperature for transcription. */
+        temperature?: number;
+      };
+      localCommand?: {
+        /** Executable to run without a shell. Receives the audio path as an arg if {{audioPath}} is not used. */
+        command?: string;
+        /** Arguments; use {{audioPath}} where the temporary audio file path should be inserted. */
+        args?: string[];
+        /** Whether stdout is raw text or JSON containing a text field. */
+        outputFormat?: 'text' | 'json';
+        /** Command timeout in milliseconds. */
+        timeoutMs?: number;
+        /** Optional working directory for the command. */
+        workingDirectory?: string;
+      };
+      openAICompatible?: {
+        /** Base URL for an OpenAI-compatible /audio/transcriptions endpoint. */
+        baseUrl?: string;
+        /** Runtime-only resolved API key. Prefer credentialRef. */
+        apiKey?: string;
+        /** Reference into assistant.credentials.refs for the API key. */
+        credentialRef?: string;
+        /** Transcription model name. */
+        model?: string;
+        /** Optional language hint. */
+        languageCode?: string;
+        /** Response format requested from the provider. */
+        responseFormat?: 'json' | 'text' | 'verbose_json';
+      };
+    };
+  };
 }
 
 /** Guardian security configuration. */
@@ -1758,6 +1852,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
   llm: {
     ollama: {
       provider: 'ollama',
+      enabled: false,
       baseUrl: 'http://127.0.0.1:11434',
       model: 'gpt-oss:120b',
       maxTokens: 2048,
@@ -1765,7 +1860,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       timeoutMs: 120_000,
     },
   },
-  defaultProvider: 'ollama',
+  defaultProvider: '',
   agents: [],
   channels: {
     cli: { enabled: true },
@@ -1777,6 +1872,29 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       auth: {
         mode: 'bearer_required',
         rotateOnStartup: false,
+      },
+    },
+    voice: {
+      enabled: false,
+      port: 3107,
+      host: 'localhost',
+      auth: {
+        mode: 'bearer_required',
+      },
+      allowedDeviceIds: [],
+      autoRegister: true,
+      maxBodyBytes: 10 * 1024 * 1024,
+      transcription: {
+        provider: 'none',
+        timeoutMs: 120_000,
+        elevenLabs: {
+          modelId: 'scribe_v2',
+          apiBaseUrl: 'https://api.elevenlabs.io',
+        },
+        openRouter: {
+          baseUrl: 'https://openrouter.ai/api/v1',
+          model: 'openai/whisper-large-v3',
+        },
       },
     },
   },
@@ -2247,9 +2365,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       contextBudget: 80_000,
       providerRouting: {},
       providerRoutingEnabled: true,
-      preferredProviders: {
-        local: 'ollama',
-      },
+      preferredProviders: {},
       modelSelection: {
         autoPolicy: 'balanced',
         preferManagedCloudForLowPressureExternal: true,

@@ -20,6 +20,7 @@ import { BaseAgent, createAgentDefinition } from './agent/agent.js';
 import type { AgentContext, AgentResponse, UserMessage, ScheduleContext } from './agent/types.js';
 import { AgentState } from './agent/types.js';
 import type { AgentEvent } from './queue/event-bus.js';
+import { DEFAULT_CONFIG, type GuardianAgentConfig } from './config/types.js';
 import { MessageRouter } from './runtime/message-router.js';
 import { SentinelAuditService } from './runtime/sentinel.js';
 
@@ -75,6 +76,17 @@ class LLMChatAgent extends BaseAgent {
   }
 }
 
+function createMockOllamaRuntime(): Runtime {
+  const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+  config.llm.ollama.enabled = true;
+  config.defaultProvider = 'ollama';
+  config.assistant.tools.preferredProviders = {
+    ...config.assistant.tools.preferredProviders,
+    local: 'ollama',
+  };
+  return new Runtime(config);
+}
+
 class StallingAgent extends BaseAgent {
   constructor() {
     super('staller', 'Staller', { handleMessages: true });
@@ -116,7 +128,7 @@ describe('Integration: Multi-Agent Event Exchange', () => {
   });
 
   it('should allow two agents to exchange events via EventBus', async () => {
-    runtime = new Runtime();
+    runtime = createMockOllamaRuntime();
 
     const producer = new ProducerAgent();
     const consumer = new ConsumerAgent();
@@ -180,7 +192,7 @@ describe('Integration: LLM Chat with Mocked Provider', () => {
       return new Response('Not found', { status: 404 });
     }));
 
-    runtime = new Runtime();
+    runtime = createMockOllamaRuntime();
     const agent = new LLMChatAgent();
     runtime.registerAgent(createAgentDefinition({ agent }));
 
@@ -222,7 +234,7 @@ describe('Integration: LLM Chat with Mocked Provider', () => {
       return new Response('Not found', { status: 404 });
     }));
 
-    runtime = new Runtime();
+    runtime = createMockOllamaRuntime();
     const agent = new LLMChatAgent();
     runtime.registerAgent(createAgentDefinition({ agent }));
     await runtime.start();

@@ -124,14 +124,19 @@ export function evaluateSetupStatus(
       : 'Telegram is optional and currently not configured.',
   });
 
-  const channelsEnabled = !!(config.channels.cli?.enabled || config.channels.web?.enabled || config.channels.telegram?.enabled);
+  const channelsEnabled = !!(
+    config.channels.cli?.enabled
+    || config.channels.web?.enabled
+    || config.channels.telegram?.enabled
+    || config.channels.voice?.enabled
+  );
   steps.push({
     id: 'channels',
     title: 'User Channels',
     status: channelsEnabled ? 'complete' : 'incomplete',
     detail: channelsEnabled
       ? 'At least one user channel is enabled.'
-      : 'Enable CLI, Web, or Telegram channel.',
+      : 'Enable CLI, Web, Telegram, or Voice channel.',
   });
 
   const sandbox = config.assistant.tools.sandbox;

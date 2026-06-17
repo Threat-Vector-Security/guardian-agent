@@ -1,11 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import { CLIChannel } from '../channels/cli.js';
 import { TelegramChannel } from '../channels/telegram.js';
+import { VoiceChannel } from '../channels/voice.js';
+import {
+  ElevenLabsVoiceTranscriber,
+  LocalCommandVoiceTranscriber,
+  OpenAICompatibleVoiceTranscriber,
+  OpenRouterVoiceTranscriber,
+  type VoiceTranscriber,
+} from '../channels/voice-transcription.js';
 import { WebChannel, type WebAuthRuntimeConfig } from '../channels/web.js';
 import type { CodingBackendTerminalControl, DashboardCallbacks } from '../channels/web-types.js';
 import type { CodingBackendsConfig, GuardianAgentConfig } from '../config/types.js';
 import { CodingBackendService } from '../runtime/coding-backend-service.js';
 import { applyCodingBackendEnvironmentDefaults } from '../runtime/coding-backend-presets.js';
+import { ConfigCredentialProvider } from '../runtime/credentials.js';
 import type {
   IncomingDispatchMessage,
   PrepareIncomingDispatch,
@@ -16,6 +25,7 @@ import type { BootstrapChannelStopEntry } from './shutdown.js';
 
 export type BootstrapCliChannel = Pick<CLIChannel, 'start' | 'stop' | 'send' | 'postStart'>;
 export type BootstrapTelegramChannel = Pick<TelegramChannel, 'start' | 'stop' | 'send' | 'getKnownChatIds'>;
+export type BootstrapVoiceChannel = Pick<VoiceChannel, 'start' | 'stop' | 'send' | 'getDevices'>;
 export type BootstrapWebChannel = Pick<
   WebChannel,
   'start' | 'stop' | 'send' | 'setAuthConfig' | 'getCodingBackendTerminalControl' | 'emitDashboardInvalidation'
@@ -99,6 +109,152 @@ function createUnavailableCodingBackendTerminalControl(): CodingBackendTerminalC
   };
 }
 
+function resolveCredentialRef(args: {
+  config: GuardianAgentConfig;
+  secretStore: LocalSecretStore;
+  ref?: string;
+  purpose: string;
+  log: LoggerLike;
+}): string | undefined {
+  const ref = args.ref?.trim();
+  if (!ref) return undefined;
+  try {
+    return new ConfigCredentialProvider(args.config.assistant.credentials, args.secretStore)
+      .require(ref, args.purpose);
+  } catch (err) {
+    args.log.warn({
+      ref,
+      purpose: args.purpose,
+      error: err instanceof Error ? err.message : String(err),
+    }, 'Credential resolution failed');
+    return undefined;
+  }
+}
+
+function createVoiceTranscriber(args: {
+  config: GuardianAgentConfig;
+  secretStore: LocalSecretStore;
+  log: LoggerLike;
+}): VoiceTranscriber | undefined {
+  const voice = args.config.channels.voice;
+  const transcription = voice?.transcription;
+  const provider = transcription?.provider ?? 'none';
+  if (!voice?.enabled || provider === 'none') return undefined;
+
+  if (provider === 'elevenlabs') {
+    const elevenLabs = transcription?.elevenLabs;
+    const apiKey = resolveCredentialRef({
+      config: args.config,
+      secretStore: args.secretStore,
+      ref: elevenLabs?.credentialRef,
+      purpose: 'channels.voice.transcription.elevenLabs',
+      log: args.log,
+    });
+    if (!apiKey) {
+      args.log.warn('Voice audio transcription disabled because the ElevenLabs credential did not resolve');
+      return undefined;
+    }
+    return new ElevenLabsVoiceTranscriber({
+      apiKey,
+      apiBaseUrl: elevenLabs?.apiBaseUrl,
+      modelId: elevenLabs?.modelId,
+      timeoutMs: transcription?.timeoutMs,
+      languageCode: elevenLabs?.languageCode,
+      tagAudioEvents: elevenLabs?.tagAudioEvents,
+      noVerbatim: elevenLabs?.noVerbatim,
+      fileFormat: elevenLabs?.fileFormat,
+      enableLogging: elevenLabs?.enableLogging,
+    });
+  }
+
+  if (provider === 'openrouter') {
+    const openRouter = transcription?.openRouter;
+    const apiKey = resolveCredentialRef({
+      config: args.config,
+      secretStore: args.secretStore,
+      ref: openRouter?.credentialRef,
+      purpose: 'channels.voice.transcription.openRouter',
+      log: args.log,
+    });
+    if (!apiKey) {
+      args.log.warn('Voice audio transcription disabled because the OpenRouter credential did not resolve');
+      return undefined;
+    }
+    if (!openRouter?.model?.trim()) {
+      args.log.warn('Voice OpenRouter transcription disabled because no model is configured');
+      return undefined;
+    }
+    return new OpenRouterVoiceTranscriber({
+      apiKey,
+      baseUrl: openRouter.baseUrl,
+      model: openRouter.model,
+      timeoutMs: transcription?.timeoutMs,
+      languageCode: openRouter.languageCode,
+      audioFormat: openRouter.audioFormat,
+      temperature: openRouter.temperature,
+    });
+  }
+
+  if (provider === 'local_command') {
+    const localCommand = transcription?.localCommand;
+    if (!localCommand?.command?.trim()) {
+      args.log.warn('Voice local transcription disabled because no command is configured');
+      return undefined;
+    }
+    return new LocalCommandVoiceTranscriber({
+      command: localCommand.command,
+      args: localCommand.args,
+      outputFormat: localCommand.outputFormat,
+      timeoutMs: localCommand.timeoutMs ?? transcription?.timeoutMs,
+      workingDirectory: localCommand.workingDirectory,
+    });
+  }
+
+  if (provider === 'openai_compatible') {
+    const compatible = transcription?.openAICompatible;
+    if (!compatible?.baseUrl?.trim() || !compatible.model?.trim()) {
+      args.log.warn('Voice OpenAI-compatible transcription disabled because baseUrl or model is missing');
+      return undefined;
+    }
+    const apiKey = compatible.credentialRef
+      ? resolveCredentialRef({
+          config: args.config,
+          secretStore: args.secretStore,
+          ref: compatible.credentialRef,
+          purpose: 'channels.voice.transcription.openAICompatible',
+          log: args.log,
+        })
+      : undefined;
+    return new OpenAICompatibleVoiceTranscriber({
+      baseUrl: compatible.baseUrl,
+      apiKey,
+      model: compatible.model,
+      timeoutMs: transcription?.timeoutMs,
+      languageCode: compatible.languageCode,
+      responseFormat: compatible.responseFormat,
+    });
+  }
+
+  return undefined;
+}
+
+function resolveVoiceAuthToken(args: {
+  config: GuardianAgentConfig;
+  secretStore: LocalSecretStore;
+  log: LoggerLike;
+}): string | undefined {
+  const auth = args.config.channels.voice?.auth;
+  const direct = auth?.token?.trim();
+  if (direct) return direct;
+  return resolveCredentialRef({
+    config: args.config,
+    secretStore: args.secretStore,
+    ref: auth?.tokenCredentialRef,
+    purpose: 'channels.voice.auth',
+    log: args.log,
+  });
+}
+
 function shouldInstallHeadlessCodingBackendService(config: CodingBackendsConfig): boolean {
   if (!config.enabled) return false;
   const defaultBackend = config.defaultBackend
@@ -154,21 +310,25 @@ export async function startBootstrapChannels(args: {
   stdoutIsTTY?: boolean;
   createCliChannel?: (options: ConstructorParameters<typeof CLIChannel>[0]) => BootstrapCliChannel;
   createTelegramChannel?: (options: ConstructorParameters<typeof TelegramChannel>[0]) => BootstrapTelegramChannel;
+  createVoiceChannel?: (options: ConstructorParameters<typeof VoiceChannel>[0]) => BootstrapVoiceChannel;
   createWebChannel?: (options: ConstructorParameters<typeof WebChannel>[0]) => BootstrapWebChannel;
   createCodingBackendService?: (
     options: ConstructorParameters<typeof CodingBackendService>[0],
   ) => CodingBackendService;
 }): Promise<{
   cliChannel: BootstrapCliChannel | null;
+  voiceChannel: BootstrapVoiceChannel | null;
   webChannel: BootstrapWebChannel | null;
   getTelegramChannel: () => BootstrapTelegramChannel | null;
 }> {
   let cliChannel: BootstrapCliChannel | null = null;
   let activeTelegram: BootstrapTelegramChannel | null = null;
+  let voiceChannel: BootstrapVoiceChannel | null = null;
   let webChannel: BootstrapWebChannel | null = null;
 
   const createCliChannel = args.createCliChannel ?? ((options) => new CLIChannel(options));
   const createTelegramChannel = args.createTelegramChannel ?? ((options) => new TelegramChannel(options));
+  const createVoiceChannel = args.createVoiceChannel ?? ((options) => new VoiceChannel(options));
   const createWebChannel = args.createWebChannel ?? ((options) => new WebChannel(options));
   const createCodingBackendService = args.createCodingBackendService
     ?? ((options) => new CodingBackendService(options));
@@ -193,6 +353,7 @@ export async function startBootstrapChannels(args: {
     const enabledChannels: string[] = ['cli'];
     if (args.config.channels.web?.enabled) enabledChannels.push('web');
     if (args.config.channels.telegram?.enabled) enabledChannels.push('telegram');
+    if (args.config.channels.voice?.enabled) enabledChannels.push('voice');
 
     const cli = createCliChannel({
       defaultAgent: cliDefaultAgent,
@@ -322,6 +483,50 @@ export async function startBootstrapChannels(args: {
     console.log('  Telegram: FAILED (check bot token) — other channels unaffected');
   }
 
+  if (args.config.channels.voice?.enabled) {
+    const voiceDefaultAgent = resolveConfiguredAgentId(args.config.channels.voice.defaultAgent) ?? args.defaultAgentId;
+    const voiceAuthMode = args.config.channels.voice.auth?.mode ?? 'bearer_required';
+    const voiceAuthToken = resolveVoiceAuthToken({
+      config: args.configRef.current,
+      secretStore: args.secretStore,
+      log: args.log,
+    });
+    if (voiceAuthMode === 'bearer_required' && !voiceAuthToken) {
+      args.log.error('Voice channel skipped because bearer authentication is enabled but no token resolved');
+      console.log('  Voice: skipped (missing bearer token)');
+    } else {
+      const voice = createVoiceChannel({
+        port: args.config.channels.voice.port,
+        host: args.config.channels.voice.host,
+        defaultAgent: voiceDefaultAgent,
+        auth: {
+          mode: voiceAuthMode,
+          token: voiceAuthToken,
+        },
+        allowedDeviceIds: args.config.channels.voice.allowedDeviceIds,
+        autoRegister: args.config.channels.voice.autoRegister,
+        maxBodyBytes: args.config.channels.voice.maxBodyBytes,
+        transcriber: createVoiceTranscriber({
+          config: args.configRef.current,
+          secretStore: args.secretStore,
+          log: args.log,
+        }),
+      });
+      voiceChannel = voice;
+      await voice.start(createChannelDispatchHandler({
+        channelDefault: voiceDefaultAgent,
+        prepareIncomingDispatch: args.prepareIncomingDispatch,
+        dashboardCallbacks: args.dashboardCallbacks,
+        runtime: args.runtime,
+      }));
+      args.channels.push({ name: 'voice', stop: () => voice.stop() });
+      args.log.info({
+        host: args.config.channels.voice.host ?? 'localhost',
+        port: args.config.channels.voice.port ?? 3107,
+      }, 'Voice channel available at');
+    }
+  }
+
   if (args.config.channels.web?.enabled) {
     const webDefaultAgent = resolveConfiguredAgentId(args.config.channels.web.defaultAgent) ?? args.defaultAgentId;
     if (args.webAuthStateRef.current.mode === 'bearer_required' && !args.webAuthStateRef.current.token) {
@@ -406,6 +611,7 @@ export async function startBootstrapChannels(args: {
 
   return {
     cliChannel,
+    voiceChannel,
     webChannel,
     getTelegramChannel: () => activeTelegram,
   };

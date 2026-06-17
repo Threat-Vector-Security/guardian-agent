@@ -30,6 +30,7 @@ const DEFAULT_BOOTSTRAP_CONFIG_YAML = [
   'llm:',
   '  ollama:',
   '    provider: ollama',
+  '    enabled: false',
   '    baseUrl: http://127.0.0.1:11434',
   '    model: gpt-oss:120b',
   '',
@@ -45,7 +46,7 @@ const DEFAULT_BOOTSTRAP_CONFIG_YAML = [
   '  #   apiKey: ${OPENAI_API_KEY}',
   '  #   model: gpt-4o',
   '',
-  'defaultProvider: ollama',
+  "defaultProvider: ''",
   '',
   '# Fallback providers tried when the default fails (rate limit, timeout, etc.)',
   '# fallbacks:',
@@ -109,7 +110,7 @@ function logCreatedDefaultConfig(configPath: string): void {
   const green = (text: string) => isTTY ? `\x1b[32m${text}\x1b[0m` : text;
   console.log(green(`  Created default config at ${configPath}`));
   console.log(dim('  Edit this file to configure LLM providers, channels, and security settings.'));
-  console.log(dim('  Quick start: ensure Ollama is running, or set ANTHROPIC_API_KEY / OPENAI_API_KEY.'));
+  console.log(dim('  Quick start: configure an AI provider in the web UI, or enable Ollama after starting it locally.'));
   console.log('');
 }
 
@@ -128,7 +129,7 @@ async function ensureBootstrapConfigExists(
 
 async function autoRepairUnavailableOllamaModels(config: GuardianAgentConfig): Promise<void> {
   for (const [name, llmCfg] of Object.entries(config.llm)) {
-    if (llmCfg.provider !== 'ollama') continue;
+    if (llmCfg.provider !== 'ollama' || llmCfg.enabled === false) continue;
     const baseUrl = llmCfg.baseUrl || 'http://127.0.0.1:11434';
     try {
       const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });

@@ -2145,6 +2145,59 @@ export interface ConfigUpdate {
       polling?: boolean;
       defaultAgent?: string;
     };
+    voice?: {
+      enabled?: boolean;
+      port?: number;
+      host?: string;
+      defaultAgent?: string;
+      auth?: {
+        mode?: 'bearer_required' | 'disabled';
+        token?: string;
+        tokenCredentialRef?: string;
+      };
+      allowedDeviceIds?: string[];
+      autoRegister?: boolean;
+      maxBodyBytes?: number;
+      transcription?: {
+        provider?: 'none' | 'elevenlabs' | 'openrouter' | 'local_command' | 'openai_compatible';
+        timeoutMs?: number;
+        elevenLabs?: {
+          apiKey?: string;
+          credentialRef?: string;
+          apiBaseUrl?: string;
+          modelId?: string;
+          languageCode?: string;
+          tagAudioEvents?: boolean;
+          noVerbatim?: boolean;
+          fileFormat?: 'pcm_s16le_16' | 'other';
+          enableLogging?: boolean;
+        };
+        openRouter?: {
+          apiKey?: string;
+          credentialRef?: string;
+          baseUrl?: string;
+          model?: string;
+          languageCode?: string;
+          audioFormat?: string;
+          temperature?: number;
+        };
+        localCommand?: {
+          command?: string;
+          args?: string[];
+          outputFormat?: 'text' | 'json';
+          timeoutMs?: number;
+          workingDirectory?: string;
+        };
+        openAICompatible?: {
+          baseUrl?: string;
+          apiKey?: string;
+          credentialRef?: string;
+          model?: string;
+          languageCode?: string;
+          responseFormat?: 'json' | 'text' | 'verbose_json';
+        };
+      };
+    };
   };
   assistant?: {
     secondBrain?: {

@@ -1,5 +1,5 @@
 /**
- * Shared reference guide content for CLI, Telegram, and Web UI.
+ * Shared reference guide content for CLI, Telegram, Voice, and Web UI.
  *
  * AGENT NOTE:
  * This file is a user/operator guide only.
@@ -71,7 +71,7 @@ const GUIDE_PROMPT_STOP_WORDS = new Set([
 export function getReferenceGuide(): ReferenceGuide {
   return {
     title: 'Guardian Agent Reference Guide',
-    intro: 'Operator guide for setup, daily use, coding work, cloud connections, automations, and security controls across web, CLI, and Telegram. For GitHub issue reporting and source-control workflow setup, use the GitHub Integration section in this guide.',
+    intro: 'Operator guide for setup, daily use, coding work, cloud connections, automations, and security controls across web, CLI, Telegram, and voice devices. For GitHub issue reporting and source-control workflow setup, use the GitHub Integration section in this guide.',
     categories: [
       {
         id: 'getting-started',
@@ -103,8 +103,8 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Open `#/config` to verify your AI connection, web access settings, and enabled channels.',
                   'Open Configuration > Second Brain when you want to change assistant response style, the Second Brain home setup card, or default delivery channels later without rerunning a one-shot wizard.',
                   'Open Configuration > Integrations > Coding Assistants when you want to confirm whether Guardian can delegate work to Claude Code, Codex, Gemini CLI, or Aider.',
-                  'Open Configuration > Appearance when you want to switch between built-in and curated design-system bundles, let typography follow the selected bundle, tune text scale, align editor appearance, or reduce interface motion without changing page layout.',
-                  'Use Configuration > Appearance > Shell Layer or the Workstation button in the web header when you want to switch between Classic Layer and Web Browser Layer.',
+                  'Open Configuration > Appearance when you want to switch between shell layouts, built-in and curated design-system bundles, theme-following typography, text scale, editor alignment, or reduced motion.',
+                  'Use Configuration > Appearance > Shell Layer to choose Focused Chat, Classic Layer, or Web Browser Layer. Focused Chat keeps chat full-height with a compact side rail and opens Configuration as a modal window.',
                   'Drag the edge of the web chat rail to resize it. Guardian keeps the chosen size locally while new sessions keep the default 460px rail.',
                   'Open `#/code` when you want the repo-scoped coding surface, and `#/security` when you want alerts, findings, and security status.',
                   'Use CLI `/providers` or Configuration > AI Providers to confirm the selected provider is reachable.',
@@ -1017,6 +1017,39 @@ export function getReferenceGuide(): ReferenceGuide {
             ],
           },
           {
+            id: 'voice-channel',
+            title: 'Voice Channel',
+            summary: 'Connect a trusted microphone device or bridge service so spoken commands can reach the assistant.',
+            sections: [
+              {
+                title: 'Device Setup',
+                items: [
+                  'Enable Voice in Configuration > Integration System, set a bearer token, and keep the listener on localhost or a trusted LAN address.',
+                  'Add allowed device IDs when you want only known devices, such as an ESP32-S3-BOX-3B bridge, to register and send input.',
+                  'Guardian does not flash the device or run wake-word capture on the ESP32. The device firmware or bridge records audio, chooses when to send it, and posts either a transcript or an audio clip to Guardian.',
+                  'Use pre-transcribed input when the device firmware or bridge already performs speech recognition. Use audio upload when you want Guardian to run the configured transcription provider first.',
+                ],
+              },
+              {
+                title: 'Transcription',
+                items: [
+                  'ElevenLabs transcription uses Scribe for uploaded audio when an ElevenLabs credential ref and model are configured.',
+                  'OpenRouter transcription uses an OpenRouter STT model such as `openai/whisper-large-v3` when an OpenRouter credential ref is configured.',
+                  'Local transcription can run a configured command such as Whisper, faster-whisper, or whisper.cpp. Guardian writes the uploaded audio to a temporary file and reads the command output as text or JSON.',
+                  'OpenAI-compatible local transcription can target a trusted local service that exposes `/audio/transcriptions` with multipart audio upload.',
+                ],
+              },
+              {
+                title: 'Safety',
+                items: [
+                  'Treat the voice bearer token like any other channel secret and store it through a credential ref when possible.',
+                  'Use short audio clips for commands. Keep large recording, wake-word, and streaming behavior in the device or bridge layer until you intentionally add that workflow.',
+                  'Voice requests enter the same assistant routing and approval flow as web, CLI, and Telegram input, so tool approvals and policy controls still apply.',
+                ],
+              },
+            ],
+          },
+          {
             id: 'web-search-and-document-search',
             title: 'Web Search And Document Search',
             summary: 'Use live web search, page fetch, and local document search together without losing source control.',
@@ -1285,7 +1318,7 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Identity Modes',
                 items: [
-                  '`single_user` shares one assistant identity across web, CLI, and Telegram.',
+                  '`single_user` shares one assistant identity across web, CLI, Telegram, and voice-device input when they are mapped to the same operator.',
                   '`channel_user` keeps identities separate by channel unless you alias-map them deliberately.',
                   'Choose the mode that matches whether you want one shared assistant memory or distinct channel personas.',
                 ],

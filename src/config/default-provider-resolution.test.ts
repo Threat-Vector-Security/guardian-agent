@@ -64,6 +64,7 @@ describe('resolveDerivedDefaultProvider', () => {
 
   it('falls back to local and then frontier when managed cloud is unavailable', () => {
     const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+    config.llm.ollama.enabled = true;
     config.llm = {
       ollama: config.llm.ollama,
       anthropic: {
@@ -105,8 +106,16 @@ describe('resolveDerivedDefaultProvider', () => {
     expect(resolveDerivedDefaultProvider(config)).toBe('ollama-cloud-coding');
   });
 
+  it('returns no default when every provider is disabled', () => {
+    const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+    config.llm.ollama.enabled = false;
+
+    expect(resolveDerivedDefaultProvider(config)).toBe('');
+  });
+
   it('treats OpenRouter profiles as managed-cloud candidates', () => {
     const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+    config.llm.ollama.enabled = true;
     config.llm = {
       ollama: config.llm.ollama,
       openrouterGeneral: {
@@ -131,6 +140,7 @@ describe('resolveDerivedDefaultProvider', () => {
 
   it('treats NVIDIA Cloud profiles as managed-cloud candidates', () => {
     const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+    config.llm.ollama.enabled = true;
     config.llm = {
       ollama: config.llm.ollama,
       nvidiaGeneral: {

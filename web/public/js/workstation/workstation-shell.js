@@ -1,5 +1,11 @@
-const WORKSTATION_MODE_KEY = 'guardianagent_workstation_mode';
-const WORKSTATION_MODE_EVENT = 'guardianagent:workstation-mode-change';
+import {
+  getSavedShellLayer,
+  setSavedShellLayer,
+  SHELL_LAYER_EVENT,
+  LEGACY_WORKSTATION_MODE_EVENT,
+  readShellLayerFromEvent,
+} from '../shell-layout.js';
+
 const WORKSTATION_LAYOUT_KEY = 'guardianagent_workstation_layout_v1';
 const CLASSIC_CHAT_WIDTH_KEY = 'guardianagent_chat_rail_width';
 const CLASSIC_CHAT_HEIGHT_KEY = 'guardianagent_chat_rail_height';
@@ -207,7 +213,7 @@ export function initWorkstationShell({
 }) {
   if (!app || !routes || !chatPanel || !layout || !content) return null;
 
-  let active = localStorage.getItem(WORKSTATION_MODE_KEY) === 'true';
+  let active = getSavedShellLayer() === 'workstation';
   let activePath = null;
   let activeRoute = null;
   let zIndex = 20;
@@ -299,7 +305,11 @@ export function initWorkstationShell({
   workstationKillButton?.addEventListener('click', () => {
     document.getElementById('killswitch-btn')?.click();
   });
-  window.addEventListener(WORKSTATION_MODE_EVENT, (event) => setActive(Boolean(event?.detail?.active)));
+  window.addEventListener(SHELL_LAYER_EVENT, (event) => applyLayer(readShellLayerFromEvent(event)));
+  window.addEventListener(LEGACY_WORKSTATION_MODE_EVENT, (event) => {
+    if (event?.detail?.layer) return;
+    applyLayer(readShellLayerFromEvent(event));
+  });
   toggleButton?.addEventListener('click', () => setActive(!active));
   commandTrigger?.addEventListener('click', () => openPalette());
   palette?.addEventListener('click', (event) => {
@@ -428,8 +438,16 @@ export function initWorkstationShell({
   }
 
   function setActive(nextActive) {
-    active = Boolean(nextActive);
-    localStorage.setItem(WORKSTATION_MODE_KEY, String(active));
+    const layer = setSavedShellLayer(nextActive ? 'workstation' : 'classic');
+    active = layer === 'workstation';
+    syncMode();
+    if (active) void renderActiveRoute();
+  }
+
+  function applyLayer(layer) {
+    const nextActive = layer === 'workstation';
+    if (active === nextActive) return;
+    active = nextActive;
     syncMode();
     if (active) void renderActiveRoute();
   }

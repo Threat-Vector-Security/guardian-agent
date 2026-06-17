@@ -3215,7 +3215,7 @@ describe('IntentGateway', () => {
     const gateway = new IntentGateway();
     let capturedUser = '';
 
-    await gateway.classify(
+    const result = await gateway.classify(
       {
         content: 'Hello',
         channel: 'web',
@@ -3246,6 +3246,14 @@ describe('IntentGateway', () => {
       },
     );
 
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:standalone-greeting');
+    expect(result.decision).toMatchObject({
+      route: 'general_assistant',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredAnswerPath: 'direct',
+    });
     expect(capturedUser).not.toContain('Recent conversation:');
     expect(capturedUser).not.toContain('Continuity thread context:');
   });
@@ -5112,7 +5120,7 @@ describe('IntentGateway', () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
       {
-        content: 'Hello',
+        content: 'Blorptastic',
         channel: 'web',
       },
       async () => ({

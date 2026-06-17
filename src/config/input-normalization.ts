@@ -72,6 +72,53 @@ export function normalizeHttpUrlRecord(
 export function normalizeConfigInputs(config: GuardianAgentConfig): GuardianAgentConfig {
   return {
     ...config,
+    channels: {
+      ...config.channels,
+      voice: config.channels.voice
+        ? {
+            ...config.channels.voice,
+            allowedDeviceIds: trimStringArray(config.channels.voice.allowedDeviceIds) ?? [],
+            transcription: config.channels.voice.transcription
+              ? {
+                  ...config.channels.voice.transcription,
+                  elevenLabs: config.channels.voice.transcription.elevenLabs
+                    ? {
+                        ...config.channels.voice.transcription.elevenLabs,
+                        apiBaseUrl: normalizeOptionalHttpUrlInput(config.channels.voice.transcription.elevenLabs.apiBaseUrl, { allowPath: false }),
+                        modelId: trimOptionalString(config.channels.voice.transcription.elevenLabs.modelId),
+                        languageCode: trimOptionalString(config.channels.voice.transcription.elevenLabs.languageCode),
+                      }
+                    : config.channels.voice.transcription.elevenLabs,
+                  openRouter: config.channels.voice.transcription.openRouter
+                    ? {
+                        ...config.channels.voice.transcription.openRouter,
+                        baseUrl: normalizeOptionalHttpUrlInput(config.channels.voice.transcription.openRouter.baseUrl),
+                        model: trimOptionalString(config.channels.voice.transcription.openRouter.model),
+                        languageCode: trimOptionalString(config.channels.voice.transcription.openRouter.languageCode),
+                        audioFormat: trimOptionalString(config.channels.voice.transcription.openRouter.audioFormat),
+                      }
+                    : config.channels.voice.transcription.openRouter,
+                  localCommand: config.channels.voice.transcription.localCommand
+                    ? {
+                        ...config.channels.voice.transcription.localCommand,
+                        command: trimOptionalString(config.channels.voice.transcription.localCommand.command),
+                        args: trimStringArray(config.channels.voice.transcription.localCommand.args),
+                        workingDirectory: trimOptionalString(config.channels.voice.transcription.localCommand.workingDirectory),
+                      }
+                    : config.channels.voice.transcription.localCommand,
+                  openAICompatible: config.channels.voice.transcription.openAICompatible
+                    ? {
+                        ...config.channels.voice.transcription.openAICompatible,
+                        baseUrl: normalizeOptionalHttpUrlInput(config.channels.voice.transcription.openAICompatible.baseUrl),
+                        model: trimOptionalString(config.channels.voice.transcription.openAICompatible.model),
+                        languageCode: trimOptionalString(config.channels.voice.transcription.openAICompatible.languageCode),
+                      }
+                    : config.channels.voice.transcription.openAICompatible,
+                }
+              : config.channels.voice.transcription,
+          }
+        : config.channels.voice,
+    },
     llm: Object.fromEntries(
       Object.entries(config.llm).map(([name, provider]) => [
         name,

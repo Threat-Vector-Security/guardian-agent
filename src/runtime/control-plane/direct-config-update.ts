@@ -73,6 +73,7 @@ interface DirectConfigUpdateHandlerOptions {
 }
 
 type LlmConfigUpdate = NonNullable<ConfigUpdate['llm']>[string];
+type VoiceConfigUpdate = NonNullable<NonNullable<ConfigUpdate['channels']>['voice']>;
 
 function buildNextLlmConfig(
   currentLlm: GuardianAgentConfig['llm'],
@@ -109,10 +110,6 @@ function buildNextLlmConfig(
   }
 
   return nextLlm;
-}
-
-function countEnabledProviders(llm: GuardianAgentConfig['llm']): number {
-  return Object.values(llm).filter((provider) => provider.enabled !== false).length;
 }
 
 function pruneUnavailableProviderReferences(
@@ -310,6 +307,9 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
         const telegramUpdates = updates.channels?.telegram
           ? { ...updates.channels.telegram }
           : undefined;
+        const voiceUpdates: VoiceConfigUpdate | undefined = updates.channels?.voice
+          ? structuredClone(updates.channels.voice) as VoiceConfigUpdate
+          : undefined;
         if (telegramUpdates?.botToken?.trim()) {
           const refName = telegramUpdates.botTokenCredentialRef?.trim()
             || currentConfig.channels.telegram?.botTokenCredentialRef?.trim()
@@ -348,6 +348,84 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
             }
           }
         }
+        if (voiceUpdates?.auth?.token?.trim()) {
+          const refName = voiceUpdates.auth.tokenCredentialRef?.trim()
+            || currentConfig.channels.voice?.auth?.tokenCredentialRef?.trim()
+            || 'voice.channel.token';
+          const existingRef = nextCredentialRefs[refName];
+          const secretId = existingRef?.source === 'local' && existingRef.secretId?.trim()
+            ? existingRef.secretId.trim()
+            : randomUUID();
+          nextCredentialRefs[refName] = {
+            source: 'local',
+            secretId,
+            description: 'Voice channel bearer token',
+          };
+          credentialRefsChanged = true;
+          options.storeSecret(secretId, voiceUpdates.auth.token.trim());
+          voiceUpdates.auth.tokenCredentialRef = refName;
+          voiceUpdates.auth.token = undefined;
+        }
+        if (voiceUpdates?.transcription?.elevenLabs?.apiKey?.trim()) {
+          const elevenLabs = voiceUpdates.transcription.elevenLabs;
+          const apiKey = elevenLabs.apiKey?.trim() ?? '';
+          const refName = elevenLabs.credentialRef?.trim()
+            || currentConfig.channels.voice?.transcription?.elevenLabs?.credentialRef?.trim()
+            || 'voice.elevenlabs.primary';
+          const existingRef = nextCredentialRefs[refName];
+          const secretId = existingRef?.source === 'local' && existingRef.secretId?.trim()
+            ? existingRef.secretId.trim()
+            : randomUUID();
+          nextCredentialRefs[refName] = {
+            source: 'local',
+            secretId,
+            description: 'ElevenLabs voice transcription credential',
+          };
+          credentialRefsChanged = true;
+          options.storeSecret(secretId, apiKey);
+          elevenLabs.credentialRef = refName;
+          elevenLabs.apiKey = undefined;
+        }
+        if (voiceUpdates?.transcription?.openRouter?.apiKey?.trim()) {
+          const openRouter = voiceUpdates.transcription.openRouter;
+          const apiKey = openRouter.apiKey?.trim() ?? '';
+          const refName = openRouter.credentialRef?.trim()
+            || currentConfig.channels.voice?.transcription?.openRouter?.credentialRef?.trim()
+            || 'voice.openrouter.primary';
+          const existingRef = nextCredentialRefs[refName];
+          const secretId = existingRef?.source === 'local' && existingRef.secretId?.trim()
+            ? existingRef.secretId.trim()
+            : randomUUID();
+          nextCredentialRefs[refName] = {
+            source: 'local',
+            secretId,
+            description: 'OpenRouter voice transcription credential',
+          };
+          credentialRefsChanged = true;
+          options.storeSecret(secretId, apiKey);
+          openRouter.credentialRef = refName;
+          openRouter.apiKey = undefined;
+        }
+        if (voiceUpdates?.transcription?.openAICompatible?.apiKey?.trim()) {
+          const compatible = voiceUpdates.transcription.openAICompatible;
+          const apiKey = compatible.apiKey?.trim() ?? '';
+          const refName = compatible.credentialRef?.trim()
+            || currentConfig.channels.voice?.transcription?.openAICompatible?.credentialRef?.trim()
+            || 'voice.openai-compatible.primary';
+          const existingRef = nextCredentialRefs[refName];
+          const secretId = existingRef?.source === 'local' && existingRef.secretId?.trim()
+            ? existingRef.secretId.trim()
+            : randomUUID();
+          nextCredentialRefs[refName] = {
+            source: 'local',
+            secretId,
+            description: 'OpenAI-compatible voice transcription credential',
+          };
+          credentialRefsChanged = true;
+          options.storeSecret(secretId, apiKey);
+          compatible.credentialRef = refName;
+          compatible.apiKey = undefined;
+        }
         const cloudPatch = updates.assistant?.tools?.cloud
           ? options.mergeCloudConfigForValidation(currentConfig.assistant.tools.cloud, updates.assistant.tools.cloud)
           : undefined;
@@ -374,6 +452,7 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
             ? {
               ...updates.channels,
               telegram: telegramUpdates,
+              voice: voiceUpdates,
             } as unknown as GuardianAgentConfig['channels']
             : undefined,
           assistant: assistantPatch as unknown as GuardianAgentConfig['assistant'] | undefined,
@@ -386,13 +465,6 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
           pruneUnavailableProviderReferences(nextConfig, unavailableProviderNames);
         }
         applyDerivedDefaultProvider(nextConfig);
-        if (countEnabledProviders(nextConfig.llm) === 0) {
-          return {
-            success: false,
-            message: 'At least one AI provider must stay enabled.',
-            statusCode: 400,
-          };
-        }
         const baselineViolations = options.previewSecurityBaselineViolations(nextConfig, 'web_api');
         if (baselineViolations.length > 0) {
           return options.buildSecurityBaselineRejection(
@@ -523,6 +595,174 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
           }
 
           rawChannels.telegram = rawTelegram;
+        }
+
+        if (voiceUpdates) {
+          rawConfig.channels = rawConfig.channels ?? {};
+          const rawChannels = rawConfig.channels as Record<string, unknown>;
+          const rawVoice = (rawChannels.voice as Record<string, unknown> | undefined) ?? {};
+
+          if (typeof voiceUpdates.enabled === 'boolean') {
+            rawVoice.enabled = voiceUpdates.enabled;
+          }
+          if (voiceUpdates.port !== undefined) {
+            rawVoice.port = voiceUpdates.port;
+          }
+          if (voiceUpdates.host !== undefined) {
+            const trimmed = voiceUpdates.host.trim();
+            if (trimmed) rawVoice.host = trimmed;
+            else delete rawVoice.host;
+          }
+          if (voiceUpdates.defaultAgent !== undefined) {
+            const trimmed = voiceUpdates.defaultAgent.trim();
+            if (trimmed) rawVoice.defaultAgent = trimmed;
+            else delete rawVoice.defaultAgent;
+          }
+          if (voiceUpdates.autoRegister !== undefined) {
+            rawVoice.autoRegister = voiceUpdates.autoRegister;
+          }
+          if (voiceUpdates.maxBodyBytes !== undefined) {
+            rawVoice.maxBodyBytes = voiceUpdates.maxBodyBytes;
+          }
+          if (voiceUpdates.allowedDeviceIds !== undefined) {
+            if (voiceUpdates.allowedDeviceIds.length > 0) rawVoice.allowedDeviceIds = voiceUpdates.allowedDeviceIds;
+            else delete rawVoice.allowedDeviceIds;
+          }
+          if (voiceUpdates.auth) {
+            const rawAuth = (rawVoice.auth as Record<string, unknown> | undefined) ?? {};
+            if (voiceUpdates.auth.mode !== undefined) {
+              rawAuth.mode = voiceUpdates.auth.mode;
+            }
+            delete rawAuth.token;
+            if (voiceUpdates.auth.tokenCredentialRef !== undefined) {
+              const trimmed = voiceUpdates.auth.tokenCredentialRef.trim();
+              if (trimmed) rawAuth.tokenCredentialRef = trimmed;
+              else delete rawAuth.tokenCredentialRef;
+            }
+            rawVoice.auth = rawAuth;
+          }
+          if (voiceUpdates.transcription) {
+            const rawTranscription = (rawVoice.transcription as Record<string, unknown> | undefined) ?? {};
+            if (voiceUpdates.transcription.provider !== undefined) {
+              rawTranscription.provider = voiceUpdates.transcription.provider;
+            }
+            if (voiceUpdates.transcription.timeoutMs !== undefined) {
+              rawTranscription.timeoutMs = voiceUpdates.transcription.timeoutMs;
+            }
+            if (voiceUpdates.transcription.elevenLabs) {
+              const updatesElevenLabs = voiceUpdates.transcription.elevenLabs;
+              const rawElevenLabs = (rawTranscription.elevenLabs as Record<string, unknown> | undefined) ?? {};
+              delete rawElevenLabs.apiKey;
+              if (updatesElevenLabs.credentialRef !== undefined) {
+                const trimmed = updatesElevenLabs.credentialRef.trim();
+                if (trimmed) rawElevenLabs.credentialRef = trimmed;
+                else delete rawElevenLabs.credentialRef;
+              }
+              if (updatesElevenLabs.apiBaseUrl !== undefined) {
+                const trimmed = normalizeOptionalHttpUrlInput(updatesElevenLabs.apiBaseUrl, { allowPath: false });
+                if (trimmed) rawElevenLabs.apiBaseUrl = trimmed;
+                else delete rawElevenLabs.apiBaseUrl;
+              }
+              if (updatesElevenLabs.modelId !== undefined) {
+                const trimmed = updatesElevenLabs.modelId.trim();
+                if (trimmed) rawElevenLabs.modelId = trimmed;
+                else delete rawElevenLabs.modelId;
+              }
+              if (updatesElevenLabs.languageCode !== undefined) {
+                const trimmed = updatesElevenLabs.languageCode.trim();
+                if (trimmed) rawElevenLabs.languageCode = trimmed;
+                else delete rawElevenLabs.languageCode;
+              }
+              if (updatesElevenLabs.tagAudioEvents !== undefined) rawElevenLabs.tagAudioEvents = updatesElevenLabs.tagAudioEvents;
+              if (updatesElevenLabs.noVerbatim !== undefined) rawElevenLabs.noVerbatim = updatesElevenLabs.noVerbatim;
+              if (updatesElevenLabs.fileFormat !== undefined) rawElevenLabs.fileFormat = updatesElevenLabs.fileFormat;
+              if (updatesElevenLabs.enableLogging !== undefined) rawElevenLabs.enableLogging = updatesElevenLabs.enableLogging;
+              rawTranscription.elevenLabs = rawElevenLabs;
+            }
+            if (voiceUpdates.transcription.openRouter) {
+              const updatesOpenRouter = voiceUpdates.transcription.openRouter;
+              const rawOpenRouter = (rawTranscription.openRouter as Record<string, unknown> | undefined) ?? {};
+              delete rawOpenRouter.apiKey;
+              if (updatesOpenRouter.credentialRef !== undefined) {
+                const trimmed = updatesOpenRouter.credentialRef.trim();
+                if (trimmed) rawOpenRouter.credentialRef = trimmed;
+                else delete rawOpenRouter.credentialRef;
+              }
+              if (updatesOpenRouter.baseUrl !== undefined) {
+                const trimmed = normalizeOptionalHttpUrlInput(updatesOpenRouter.baseUrl);
+                if (trimmed) rawOpenRouter.baseUrl = trimmed;
+                else delete rawOpenRouter.baseUrl;
+              }
+              if (updatesOpenRouter.model !== undefined) {
+                const trimmed = updatesOpenRouter.model.trim();
+                if (trimmed) rawOpenRouter.model = trimmed;
+                else delete rawOpenRouter.model;
+              }
+              if (updatesOpenRouter.languageCode !== undefined) {
+                const trimmed = updatesOpenRouter.languageCode.trim();
+                if (trimmed) rawOpenRouter.languageCode = trimmed;
+                else delete rawOpenRouter.languageCode;
+              }
+              if (updatesOpenRouter.audioFormat !== undefined) {
+                const trimmed = updatesOpenRouter.audioFormat.trim();
+                if (trimmed) rawOpenRouter.audioFormat = trimmed;
+                else delete rawOpenRouter.audioFormat;
+              }
+              if (updatesOpenRouter.temperature !== undefined) rawOpenRouter.temperature = updatesOpenRouter.temperature;
+              rawTranscription.openRouter = rawOpenRouter;
+            }
+            if (voiceUpdates.transcription.localCommand) {
+              const updatesLocalCommand = voiceUpdates.transcription.localCommand;
+              const rawLocalCommand = (rawTranscription.localCommand as Record<string, unknown> | undefined) ?? {};
+              if (updatesLocalCommand.command !== undefined) {
+                const trimmed = updatesLocalCommand.command.trim();
+                if (trimmed) rawLocalCommand.command = trimmed;
+                else delete rawLocalCommand.command;
+              }
+              if (updatesLocalCommand.args !== undefined) {
+                if (updatesLocalCommand.args.length > 0) rawLocalCommand.args = updatesLocalCommand.args;
+                else delete rawLocalCommand.args;
+              }
+              if (updatesLocalCommand.outputFormat !== undefined) rawLocalCommand.outputFormat = updatesLocalCommand.outputFormat;
+              if (updatesLocalCommand.timeoutMs !== undefined) rawLocalCommand.timeoutMs = updatesLocalCommand.timeoutMs;
+              if (updatesLocalCommand.workingDirectory !== undefined) {
+                const trimmed = updatesLocalCommand.workingDirectory.trim();
+                if (trimmed) rawLocalCommand.workingDirectory = trimmed;
+                else delete rawLocalCommand.workingDirectory;
+              }
+              rawTranscription.localCommand = rawLocalCommand;
+            }
+            if (voiceUpdates.transcription.openAICompatible) {
+              const updatesCompatible = voiceUpdates.transcription.openAICompatible;
+              const rawCompatible = (rawTranscription.openAICompatible as Record<string, unknown> | undefined) ?? {};
+              delete rawCompatible.apiKey;
+              if (updatesCompatible.credentialRef !== undefined) {
+                const trimmed = updatesCompatible.credentialRef.trim();
+                if (trimmed) rawCompatible.credentialRef = trimmed;
+                else delete rawCompatible.credentialRef;
+              }
+              if (updatesCompatible.baseUrl !== undefined) {
+                const trimmed = normalizeOptionalHttpUrlInput(updatesCompatible.baseUrl);
+                if (trimmed) rawCompatible.baseUrl = trimmed;
+                else delete rawCompatible.baseUrl;
+              }
+              if (updatesCompatible.model !== undefined) {
+                const trimmed = updatesCompatible.model.trim();
+                if (trimmed) rawCompatible.model = trimmed;
+                else delete rawCompatible.model;
+              }
+              if (updatesCompatible.languageCode !== undefined) {
+                const trimmed = updatesCompatible.languageCode.trim();
+                if (trimmed) rawCompatible.languageCode = trimmed;
+                else delete rawCompatible.languageCode;
+              }
+              if (updatesCompatible.responseFormat !== undefined) rawCompatible.responseFormat = updatesCompatible.responseFormat;
+              rawTranscription.openAICompatible = rawCompatible;
+            }
+            rawVoice.transcription = rawTranscription;
+          }
+
+          rawChannels.voice = rawVoice;
         }
 
         if (credentialRefsChanged) {

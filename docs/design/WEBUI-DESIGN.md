@@ -72,7 +72,14 @@ The default Guardian profile should stay sharp, dense, and engineering-oriented.
 
 ## Visual Standards
 
-The Guardian Agent design-system handoff is the visual-language reference for the WebUI. Implementations should port design intent from the handoff into production files rather than replacing production code with prototype snapshots. The default classic shell remains the stable production shell; workstation-style UI is an opt-in shell mode that must stay consistent with the workstation proposal and preserve page ownership.
+The Guardian Agent design-system handoff is the visual-language reference for the WebUI. Implementations should port design intent from the handoff into production files rather than replacing production code with prototype snapshots. The default focused chat shell is the stable production shell; classic and workstation-style UI remain selectable shell modes that must preserve page ownership.
+
+### Focused Chat Shell
+The focused chat shell is the default shell for new browser sessions. It keeps a persistent narrow icon rail on the side, makes the assistant chat the full-height primary workspace, and opens operational/configuration routes in a modal page window over the chat. The focused shell must render existing route/page modules rather than duplicating page code, and it must not change route ownership, policy behavior, tool behavior, or assistant orchestration.
+
+Configuration opens as a modal window in focused mode so setup stays available without displacing the main chat surface. Other navigation entries may use the same modal window pattern when selected from the rail. Closing the modal returns the operator to the chat-first surface. Classic and workstation shells remain selectable from Configuration > Appearance and must be restorable without reload.
+
+The focused rail uses the same required navigation order and icons as the canonical left nav, but labels collapse into tooltip/title affordances. Status and emergency shell actions may appear as compact floating controls so the chat surface remains full height.
 
 ### Classic Shell
 The classic shell is `52px` header plus `220px` sidebar, flexible content, and a persistent `460px` right chat rail by default. The chat rail may be operator-resized; store the chosen width locally and preserve the `460px` default for new sessions. Shell action icons should be monochrome stroked SVGs that inherit `currentColor`; do not use Unicode emoji or full-color glyphs for navigation, the killswitch, or shell controls.
@@ -80,7 +87,7 @@ The classic shell is `52px` header plus `220px` sidebar, flexible content, and a
 At narrower desktop and tablet widths, the classic shell should keep the assistant available by moving the chat rail into a bottom pane rather than dropping it entirely. On mobile widths, the sidebar becomes a horizontal navigation strip, content stays in the middle pane, and chat remains a compact bottom pane with internal scrolling.
 
 ### Workstation Shell
-Workstation mode is an opt-in desktop shell layered over the same route/page modules as classic mode. It provides a workstation titlebar, floating page windows, floating assistant frame, centered transparent panel navigator, and command-palette entry point. Classic mode remains the default and must be restorable without reload.
+Workstation mode is an opt-in desktop shell layered over the same route/page modules as classic and focused mode. It provides a workstation titlebar, floating page windows, floating assistant frame, centered transparent panel navigator, and command-palette entry point.
 
 Workstation frames must render existing page modules rather than duplicating page code. Opening a page that is not already open creates a new window. Opening a page that is already open brings that existing window to the front and gives it a subtle active flash. Operators can move and resize windows, and the shell persists window position, size, closed/open state, and stacking state locally so the workspace restores on reload. Window bounds are relative to the workstation stage below the top bar; maximized windows and manually moved windows may sit flush against that stage top with no extra gap. Maximized windows should remove outer borders, shadows, and titlebar insets so the frame sits flush with the left and right stage edges. Theme-specific titlebar heights must update the shared titlebar-height token used by both the titlebar and the stage offset.
 

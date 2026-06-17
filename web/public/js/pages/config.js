@@ -21,6 +21,11 @@ import {
   applyReduceMotion,
   resetAppearancePreferences,
 } from '../theme.js';
+import {
+  DEFAULT_SHELL_LAYER,
+  getSavedShellLayer,
+  setSavedShellLayer,
+} from '../shell-layout.js';
 
 // Shared state loaded once and passed to tabs
 let currentContainer = null;
@@ -33,6 +38,7 @@ let sharedConfigLoadPromise = null;
 let sharedConfigLoadError = null;
 let sharedDeferredStatusPromise = null;
 const PROVIDER_PROFILES_CHANGED_EVENT = 'guardian:providers-changed';
+const CONFIG_ACTIVE_TAB_STORAGE_KEY = 'guardian.config.activeTab';
 const configUiState = {
   selectedProviderProfiles: {
     local: null,
@@ -182,6 +188,12 @@ const CONFIG_HELP = {
       whatCanDo: 'Connect a bot, restrict which Telegram chats may use it, and decide whether Telegram is available as an operator surface at all.',
       howLinks: 'Once enabled, Telegram becomes another place to receive notifications and run approved Guardian workflows.',
     },
+    'Voice Channel': {
+      whatItIs: 'This section configures trusted microphone devices and bridge services as operator input channels.',
+      whatSeeing: 'You are seeing listener settings, bearer-token access control, allowed device IDs, and transcription-provider options.',
+      whatCanDo: 'Enable voice input, restrict which devices can send requests, and choose whether audio is transcribed by ElevenLabs, OpenRouter, a local command, or an OpenAI-compatible local service.',
+      howLinks: 'Voice input becomes normal assistant input after transcription, so routing, approvals, and policy controls still apply.',
+    },
     'Browser Automation': {
       whatItIs: 'This section controls the browser-automation runtime used by tools that need to open sites, click through pages, or inspect rendered content.',
       whatSeeing: 'You are seeing browser enablement, domain restrictions, concurrency limits, and runtime timeout controls.',
@@ -262,12 +274,20 @@ const CONFIG_HELP = {
 
 export async function renderConfig(container, options = {}) {
   currentContainer = container;
-  const activeTab = normalizeConfigTab(options?.tab);
+  const activeTab = rememberConfigActiveTab(
+    options?.tab || container.dataset.activeTab || readStoredConfigActiveTab(),
+  );
   const hadSharedData = hasSharedConfigData();
   const hadSharedLoadError = sharedConfigLoadError !== null;
 
   container.innerHTML = '';
+  container.dataset.activeTab = activeTab;
   createTabs(container, getConfigTabs(), activeTab);
+  container.querySelectorAll('.tab-btn[data-tab-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      rememberConfigActiveTab(button.dataset.tabId);
+    });
+  });
 
   const loadPromise = loadSharedConfig();
   if (!hadSharedData && !hadSharedLoadError) {
@@ -289,7 +309,7 @@ export async function renderConfig(container, options = {}) {
 
 export async function updateConfig() {
   if (!currentContainer) return;
-  const activeTab = currentContainer.dataset.activeTab;
+  const activeTab = currentContainer.dataset.activeTab || readStoredConfigActiveTab();
   await loadSharedConfig({ force: true }).catch(() => null);
   await renderConfig(currentContainer, activeTab ? { tab: activeTab } : {});
 }
@@ -378,9 +398,27 @@ function loadDeferredConfigStatus(options = {}) {
 
 function rerenderActiveConfigTab(tabId) {
   if (!currentContainer || !currentContainer.isConnected) return;
-  const activeTab = normalizeConfigTab(currentContainer.dataset.activeTab || '');
+  const activeTab = normalizeConfigTab(currentContainer.dataset.activeTab || readStoredConfigActiveTab() || '');
   if (activeTab !== tabId) return;
   renderConfig(currentContainer, { tab: activeTab });
+}
+
+function readStoredConfigActiveTab() {
+  try {
+    return sessionStorage.getItem(CONFIG_ACTIVE_TAB_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function rememberConfigActiveTab(tab) {
+  const normalized = normalizeConfigTab(tab);
+  try {
+    sessionStorage.setItem(CONFIG_ACTIVE_TAB_STORAGE_KEY, normalized);
+  } catch {
+    // Ignore private-mode/storage-denied browsers; the DOM dataset still preserves this render.
+  }
+  return normalized;
 }
 
 function notifyProviderProfilesChanged() {
@@ -445,7 +483,7 @@ const CONFIG_OVERVIEW_SECTIONS = [
   {
     id: 'appearance',
     label: 'Appearance',
-    detail: 'Classic Layer versus Web Browser Layer, theme bundle, text scale, and motion preferences.',
+    detail: 'Focused Chat, Classic, or Web Browser shell layer, theme bundle, text scale, and motion preferences.',
   },
 ];
 
@@ -652,6 +690,7 @@ function renderIntegrationSystemTab(panel) {
   panel.appendChild(createIntegrationOverview(sharedConfig, sharedAuthStatus));
   panel.appendChild(createAuthPanel(sharedConfig, sharedAuthStatus, panel));
   panel.appendChild(createTelegramPanel(sharedConfig, panel));
+  panel.appendChild(createVoicePanel(sharedConfig, panel));
   panel.appendChild(createCodingBackendsPanel(sharedConfig));
   panel.appendChild(createDangerZonePanel());
 
@@ -659,7 +698,7 @@ function renderIntegrationSystemTab(panel) {
   enhanceSectionHelp(
     panel,
     {
-      ...pickHelpSections(CONFIG_HELP.integrations, ['Coding Assistants', 'Telegram Channel']),
+      ...pickHelpSections(CONFIG_HELP.integrations, ['Coding Assistants', 'Telegram Channel', 'Voice Channel']),
       ...pickHelpSections(CONFIG_HELP.system, ['Web Authentication', 'Danger Zone']),
     },
     createGenericHelpFactory('Configuration Integration System'),
@@ -1023,12 +1062,13 @@ function renderIntegrationsTab(panel) {
     kicker: 'Integrations',
     compact: true,
     whatItIs: 'This tab configures external service integrations and operator channels.',
-    whatSeeing: 'You are seeing integration-specific setup for Telegram and browser automation.',
+    whatSeeing: 'You are seeing integration-specific setup for Telegram, voice devices, and browser automation.',
     whatCanDo: 'Connect or validate external integrations before the assistant or automations use them.',
     howLinks: 'These integrations extend what the product can reach, but they are configured here rather than in operational pages.',
   }));
 
   panel.appendChild(createTelegramPanel(sharedConfig, panel));
+  panel.appendChild(createVoicePanel(sharedConfig, panel));
   panel.appendChild(createBrowserPanel(sharedConfig, panel));
 
   applyInputTooltips(panel);
@@ -2805,6 +2845,10 @@ function describeRefUsage(refName, config) {
     if (llm?.credentialRef === refName) usages.push(`Provider: ${name}`);
   }
   if (config?.channels?.telegram?.botTokenCredentialRef === refName) usages.push('Telegram bot token');
+  if (config?.channels?.voice?.auth?.tokenCredentialRef === refName) usages.push('Voice bearer token');
+  if (config?.channels?.voice?.transcription?.elevenLabs?.credentialRef === refName) usages.push('ElevenLabs voice transcription');
+  if (config?.channels?.voice?.transcription?.openRouter?.credentialRef === refName) usages.push('OpenRouter voice transcription');
+  if (config?.channels?.voice?.transcription?.openAICompatible?.credentialRef === refName) usages.push('OpenAI-compatible voice transcription');
   const ws = config?.assistant?.tools?.webSearch || {};
   if (ws.braveCredentialRef === refName) usages.push('Brave search');
   if (ws.perplexityCredentialRef === refName) usages.push('Perplexity search');
@@ -5140,11 +5184,18 @@ function createIntegrationOverview(config, authStatus) {
   const cards = document.createElement('div');
   cards.className = 'cfg-overview-grid';
   const telegram = config.channels?.telegram || {};
+  const voice = config.channels?.voice || {};
   const telegramEnabled = !!telegram.enabled;
   const telegramChats = Array.isArray(telegram.allowedChatIds) ? telegram.allowedChatIds.length : 0;
   const telegramSubtitle = telegramEnabled
     ? `${telegramChats} allowed chat${telegramChats === 1 ? '' : 's'}`
     : (telegram.botTokenConfigured ? 'Token configured but channel disabled' : 'Bot token not configured');
+  const voiceEnabled = !!voice.enabled;
+  const voiceDevices = Array.isArray(voice.allowedDeviceIds) ? voice.allowedDeviceIds.length : 0;
+  const voiceProvider = voice.transcription?.provider || 'none';
+  const voiceSubtitle = voiceEnabled
+    ? `${voiceProvider} transcription`
+    : (voiceDevices > 0 ? `${voiceDevices} allowed device${voiceDevices === 1 ? '' : 's'}` : 'Device channel disabled');
   const authMode = authStatus?.mode || config.channels?.web?.auth?.mode || 'bearer_required';
   const authConfigured = !!authStatus?.tokenConfigured;
   const authSource = authStatus?.tokenSource || config.channels?.web?.auth?.tokenSource || 'ephemeral';
@@ -5155,6 +5206,12 @@ function createIntegrationOverview(config, authStatus) {
     telegramEnabled ? 'Enabled' : 'Disabled',
     telegramSubtitle,
     telegramEnabled ? 'success' : 'warning',
+  ));
+  cards.appendChild(createMiniCard(
+    'Voice',
+    voiceEnabled ? 'Enabled' : 'Disabled',
+    voiceSubtitle,
+    voiceEnabled ? 'success' : 'warning',
   ));
   cards.appendChild(createMiniCard(
     'Web Auth',
@@ -5526,6 +5583,362 @@ function createTelegramPanel(config, settingsPanel) {
       const result = await api.telegramTest();
       statusEl.textContent = result.message || (result.success ? 'Connected' : 'Failed');
       statusEl.style.color = result.success ? 'var(--success)' : 'var(--error)';
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  applyInputTooltips(section);
+  return section;
+}
+
+function createVoicePanel(config, settingsPanel) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  const voice = config.channels?.voice || {};
+  const auth = voice.auth || {};
+  const transcription = voice.transcription || {};
+  const elevenLabs = transcription.elevenLabs || {};
+  const openRouter = transcription.openRouter || {};
+  const localCommand = transcription.localCommand || {};
+  const compatible = transcription.openAICompatible || {};
+  const refs = config?.assistant?.credentials?.refs || {};
+  const credentialRefOptions = renderCredentialRefOptions(refs);
+  const provider = transcription.provider || 'none';
+  const authCredentialRef = getEditableCredentialRef(auth.tokenCredentialRef || '', config);
+  const elevenLabsCredentialRef = getEditableCredentialRef(elevenLabs.credentialRef || '', config);
+  const openRouterCredentialRef = getEditableCredentialRef(openRouter.credentialRef || '', config);
+  const compatibleCredentialRef = getEditableCredentialRef(compatible.credentialRef || '', config);
+  const maxBodyMb = voice.maxBodyBytes ? Math.max(1, Math.round(voice.maxBodyBytes / (1024 * 1024))) : 10;
+  const allowedDeviceIds = Array.isArray(voice.allowedDeviceIds) ? voice.allowedDeviceIds.join(', ') : '';
+  const localArgs = Array.isArray(localCommand.args) ? localCommand.args.join('\n') : '';
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Voice Channel</h3>
+      <span class="cfg-header-note">Accept trusted device transcripts or audio clips and route them through the normal assistant flow</span>
+    </div>
+    <div class="cfg-center-body">
+      <datalist id="cfg-voice-credential-ref-options">${credentialRefOptions}</datalist>
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Enable Voice</label>
+          <select id="cfg-voice-enabled">
+            <option value="false" ${voice.enabled ? '' : 'selected'}>No</option>
+            <option value="true" ${voice.enabled ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Host</label>
+          <input id="cfg-voice-host" type="text" value="${escAttr(voice.host || 'localhost')}" placeholder="localhost">
+        </div>
+        <div class="cfg-field">
+          <label>Port</label>
+          <input id="cfg-voice-port" type="number" min="1" max="65535" value="${escAttr(String(voice.port || 3107))}">
+        </div>
+        <div class="cfg-field">
+          <label>Auth Mode</label>
+          <select id="cfg-voice-auth-mode">
+            <option value="bearer_required" ${(auth.mode || 'bearer_required') !== 'disabled' ? 'selected' : ''}>Bearer token required</option>
+            <option value="disabled" ${(auth.mode || 'bearer_required') === 'disabled' ? 'selected' : ''}>Disabled on trusted networks</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Bearer Token</label>
+          <input id="cfg-voice-token" type="password" placeholder="${escAttr(getSecretFieldPlaceholder(auth.tokenCredentialRef || '', 'Paste once to store securely'))}">
+        </div>
+        <div class="cfg-field">
+          <label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input id="cfg-voice-token-ref-enabled" type="checkbox" title="Use an environment-backed credential ref instead of the local secret store" ${authCredentialRef ? 'checked' : ''}> Enable Credential Ref</label>
+          <input id="cfg-voice-token-ref" type="text" list="cfg-voice-credential-ref-options" value="${escAttr(authCredentialRef)}" placeholder="voice.channel.token" ${authCredentialRef ? '' : 'disabled'}>
+        </div>
+        <div class="cfg-field">
+          <label>Allowed Device IDs</label>
+          <input id="cfg-voice-device-ids" type="text" value="${escAttr(allowedDeviceIds)}" placeholder="box-3b,kitchen-box">
+        </div>
+        <div class="cfg-field">
+          <label>Auto Register</label>
+          <select id="cfg-voice-auto-register">
+            <option value="true" ${voice.autoRegister !== false ? 'selected' : ''}>Yes</option>
+            <option value="false" ${voice.autoRegister === false ? 'selected' : ''}>No</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Max Body MB</label>
+          <input id="cfg-voice-max-body-mb" type="number" min="1" max="512" value="${escAttr(String(maxBodyMb))}">
+        </div>
+      </div>
+
+      <div class="cfg-form-grid" style="margin-top:0.9rem;">
+        <div class="cfg-field">
+          <label>Transcription Provider</label>
+          <select id="cfg-voice-provider">
+            <option value="none" ${provider === 'none' ? 'selected' : ''}>None / device sends transcript</option>
+            <option value="elevenlabs" ${provider === 'elevenlabs' ? 'selected' : ''}>ElevenLabs Scribe</option>
+            <option value="openrouter" ${provider === 'openrouter' ? 'selected' : ''}>OpenRouter STT</option>
+            <option value="local_command" ${provider === 'local_command' ? 'selected' : ''}>Local command</option>
+            <option value="openai_compatible" ${provider === 'openai_compatible' ? 'selected' : ''}>OpenAI-compatible local endpoint</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Provider Timeout MS</label>
+          <input id="cfg-voice-timeout" type="number" min="1000" step="1000" value="${escAttr(String(transcription.timeoutMs || 120000))}">
+        </div>
+      </div>
+
+      <div class="cfg-form-grid cfg-voice-provider-fields" data-provider-panel="elevenlabs" style="margin-top:0.75rem;">
+        <div class="cfg-field">
+          <label>ElevenLabs API Key</label>
+          <input id="cfg-voice-elevenlabs-key" type="password" placeholder="${escAttr(getSecretFieldPlaceholder(elevenLabs.credentialRef || '', 'Paste once to store securely'))}">
+        </div>
+        <div class="cfg-field">
+          <label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input id="cfg-voice-elevenlabs-ref-enabled" type="checkbox" ${elevenLabsCredentialRef ? 'checked' : ''}> Enable Credential Ref</label>
+          <input id="cfg-voice-elevenlabs-ref" type="text" list="cfg-voice-credential-ref-options" value="${escAttr(elevenLabsCredentialRef)}" placeholder="voice.elevenlabs.primary" ${elevenLabsCredentialRef ? '' : 'disabled'}>
+        </div>
+        <div class="cfg-field">
+          <label>API Base URL</label>
+          <input id="cfg-voice-elevenlabs-base" type="text" value="${escAttr(elevenLabs.apiBaseUrl || 'https://api.elevenlabs.io')}">
+        </div>
+        <div class="cfg-field">
+          <label>Model</label>
+          <input id="cfg-voice-elevenlabs-model" type="text" value="${escAttr(elevenLabs.modelId || 'scribe_v2')}">
+        </div>
+        <div class="cfg-field">
+          <label>Language Hint</label>
+          <input id="cfg-voice-elevenlabs-language" type="text" value="${escAttr(elevenLabs.languageCode || '')}" placeholder="en">
+        </div>
+        <div class="cfg-field">
+          <label>Input Format</label>
+          <select id="cfg-voice-elevenlabs-format">
+            <option value="other" ${(elevenLabs.fileFormat || 'other') === 'other' ? 'selected' : ''}>Encoded audio</option>
+            <option value="pcm_s16le_16" ${elevenLabs.fileFormat === 'pcm_s16le_16' ? 'selected' : ''}>16 kHz PCM mono</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label><input id="cfg-voice-elevenlabs-no-verbatim" type="checkbox" ${elevenLabs.noVerbatim ? 'checked' : ''}> Clean filler words</label>
+        </div>
+        <div class="cfg-field">
+          <label><input id="cfg-voice-elevenlabs-audio-events" type="checkbox" ${elevenLabs.tagAudioEvents === false ? '' : 'checked'}> Tag audio events</label>
+        </div>
+      </div>
+
+      <div class="cfg-form-grid cfg-voice-provider-fields" data-provider-panel="openrouter" style="margin-top:0.75rem;">
+        <div class="cfg-field">
+          <label>OpenRouter API Key</label>
+          <input id="cfg-voice-openrouter-key" type="password" placeholder="${escAttr(getSecretFieldPlaceholder(openRouter.credentialRef || '', 'Paste once to store securely'))}">
+        </div>
+        <div class="cfg-field">
+          <label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input id="cfg-voice-openrouter-ref-enabled" type="checkbox" ${openRouterCredentialRef ? 'checked' : ''}> Enable Credential Ref</label>
+          <input id="cfg-voice-openrouter-ref" type="text" list="cfg-voice-credential-ref-options" value="${escAttr(openRouterCredentialRef)}" placeholder="voice.openrouter.primary" ${openRouterCredentialRef ? '' : 'disabled'}>
+        </div>
+        <div class="cfg-field">
+          <label>API Base URL</label>
+          <input id="cfg-voice-openrouter-base" type="text" value="${escAttr(openRouter.baseUrl || 'https://openrouter.ai/api/v1')}">
+        </div>
+        <div class="cfg-field">
+          <label>Model</label>
+          <input id="cfg-voice-openrouter-model" type="text" value="${escAttr(openRouter.model || 'openai/whisper-large-v3')}">
+        </div>
+        <div class="cfg-field">
+          <label>Language Hint</label>
+          <input id="cfg-voice-openrouter-language" type="text" value="${escAttr(openRouter.languageCode || '')}" placeholder="en">
+        </div>
+        <div class="cfg-field">
+          <label>Audio Format Override</label>
+          <input id="cfg-voice-openrouter-format" type="text" value="${escAttr(openRouter.audioFormat || '')}" placeholder="wav">
+        </div>
+      </div>
+
+      <div class="cfg-form-grid cfg-voice-provider-fields" data-provider-panel="local_command" style="margin-top:0.75rem;">
+        <div class="cfg-field">
+          <label>Command</label>
+          <input id="cfg-voice-local-command" type="text" value="${escAttr(localCommand.command || '')}" placeholder="whisper-cli">
+        </div>
+        <div class="cfg-field">
+          <label>Output Format</label>
+          <select id="cfg-voice-local-output">
+            <option value="text" ${(localCommand.outputFormat || 'text') === 'text' ? 'selected' : ''}>Text stdout</option>
+            <option value="json" ${localCommand.outputFormat === 'json' ? 'selected' : ''}>JSON with text field</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Command Timeout MS</label>
+          <input id="cfg-voice-local-timeout" type="number" min="1000" step="1000" value="${escAttr(String(localCommand.timeoutMs || transcription.timeoutMs || 120000))}">
+        </div>
+        <div class="cfg-field">
+          <label>Working Directory</label>
+          <input id="cfg-voice-local-cwd" type="text" value="${escAttr(localCommand.workingDirectory || '')}">
+        </div>
+        <div class="cfg-field" style="grid-column:1 / -1;">
+          <label>Arguments</label>
+          <textarea id="cfg-voice-local-args" rows="3" placeholder="--model&#10;base.en&#10;{{audioPath}}">${esc(localArgs)}</textarea>
+        </div>
+      </div>
+
+      <div class="cfg-form-grid cfg-voice-provider-fields" data-provider-panel="openai_compatible" style="margin-top:0.75rem;">
+        <div class="cfg-field">
+          <label>Base URL</label>
+          <input id="cfg-voice-compatible-base" type="text" value="${escAttr(compatible.baseUrl || '')}" placeholder="http://localhost:8000/v1">
+        </div>
+        <div class="cfg-field">
+          <label>API Key</label>
+          <input id="cfg-voice-compatible-key" type="password" placeholder="${escAttr(getSecretFieldPlaceholder(compatible.credentialRef || '', 'Optional. Paste once to store securely'))}">
+        </div>
+        <div class="cfg-field">
+          <label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input id="cfg-voice-compatible-ref-enabled" type="checkbox" ${compatibleCredentialRef ? 'checked' : ''}> Enable Credential Ref</label>
+          <input id="cfg-voice-compatible-ref" type="text" list="cfg-voice-credential-ref-options" value="${escAttr(compatibleCredentialRef)}" placeholder="voice.openai-compatible.primary" ${compatibleCredentialRef ? '' : 'disabled'}>
+        </div>
+        <div class="cfg-field">
+          <label>Model</label>
+          <input id="cfg-voice-compatible-model" type="text" value="${escAttr(compatible.model || '')}" placeholder="whisper-1">
+        </div>
+        <div class="cfg-field">
+          <label>Language Hint</label>
+          <input id="cfg-voice-compatible-language" type="text" value="${escAttr(compatible.languageCode || '')}" placeholder="en">
+        </div>
+        <div class="cfg-field">
+          <label>Response Format</label>
+          <select id="cfg-voice-compatible-response">
+            <option value="json" ${(compatible.responseFormat || 'json') === 'json' ? 'selected' : ''}>JSON</option>
+            <option value="text" ${compatible.responseFormat === 'text' ? 'selected' : ''}>Text</option>
+            <option value="verbose_json" ${compatible.responseFormat === 'verbose_json' ? 'selected' : ''}>Verbose JSON</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+        The ESP32 or bridge owns wake-word capture and recording. Guardian accepts transcripts or short audio uploads, transcribes when configured, then sends the text through normal assistant routing and approvals.
+      </div>
+      <div style="margin-top:0.35rem;font-size:0.72rem;color:var(--text-muted);">Voice channel startup settings require a Guardian restart after saving.</div>
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="cfg-voice-save" type="button">Save Voice Settings</button>
+        <span id="cfg-voice-status" class="cfg-save-status"></span>
+      </div>
+    </div>
+  `;
+
+  const statusEl = section.querySelector('#cfg-voice-status');
+  const providerSelect = section.querySelector('#cfg-voice-provider');
+  const credentialPairs = [
+    ['#cfg-voice-token-ref-enabled', '#cfg-voice-token-ref'],
+    ['#cfg-voice-elevenlabs-ref-enabled', '#cfg-voice-elevenlabs-ref'],
+    ['#cfg-voice-openrouter-ref-enabled', '#cfg-voice-openrouter-ref'],
+    ['#cfg-voice-compatible-ref-enabled', '#cfg-voice-compatible-ref'],
+  ];
+  for (const [checkboxSelector, inputSelector] of credentialPairs) {
+    const checkbox = section.querySelector(checkboxSelector);
+    const input = section.querySelector(inputSelector);
+    checkbox?.addEventListener('change', () => {
+      input.disabled = !checkbox.checked;
+      if (!checkbox.checked) input.value = '';
+    });
+  }
+
+  const syncProviderPanels = () => {
+    const selected = providerSelect?.value || 'none';
+    section.querySelectorAll('[data-provider-panel]').forEach((panelEl) => {
+      panelEl.style.display = panelEl.dataset.providerPanel === selected ? '' : 'none';
+    });
+  };
+  providerSelect?.addEventListener('change', syncProviderPanels);
+  syncProviderPanels();
+
+  section.querySelector('#cfg-voice-save')?.addEventListener('click', async () => {
+    const selectedProvider = providerSelect?.value || 'none';
+    const tokenRefInput = section.querySelector('#cfg-voice-token-ref');
+    const tokenRefCheckbox = section.querySelector('#cfg-voice-token-ref-enabled');
+    const elevenRefInput = section.querySelector('#cfg-voice-elevenlabs-ref');
+    const elevenRefCheckbox = section.querySelector('#cfg-voice-elevenlabs-ref-enabled');
+    const openRouterRefInput = section.querySelector('#cfg-voice-openrouter-ref');
+    const openRouterRefCheckbox = section.querySelector('#cfg-voice-openrouter-ref-enabled');
+    const compatibleRefInput = section.querySelector('#cfg-voice-compatible-ref');
+    const compatibleRefCheckbox = section.querySelector('#cfg-voice-compatible-ref-enabled');
+
+    const maxBodyMbValue = Number(section.querySelector('#cfg-voice-max-body-mb')?.value || 10);
+    const providerTimeout = Number(section.querySelector('#cfg-voice-timeout')?.value || 120000);
+    const localTimeout = Number(section.querySelector('#cfg-voice-local-timeout')?.value || providerTimeout);
+    const authCredentialRef = tokenRefCheckbox?.checked
+      ? (tokenRefInput?.value.trim() || undefined)
+      : (auth.tokenCredentialRef || undefined);
+    const elevenCredentialRef = elevenRefCheckbox?.checked
+      ? (elevenRefInput?.value.trim() || undefined)
+      : (elevenLabs.credentialRef || undefined);
+    const openRouterRef = openRouterRefCheckbox?.checked
+      ? (openRouterRefInput?.value.trim() || undefined)
+      : (openRouter.credentialRef || undefined);
+    const compatibleRef = compatibleRefCheckbox?.checked
+      ? (compatibleRefInput?.value.trim() || undefined)
+      : (compatible.credentialRef || undefined);
+
+    const transcriptionPatch = {
+      provider: selectedProvider,
+      timeoutMs: providerTimeout,
+    };
+    if (selectedProvider === 'elevenlabs') {
+      transcriptionPatch.elevenLabs = {
+        apiKey: section.querySelector('#cfg-voice-elevenlabs-key')?.value.trim() || undefined,
+        credentialRef: elevenCredentialRef,
+        apiBaseUrl: section.querySelector('#cfg-voice-elevenlabs-base')?.value.trim() || undefined,
+        modelId: section.querySelector('#cfg-voice-elevenlabs-model')?.value.trim() || undefined,
+        languageCode: section.querySelector('#cfg-voice-elevenlabs-language')?.value.trim() || undefined,
+        fileFormat: section.querySelector('#cfg-voice-elevenlabs-format')?.value,
+        noVerbatim: !!section.querySelector('#cfg-voice-elevenlabs-no-verbatim')?.checked,
+        tagAudioEvents: !!section.querySelector('#cfg-voice-elevenlabs-audio-events')?.checked,
+      };
+    } else if (selectedProvider === 'openrouter') {
+      transcriptionPatch.openRouter = {
+        apiKey: section.querySelector('#cfg-voice-openrouter-key')?.value.trim() || undefined,
+        credentialRef: openRouterRef,
+        baseUrl: section.querySelector('#cfg-voice-openrouter-base')?.value.trim() || undefined,
+        model: section.querySelector('#cfg-voice-openrouter-model')?.value.trim() || undefined,
+        languageCode: section.querySelector('#cfg-voice-openrouter-language')?.value.trim() || undefined,
+        audioFormat: section.querySelector('#cfg-voice-openrouter-format')?.value.trim() || undefined,
+      };
+    } else if (selectedProvider === 'local_command') {
+      transcriptionPatch.localCommand = {
+        command: section.querySelector('#cfg-voice-local-command')?.value.trim() || undefined,
+        args: section.querySelector('#cfg-voice-local-args')?.value.split(/\r?\n/).map((arg) => arg.trim()).filter(Boolean),
+        outputFormat: section.querySelector('#cfg-voice-local-output')?.value,
+        timeoutMs: localTimeout,
+        workingDirectory: section.querySelector('#cfg-voice-local-cwd')?.value.trim() || undefined,
+      };
+    } else if (selectedProvider === 'openai_compatible') {
+      transcriptionPatch.openAICompatible = {
+        baseUrl: section.querySelector('#cfg-voice-compatible-base')?.value.trim() || undefined,
+        apiKey: section.querySelector('#cfg-voice-compatible-key')?.value.trim() || undefined,
+        credentialRef: compatibleRef,
+        model: section.querySelector('#cfg-voice-compatible-model')?.value.trim() || undefined,
+        languageCode: section.querySelector('#cfg-voice-compatible-language')?.value.trim() || undefined,
+        responseFormat: section.querySelector('#cfg-voice-compatible-response')?.value,
+      };
+    }
+
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+    try {
+      const result = await api.updateConfig({
+        channels: {
+          voice: {
+            enabled: section.querySelector('#cfg-voice-enabled')?.value === 'true',
+            host: section.querySelector('#cfg-voice-host')?.value.trim() || undefined,
+            port: Number(section.querySelector('#cfg-voice-port')?.value || 3107),
+            auth: {
+              mode: section.querySelector('#cfg-voice-auth-mode')?.value || 'bearer_required',
+              token: section.querySelector('#cfg-voice-token')?.value.trim() || undefined,
+              tokenCredentialRef: authCredentialRef,
+            },
+            allowedDeviceIds: parseCommaList(section.querySelector('#cfg-voice-device-ids')?.value),
+            autoRegister: section.querySelector('#cfg-voice-auto-register')?.value !== 'false',
+            maxBodyBytes: Math.max(1, maxBodyMbValue) * 1024 * 1024,
+            transcription: transcriptionPatch,
+          },
+        },
+      });
+      statusEl.textContent = result.message;
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      if (result.success) {
+        await refreshSettingsOverview(settingsPanel);
+      }
     } catch (err) {
       statusEl.textContent = err instanceof Error ? err.message : String(err);
       statusEl.style.color = 'var(--error)';
@@ -7159,9 +7572,7 @@ function renderAppearanceTab(panel) {
   const currentFontPreset = getSavedFontPreset();
   const currentReduceMotion = getSavedReduceMotion();
   const currentFontPresetEntry = fontPresets.find((preset) => preset.id === currentFontPreset) || fontPresets[0];
-  const currentShellLayer = localStorage.getItem('guardianagent_workstation_mode') === 'true'
-    ? 'web-browser'
-    : 'classic';
+  const currentShellLayer = getSavedShellLayer();
 
   panel.innerHTML = `
     ${renderGuidancePanel({
@@ -7169,15 +7580,16 @@ function renderAppearanceTab(panel) {
       compact: true,
       whatItIs: 'This tab controls the Web UI shell layer, color bundle, typography, text scale, motion, and editor alignment.',
       whatSeeing: 'You are seeing shell-layer controls, display controls, bundle filters, preview cards, and search.',
-      whatCanDo: 'Switch between the classic layer and web browser layer, pick a bundle, tune text scale, or reduce UI motion.',
+      whatCanDo: 'Switch between Focused Chat, Classic, and Web Browser layers, pick a bundle, tune text scale, or reduce UI motion.',
       howLinks: 'Appearance changes presentation only. It does not change monitoring, policy, or workflow behavior.',
     })}
     <div class="table-container">
       <div class="table-header"><h3>Shell Layer</h3></div>
       <div class="cfg-center-body">
         <div class="cfg-mode-toggle" role="group" aria-label="Shell layer">
+          <button class="cfg-mode-btn ${currentShellLayer === 'focused' ? 'active' : ''}" type="button" data-shell-layer="focused">Focused Chat</button>
           <button class="cfg-mode-btn ${currentShellLayer === 'classic' ? 'active' : ''}" type="button" data-shell-layer="classic">Classic Layer</button>
-          <button class="cfg-mode-btn ${currentShellLayer === 'web-browser' ? 'active' : ''}" type="button" data-shell-layer="web-browser">Web Browser Layer</button>
+          <button class="cfg-mode-btn ${currentShellLayer === 'workstation' ? 'active' : ''}" type="button" data-shell-layer="workstation">Web Browser Layer</button>
         </div>
         <div class="ops-task-sub">Choose which shell opens by default in this browser.</div>
       </div>
@@ -7370,15 +7782,10 @@ function renderAppearanceTab(panel) {
 
   shellLayerButtons.forEach((button) => {
     button.addEventListener('click', () => {
-      const nextLayer = button.getAttribute('data-shell-layer') || 'classic';
-      const active = nextLayer === 'web-browser';
-      localStorage.setItem('guardianagent_workstation_mode', String(active));
+      const nextLayer = setSavedShellLayer(button.getAttribute('data-shell-layer') || DEFAULT_SHELL_LAYER);
       shellLayerButtons.forEach((candidate) => {
-        candidate.classList.toggle('active', candidate === button);
+        candidate.classList.toggle('active', candidate.getAttribute('data-shell-layer') === nextLayer);
       });
-      window.dispatchEvent(new CustomEvent('guardianagent:workstation-mode-change', {
-        detail: { active },
-      }));
     });
   });
 
@@ -7391,6 +7798,10 @@ function renderAppearanceTab(panel) {
       fontFamilyDesc.textContent = fontPresets.find((preset) => preset.id === 'theme-default')?.description || '';
     }
     if (reduceMotionCheck) reduceMotionCheck.checked = false;
+    const resetShellLayer = setSavedShellLayer(DEFAULT_SHELL_LAYER);
+    shellLayerButtons.forEach((candidate) => {
+      candidate.classList.toggle('active', candidate.getAttribute('data-shell-layer') === resetShellLayer);
+    });
     renderCards();
   });
 
@@ -7403,7 +7814,7 @@ function createGenericHelpFactory(area) {
       whatItIs: 'This section is the registry for advanced environment-backed credential references used by providers, search, and integrations.',
       whatSeeing: 'You are seeing app-managed local refs, environment-backed refs, where each ref is used, and the quick form for creating a new env-backed ref.',
       whatCanDo: 'Create a new env-backed ref, review where an existing ref is used, or delete a ref that is no longer needed. Most users never need this page because pasting a key elsewhere creates the local secret entry automatically.',
-      howLinks: 'These refs are consumed by provider, search, Telegram, and other config panels when you do not want to paste secrets directly into the UI.',
+      howLinks: 'These refs are consumed by provider, search, Telegram, Voice, and other config panels when you do not want to paste secrets directly into the UI.',
     },
     'Local Provider Settings': {
       whatItIs: 'This section is the editor for a local AI provider such as Ollama running on the same machine or network.',

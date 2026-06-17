@@ -43,6 +43,7 @@ import {
   isExplicitWorkspaceAppBuildRequest,
   isExplicitWorkspaceScopedRepoWorkRequest,
   looksLikeGuardianCapabilityQuestion,
+  looksLikeStandaloneGreetingTurn,
 } from './intent/request-patterns.js';
 import {
   inferProviderConfigOperation,
@@ -356,6 +357,27 @@ function buildContentPlanIntentGatewayRecord(
       classifierSource: 'derived.workload',
     }),
   });
+
+  if (looksLikeStandaloneGreetingTurn(sourceContent)) {
+    return normalize({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Respond to the greeting directly.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'direct_assistant',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      entities: {},
+    }, 'content-plan:standalone-greeting');
+  }
 
   if (looksLikeSelfContainedDirectAnswerTurn(sourceContent)) {
     return normalize({

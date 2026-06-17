@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_CONFIG, type CredentialRefConfig, type GuardianAgentConfig } from '../../config/types.js';
 import { createDirectConfigUpdateHandler } from './direct-config-update.js';
@@ -46,7 +46,7 @@ function createConfig(): GuardianAgentConfig {
   return config;
 }
 
-function createHandlerHarness(config: GuardianAgentConfig) {
+function createHandlerHarness(config: GuardianAgentConfig, overrides: { storeSecret?: (secretId: string, value: string) => void } = {}) {
   const configRef = {
     current: structuredClone(config) as GuardianAgentConfig,
   };
@@ -66,7 +66,7 @@ function createHandlerHarness(config: GuardianAgentConfig) {
       return { success: true, message: 'Saved' };
     },
     normalizeCredentialRefUpdates: (refs) => refs as Record<string, CredentialRefConfig>,
-    storeSecret: () => {},
+    storeSecret: overrides.storeSecret ?? (() => {}),
     deleteUnusedLocalSecrets: () => {},
     mergeCloudConfigForValidation: (current) => current,
     previewSecurityBaselineViolations: () => [],
@@ -143,6 +143,69 @@ describe('direct config update', () => {
     expect(rawManagedCloudRouting.roleBindings).toEqual({
       coding: 'ollama-cloud-coding',
     });
+  });
+
+  it('stores voice channel secrets as local credential refs and persists voice config', async () => {
+    const storeSecret = vi.fn();
+    const { rawState, handler } = createHandlerHarness(createConfig(), { storeSecret });
+
+    const result = await handler({
+      channels: {
+        voice: {
+          enabled: true,
+          host: 'localhost',
+          port: 3107,
+          auth: {
+            mode: 'bearer_required',
+            token: 'voice-token',
+          },
+          allowedDeviceIds: ['box-3b'],
+          transcription: {
+            provider: 'openrouter',
+            openRouter: {
+              apiKey: 'openrouter-token',
+              model: 'openai/whisper-large-v3',
+              baseUrl: 'https://openrouter.ai/api/v1',
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({ success: true, message: 'Saved' });
+    expect(storeSecret).toHaveBeenCalledTimes(2);
+    expect(storeSecret.mock.calls.map(([, value]) => value)).toEqual(['voice-token', 'openrouter-token']);
+
+    const rawConfig = rawState.current as Record<string, unknown>;
+    const rawChannels = rawConfig.channels as Record<string, unknown>;
+    const rawVoice = rawChannels.voice as Record<string, unknown>;
+    const rawAuth = rawVoice.auth as Record<string, unknown>;
+    const rawTranscription = rawVoice.transcription as Record<string, unknown>;
+    const rawOpenRouter = rawTranscription.openRouter as Record<string, unknown>;
+    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+    const rawCredentials = rawAssistant.credentials as Record<string, unknown>;
+    const rawRefs = rawCredentials.refs as Record<string, CredentialRefConfig>;
+
+    expect(rawVoice).toMatchObject({
+      enabled: true,
+      host: 'localhost',
+      port: 3107,
+      allowedDeviceIds: ['box-3b'],
+    });
+    expect(rawAuth).toMatchObject({
+      mode: 'bearer_required',
+      tokenCredentialRef: 'voice.channel.token',
+    });
+    expect(rawAuth.token).toBeUndefined();
+    expect(rawTranscription.provider).toBe('openrouter');
+    expect(rawOpenRouter).toMatchObject({
+      credentialRef: 'voice.openrouter.primary',
+      model: 'openai/whisper-large-v3',
+      baseUrl: 'https://openrouter.ai/api/v1',
+    });
+    expect(rawOpenRouter.apiKey).toBeUndefined();
+    expect(rawRefs['voice.channel.token']).toEqual(expect.objectContaining({ source: 'local' }));
+    expect(rawRefs['voice.openrouter.primary']).toEqual(expect.objectContaining({ source: 'local' }));
   });
 
   it('persists provider enabled toggles and re-derives the primary provider from enabled profiles', async () => {
@@ -275,8 +338,8 @@ describe('direct config update', () => {
     });
   });
 
-  it('rejects updates that would disable every AI provider', async () => {
-    const { configRef, handler } = createHandlerHarness(createConfig());
+  it('allows disabling every AI provider and clears the derived default', async () => {
+    const { configRef, rawState, handler } = createHandlerHarness(createConfig());
 
     const result = await handler({
       llm: {
@@ -287,12 +350,9 @@ describe('direct config update', () => {
       },
     });
 
-    expect(result).toEqual({
-      success: false,
-      message: 'At least one AI provider must stay enabled.',
-      statusCode: 400,
-    });
-    expect(configRef.current.defaultProvider).toBe('ollama-cloud-general');
+    expect(result.success).toBe(true);
+    expect(configRef.current.defaultProvider).toBe('');
+    expect((rawState.current as Record<string, unknown>).defaultProvider).toBe('');
   });
 
   it('persists second-brain preference updates into live and raw config state', async () => {

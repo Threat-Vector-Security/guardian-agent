@@ -7,7 +7,7 @@
 <h3 align="center">Security-first AI agent platform for local LLMs, governed tool use, coding workflows, automations, and personal assistant work.</h3>
 
 <p align="center">
-  GuardianAgent is a self-hosted AI assistant and agent orchestration runtime for local AI, managed-cloud, and frontier LLMs. It combines a daily-use Second Brain with guarded power-user surfaces for coding, workstation operations, workflow automation, security, network, and cloud operations. The same assistant is available in web, CLI, and Telegram, with tool approvals, sandboxing, prompt-injection defenses, audit trails, and policy boundaries enforced by the runtime.
+  GuardianAgent is a self-hosted AI assistant and agent orchestration runtime for local AI, managed-cloud, and frontier LLMs. It combines a daily-use Second Brain with guarded power-user surfaces for coding, workstation operations, workflow automation, security, network, and cloud operations. The same assistant is available in web, CLI, Telegram, and trusted voice-device channels, with tool approvals, sandboxing, prompt-injection defenses, audit trails, and policy boundaries enforced by the runtime.
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
   <br/>
   <img src="https://img.shields.io/badge/SECURITY-FOUR--LAYER%20DEFENSE-critical?style=for-the-badge" alt="Four-Layer Defense"/>
   <img src="https://img.shields.io/badge/LLM-Local%20%7C%20Managed%20Cloud%20%7C%20Frontier-blueviolet?style=for-the-badge" alt="Multi-LLM"/>
-  <img src="https://img.shields.io/badge/CHANNELS-CLI%20%7C%20Web%20%7C%20Telegram-2496ED?style=for-the-badge" alt="Multi-Channel"/>
+  <img src="https://img.shields.io/badge/CHANNELS-CLI%20%7C%20Web%20%7C%20Telegram%20%7C%20Voice-2496ED?style=for-the-badge" alt="Multi-Channel"/>
 </p>
 
 ## Table of Contents
@@ -109,7 +109,7 @@ Second Brain (`#/`) is the default web home.
 
 ### Shared Assistant
 
-- Web, CLI, and Telegram all use the same guarded assistant model
+- Web, CLI, Telegram, and Voice all use the same guarded assistant model
 - Local, managed-cloud, and frontier LLM providers are supported, including Ollama, Ollama Cloud, OpenRouter, NVIDIA Cloud, Anthropic, OpenAI, and other OpenAI-compatible providers
 - Built-in tools, integrations, memory, and automations stay behind approval and policy controls
 - More detail: [WebUI Design](docs/design/WEBUI-DESIGN.md), [Tools Control Plane Design](docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
@@ -196,7 +196,7 @@ Second Brain screenshots are shown above in Product Overview. The gallery below 
 - Daily-use Second Brain for planning, capture, retrieval, calendar-aware context, tasks, notes, people, routines, and briefs
 - Workflow automation and scheduled agent runs with bounded authority, run history, and approval-aware execution
 - MCP tool security, native integrations, search, browser/workspace tooling, and provider connectors behind the same runtime guardrails
-- Shared assistant across Web, CLI, and Telegram
+- Shared assistant across Web, CLI, Telegram, and Voice
 - Specs and architecture docs for deeper implementation detail when you need it
 
 ## Repository Status
@@ -206,7 +206,7 @@ GuardianAgent is a security-focused local-first assistant runtime with several m
 | Area | Status |
 |------|--------|
 | Second Brain, Coding Workspace, Security dashboard, Configuration Center | Actively implemented product surfaces |
-| Web, CLI, and Telegram channels | Supported first-party channels |
+| Web, CLI, Telegram, and Voice channels | Supported first-party channels |
 | Local, managed-cloud, and frontier LLM providers | Supported through configurable provider profiles |
 | Brokered worker isolation, approvals, output scanning, audit trail | Core runtime security model |
 | Some cloud, hosted, federation, and enterprise proposals | Design-stage or roadmap material under `docs/proposals/` and `docs/plans/` |
@@ -218,7 +218,7 @@ Historical proposals that have shipped live in `docs/implemented/`. Completed on
 ```text
 GuardianAgent/
 ├─ src/                    TypeScript runtime, channels, tools, prompts, memory, and orchestration
-│  ├─ channels/            Web, CLI, Telegram, and runtime route adapters
+│  ├─ channels/            Web, CLI, Telegram, Voice, and runtime route adapters
 │  ├─ runtime/             Intent gateway, orchestration, code sessions, memory, security, automations
 │  ├─ tools/               Built-in tools, executor, registry, MCP client, and tool policy surfaces
 │  ├─ llm/                 Provider clients, routing, failover, and guarded LLM access
@@ -320,7 +320,7 @@ After startup:
 3. **Open Second Brain** at `#/` to confirm the default daily-home surface is live and the assistant is ready for task, note, calendar, and people workflows.
 4. **Connect Google Workspace or Microsoft 365 if needed** — use `Cloud > Connections` when you want provider-backed calendar and contacts synced into Second Brain.
 5. **Review tool policy** — defaults to `on-request` / `approve_each` for the main assistant, with a read-only shell allowlist. Mutating tools still require approval, and public package-manager installs should go through the managed `package_install` path instead of `shell_safe`.
-6. **Enable optional channels** — Telegram bot setup is in `Configuration > Integration System > Telegram Channel`
+6. **Enable optional channels** — Telegram and Voice setup live under `Configuration > Integration System`
 7. **Set web auth** — web access defaults to bearer-protected mode; configure it in `Configuration > Integration System > Web Authentication` or with CLI `/auth ...`
 8. **Open the Coding Workspace if needed** — go to `#/code` for a project-scoped coding workspace with its own session history, trust review, terminals, approvals, and verification surfaces
 
@@ -328,13 +328,14 @@ Most configuration is done through the **web UI** or **CLI commands** (`/config`
 
 ### Using GuardianAgent
 
-GuardianAgent is accessible through three channels:
+GuardianAgent is accessible through four channels:
 
 | Channel | Access | Best For |
 |---------|--------|----------|
 | **Web** | Browser at the configured port | Second Brain, dashboard/operator surfaces, configuration, monitoring, chat, and coding workspace |
 | **CLI** | Terminal where GuardianAgent is running | Quick commands, scripting, and local development |
 | **Telegram** | Telegram bot (requires setup) | Mobile access and notifications |
+| **Voice** | Trusted device or bridge service over HTTP | Spoken commands from devices such as ESP32-S3-BOX-3B |
 
 **What you can do:**
 - Chat with the built-in AI assistant
@@ -358,6 +359,14 @@ Implementation detail and current limitations are documented in [docs/design/COD
 3. Add the token in `Configuration > Integration System > Telegram Channel` or through the CLI configuration flow
 4. Restrict access with allowed chat IDs
 5. Save the channel settings; Telegram changes hot-reload when the token or credential ref and allowlist are valid
+
+### Voice Device Setup
+
+1. Enable the Voice channel in `Configuration > Integration System`
+2. Configure bearer authentication and, when possible, allowed device IDs
+3. Choose transcription: ElevenLabs Scribe, OpenRouter STT, a local command such as Whisper/faster-whisper/whisper.cpp, or an OpenAI-compatible local transcription endpoint
+4. Configure the ESP32 firmware or bridge to send pre-transcribed text to Guardian, or send short audio clips for Guardian to transcribe before normal assistant routing
+5. Keep the voice listener on localhost or a trusted LAN address and restart Guardian after startup-channel config changes
 
 ### Windows Portable Build (Optional)
 
@@ -479,7 +488,7 @@ This repository is structured for architecture-sensitive changes. Before changin
 If GuardianAgent chooses the wrong route, uses the wrong tool, asks for the wrong clarification, or gives a result that does not match the requested surface, open a GitHub issue with:
 
 - the exact user request and the response you saw
-- the channel or surface used, such as Web, CLI, Telegram, or Code
+- the channel or surface used, such as Web, CLI, Telegram, Voice, or Code
 - the model/provider profile shown in the response header, if available
 - the relevant intent routing trace from `~/.guardianagent/routing/intent-routing.jsonl`
 
