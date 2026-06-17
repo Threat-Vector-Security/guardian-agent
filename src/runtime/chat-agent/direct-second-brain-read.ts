@@ -369,6 +369,19 @@ export function tryDirectSecondBrainRead<TContinuityThread, TFocusState>(input: 
       const priorFocus = input.readFocusState(input.continuityThread);
       const priorBriefFocus = input.getFocusEntry(priorFocus, 'brief');
       const items = briefs.map((brief) => ({ id: brief.id, label: brief.title }));
+      const wantsSingleBrief = /\bbrief\b/i.test(input.requestText) && !/\bbriefs\b/i.test(input.requestText);
+      if (wantsSingleBrief) {
+        const focused = priorBriefFocus?.focusId
+          ? briefs.find((brief) => brief.id === priorBriefFocus.focusId)
+          : undefined;
+        const brief = focused ?? briefs[0];
+        return {
+          content: `${brief.title}\n\n${brief.content.trim() || '(No brief content saved.)'}`,
+          metadata: input.buildFocusMetadata(priorFocus, 'brief', items, {
+            preferredFocusId: brief.id,
+          }),
+        };
+      }
       return {
         content: [
           'Saved briefs:',

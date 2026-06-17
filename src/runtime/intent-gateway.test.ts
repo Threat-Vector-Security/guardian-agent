@@ -2914,6 +2914,30 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.emailProvider).toBe('m365');
   });
 
+  it('infers brief item type for direct brief follow-up wording', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: "why don't you give me the brief?",
+        channel: 'telegram',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'personal_assistant_task',
+          confidence: 'high',
+          operation: 'read',
+          summary: 'Reads the latest Second Brain brief.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.personalItemType).toBe('brief');
+  });
+
   it('preserves explicit provider calendar targets for workspace calendar CRUD', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

@@ -18,6 +18,7 @@ import type { DashboardRunDetail, DashboardRunStatus, DashboardRunTimelineItem }
 
 const log = createLogger('channel:telegram');
 const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
+const TELEGRAM_SAFE_MESSAGE_CHARS = 3900;
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
 const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
 const APPROVAL_COMMAND_PATTERN = /^\/?(approve|deny)\b/i;
@@ -604,6 +605,7 @@ export class TelegramChannel implements ChannelAdapter {
     await ctx.replyWithChatAction('typing');
     const requestId = randomUUID();
     const stopProgress = this.startTelegramProgressReporter(ctx, requestId);
+    let response: { content: string; metadata?: Record<string, unknown> };
 
     try {
       this.trackAnalytics({
@@ -613,7 +615,7 @@ export class TelegramChannel implements ChannelAdapter {
         channelUserId,
         agentId: this.defaultAgent,
       });
-      const response = await this.onMessage({
+      response = await this.onMessage({
         id: requestId,
         userId: channelUserId,
         surfaceId: this.buildSurfaceId(ctx),
@@ -630,7 +632,6 @@ export class TelegramChannel implements ChannelAdapter {
         channelUserId,
         agentId: this.defaultAgent,
       });
-      await this.replyWithApprovalSupport(ctx, response);
     } catch (err) {
       stopProgress();
       const msg = err instanceof Error ? err.message : String(err);
@@ -644,6 +645,14 @@ export class TelegramChannel implements ChannelAdapter {
       });
       log.error({ chatId: ctx.chat?.id, err: msg }, 'Error handling Telegram message');
       await this.replyInChunks(ctx, 'Sorry, an error occurred processing your message.');
+      return;
+    }
+
+    try {
+      await this.replyWithApprovalSupport(ctx, response);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error({ chatId: ctx.chat?.id, err: msg }, 'Failed to send Telegram response');
     }
   }
 
@@ -743,7 +752,7 @@ export class TelegramChannel implements ChannelAdapter {
       const keyboard = new InlineKeyboard()
         .text('✅ Approve', `approve:${a.id}`)
         .text('❌ Deny', `deny:${a.id}`);
-      await ctx.reply(`⚠️ ${preview || a.toolName}`, { reply_markup: keyboard });
+      await this.replyOne(ctx, `⚠️ ${preview || a.toolName}`.slice(0, TELEGRAM_SAFE_MESSAGE_CHARS), { reply_markup: keyboard });
     } else {
       // Multiple approvals: show each with its own buttons
       for (const a of approvals) {
@@ -751,7 +760,7 @@ export class TelegramChannel implements ChannelAdapter {
         const keyboard = new InlineKeyboard()
           .text('✅ Approve', `approve:${a.id}`)
           .text('❌ Deny', `deny:${a.id}`);
-        await ctx.reply(`⚠️ ${preview || a.toolName}`, { reply_markup: keyboard });
+        await this.replyOne(ctx, `⚠️ ${preview || a.toolName}`.slice(0, TELEGRAM_SAFE_MESSAGE_CHARS), { reply_markup: keyboard });
       }
     }
   }
@@ -984,8 +993,21 @@ export class TelegramChannel implements ChannelAdapter {
   }
 
   private async replyInChunks(ctx: Context, text: string): Promise<void> {
-    for (const chunk of splitTelegramMessage(text, TELEGRAM_MAX_MESSAGE_CHARS)) {
-      await ctx.reply(chunk);
+    for (const chunk of splitTelegramMessage(text, TELEGRAM_SAFE_MESSAGE_CHARS)) {
+      await this.replyOne(ctx, chunk);
+    }
+  }
+
+  private async replyOne(ctx: Context, text: string, extra?: Parameters<Context['reply']>[1]): Promise<void> {
+    try {
+      if (typeof extra === 'undefined') {
+        await ctx.reply(text);
+      } else {
+        await ctx.reply(text, extra);
+      }
+    } catch (err) {
+      log.debug({ err }, 'Telegram reply failed; retrying without extras');
+      await ctx.reply(text);
     }
   }
 

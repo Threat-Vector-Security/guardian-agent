@@ -3118,6 +3118,54 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(content).not.toContain('Second Brain overview:');
   });
 
+  it('returns latest Second Brain brief content for singular brief requests', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).secondBrainService = {
+      listBriefs: vi.fn(() => [{
+        id: 'brief-1',
+        kind: 'morning',
+        title: 'Morning Brief for June 17, 2026',
+        content: 'Actual morning brief body.\n- One\n- Two',
+        generatedAt: Date.UTC(2026, 5, 17, 7, 0, 0),
+        createdAt: Date.UTC(2026, 5, 17, 7, 0, 0),
+        updatedAt: Date.UTC(2026, 5, 17, 7, 0, 0),
+      }]),
+    };
+
+    const result = await tryAgentDirectSecondBrainRead(agent,
+      {
+        id: 'msg-brief',
+        userId: 'owner',
+        channel: 'telegram',
+        content: "why don't you give me the brief?",
+        timestamp: Date.now(),
+      },
+      {
+        route: 'personal_assistant_task',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Reads the latest Second Brain brief.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'brief' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toContain('Morning Brief for June 17, 2026');
+    expect(content).toContain('Actual morning brief body.');
+    expect(content).not.toContain('Saved briefs:');
+  });
+
   it('returns an explicit empty state for disabled Second Brain routine reads', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

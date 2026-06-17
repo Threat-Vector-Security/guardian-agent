@@ -246,6 +246,41 @@ describe('Telegram approval flow', () => {
     expect(replies[1]?.text).toContain('⚠️ write S:\\Development\\test26.txt');
   });
 
+  it('falls back to plain approval prompts when Telegram rejects inline markup', async () => {
+    const channel = new TelegramChannel({
+      botToken: '123:abc',
+      onToolsApprovalDecision: async () => ({ success: true, message: 'Approved and executed' }),
+    });
+    const replies: Array<{ text: string; extra?: unknown }> = [];
+    const ctx = {
+      chat: { id: 1001 },
+      from: { id: 2002 },
+      reply: vi.fn(async (text: string, extra?: unknown) => {
+        if (extra) throw new Error('markup rejected');
+        replies.push({ text, extra });
+        return {} as unknown;
+      }),
+      replyWithChatAction: vi.fn(async () => ({} as unknown)),
+    };
+
+    await (channel as unknown as {
+      replyWithApprovalSupport: (ctx: unknown, response: { content: string; metadata?: Record<string, unknown> }, agentId?: string) => Promise<void>;
+    }).replyWithApprovalSupport(ctx, {
+      content: 'Waiting for approval to write S:\\Development\\test26.txt.',
+      metadata: approvalPendingActionMetadata([
+        {
+          id: 'approval-write-1',
+          toolName: 'fs_write',
+          argsPreview: '{"path":"S:\\\\Development\\\\test26.txt","content":"This is a test file.","append":false}',
+        },
+      ]),
+    }, 'default');
+
+    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('⚠️ write S:\\Development\\test26.txt'), expect.anything());
+    expect(replies.map((reply) => reply.text).join('\n')).toContain('Waiting for approval to write S:\\Development\\test26.txt.');
+    expect(replies.map((reply) => reply.text).join('\n')).toContain('⚠️ write S:\\Development\\test26.txt');
+  });
+
   it('acknowledges inline approval buttons immediately before slow continuation finishes', async () => {
     let resolveApproval!: (value: { success: boolean; message: string }) => void;
     const approvalGate = new Promise<{ success: boolean; message: string }>((resolve) => {
@@ -383,6 +418,31 @@ describe('Telegram approval flow', () => {
       channel: 'telegram',
       content: 'hello',
     }));
+  });
+
+  it('does not replace Telegram delivery failures with generic processing errors', async () => {
+    const channel = new TelegramChannel({ botToken: '123:abc' });
+    const attemptedReplies: string[] = [];
+    const ctx = {
+      chat: { id: 1001 },
+      from: { id: 2002 },
+      reply: vi.fn(async (text: string) => {
+        attemptedReplies.push(text);
+        if (text === 'ok') throw new Error('sendMessage failed');
+        return {} as unknown;
+      }),
+      replyWithChatAction: vi.fn(async () => ({} as unknown)),
+    };
+    const onMessage = vi.fn(async () => ({ content: 'ok' }));
+    (channel as unknown as { onMessage: typeof onMessage }).onMessage = onMessage;
+
+    await (channel as unknown as {
+      dispatchAssistantMessage: (ctx: unknown, text: string, canonicalUserId: string, channelUserId: string) => Promise<void>;
+    }).dispatchAssistantMessage(ctx, 'hello', 'owner', '2002');
+
+    expect(onMessage).toHaveBeenCalledOnce();
+    expect(attemptedReplies).toEqual(['ok', 'ok']);
+    expect(attemptedReplies).not.toContain('Sorry, an error occurred processing your message.');
   });
 
   it('sends concise live progress updates from shared run timeline events', async () => {
