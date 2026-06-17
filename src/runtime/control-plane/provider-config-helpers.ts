@@ -1,7 +1,7 @@
 import type { DashboardProviderInfo } from '../../channels/web-types.js';
 import type { GuardianAgentConfig } from '../../config/types.js';
 import type { LLMProvider } from '../../llm/types.js';
-import { getDefaultBaseUrlForProviderType, getProviderTier } from '../../llm/provider-metadata.js';
+import { getDefaultBaseUrlForProviderType, getDefaultModelForProviderType, getProviderTier } from '../../llm/provider-metadata.js';
 import { resolveRuntimeCredentialView } from '../credentials.js';
 import type { LocalSecretStore } from '../secret-store.js';
 
@@ -115,24 +115,6 @@ export function createProviderConfigHelpers(options: ProviderConfigHelperOptions
         .map((profile) => [typeof profile.id === 'string' ? profile.id : '', profile] as const)
         .filter(([id]) => !!id),
     );
-  };
-
-  const getDefaultModelForProviderType = (providerType: string): string => {
-    switch (providerType.trim().toLowerCase()) {
-      case 'ollama': return 'gpt-oss:120b';
-      case 'ollama_cloud': return 'gpt-oss:120b';
-      case 'openrouter': return 'qwen/qwen3.6-plus';
-      case 'nvidia': return 'qwen/qwen3-coder-480b-a35b-instruct';
-      case 'anthropic': return 'claude-sonnet-4-6';
-      case 'openai': return 'gpt-4o';
-      case 'groq': return 'llama-3.3-70b-versatile';
-      case 'mistral': return 'mistral-large-latest';
-      case 'deepseek': return 'deepseek-chat';
-      case 'together': return 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
-      case 'xai': return 'grok-4-1-fast-reasoning';
-      case 'google': return 'gemini-2.0-flash';
-      default: return 'provider-model';
-    }
   };
 
   const resolveCredentialForProviderInput = (

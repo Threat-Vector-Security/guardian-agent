@@ -1,6 +1,6 @@
 # Execution State Design
 
-> Current convergence of gateway routing, delegated completion, verifier authority, execution-state boundaries, and durable graph projection is tracked in [ORCHESTRATION-DESIGN.md](./ORCHESTRATION-DESIGN.md). The earlier realignment record is archived in [INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md](../plans/archive/INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md).
+> Current convergence of gateway routing, delegated completion, verifier authority, execution-state boundaries, and durable graph projection is tracked here. The earlier realignment record is archived in [INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md](../plans/archive/INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md).
 
 **Status:** Implemented current architecture
 
@@ -35,7 +35,7 @@ It is the authoritative spec for:
 
 - Reconstructing older requests from chat text alone when execution state is missing.
 - Treating continuity summaries as authoritative semantic routing input.
-- Defining the full orchestration convergence program here. Active orchestration and durable-graph ownership lives in [ORCHESTRATION-DESIGN.md](./ORCHESTRATION-DESIGN.md).
+- Reintroducing the removed generic agent-composition framework. Durable graph ownership belongs in this execution-state model.
 
 ## Core Model
 
@@ -210,6 +210,5 @@ That is enough to make continuation and delegation materially safer and more und
 ## Related Designs
 
 - `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`
-- `docs/design/ORCHESTRATION-DESIGN.md`
 - `docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md`
 - `docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md`

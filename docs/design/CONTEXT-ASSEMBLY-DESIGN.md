@@ -480,7 +480,7 @@ When implementing the optimization phases:
 
 ## Related Designs
 
-- `docs/design/ORCHESTRATION-DESIGN.md`
+- `docs/design/EXECUTION-STATE-DESIGN.md`
 - `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`
 - `docs/design/IDENTITY-MEMORY-DESIGN.md`
 - `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`

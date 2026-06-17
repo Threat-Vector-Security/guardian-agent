@@ -2354,7 +2354,7 @@ describe('direct reasoning mode', () => {
             ],
           });
         }
-        return chatResponse({ content: 'src/agent/orchestration.ts' });
+        return chatResponse({ content: 'src/runtime/execution-graph/delegated-worker-retry.ts' });
       }
       synthesisCallCount += 1;
       expect(messages.map((message) => message.content).join('\n')).toContain('src/runtime/execution-graph/delegated-worker-retry.ts');

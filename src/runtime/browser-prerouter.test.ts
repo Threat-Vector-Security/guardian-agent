@@ -77,7 +77,14 @@ describe('tryBrowserPreRoute', () => {
       formatPendingApprovalPrompt: () => 'Approval UI rendered.',
       resolvePendingApprovalMetadata: (_ids, fallback) => fallback,
     }, {
-      intentDecision: browserIntentDecision,
+      intentDecision: {
+        ...browserIntentDecision,
+        entities: {
+          urls: ['https://example.com'],
+          browserAction: 'click',
+          browserTarget: 'More information...',
+        },
+      },
     });
 
     expect(result).not.toBeNull();
@@ -150,7 +157,15 @@ describe('tryBrowserPreRoute', () => {
       },
       executeTool,
     }, {
-      intentDecision: browserIntentDecision,
+      intentDecision: {
+        ...browserIntentDecision,
+        entities: {
+          urls: ['https://httpbin.org/forms/post'],
+          browserAction: 'type',
+          browserTarget: 'first text field',
+          browserTextValue: 'automation smoke test',
+        },
+      },
     });
 
     expect(result).toEqual({
@@ -240,7 +255,14 @@ describe('tryBrowserPreRoute', () => {
       formatPendingApprovalPrompt: () => 'Approval UI rendered.',
       resolvePendingApprovalMetadata: (_ids, fallback) => fallback,
     }, {
-      intentDecision: browserIntentDecision,
+      intentDecision: {
+        ...browserIntentDecision,
+        entities: {
+          urls: ['https://example.com'],
+          browserAction: 'click',
+          browserTarget: 'More information...',
+        },
+      },
     });
 
     expect(result?.content).toContain("prepared the click action");
@@ -277,7 +299,13 @@ describe('tryBrowserPreRoute', () => {
       },
       executeTool,
     }, {
-      intentDecision: browserIntentDecision,
+      intentDecision: {
+        ...browserIntentDecision,
+        entities: {
+          urls: ['https://example.com'],
+          browserAction: 'links',
+        },
+      },
     });
 
     expect(result).toEqual({
@@ -319,7 +347,13 @@ describe('tryBrowserPreRoute', () => {
       },
       executeTool,
     }, {
-      intentDecision: browserIntentDecision,
+      intentDecision: {
+        ...browserIntentDecision,
+        entities: {
+          urls: ['https://example.com'],
+          browserAction: 'links',
+        },
+      },
     });
 
     expect(result?.content).toContain('Link 1 → https://example.com/1');
@@ -426,7 +460,13 @@ describe('tryBrowserPreRoute', () => {
       },
       executeTool,
     }, {
-      intentDecision: browserIntentDecision,
+      intentDecision: {
+        ...browserIntentDecision,
+        entities: {
+          urls: ['https://example.com'],
+          browserAction: 'read',
+        },
+      },
     });
 
     expect(readResult?.content).toContain('Example Domain');
@@ -443,7 +483,14 @@ describe('tryBrowserPreRoute', () => {
       },
       executeTool,
     }, {
-      intentDecision: browserIntentDecision,
+      intentDecision: {
+        ...browserIntentDecision,
+        entities: {
+          urls: ['https://example.com'],
+          browserAction: 'extract',
+          browserExtractType: 'structured',
+        },
+      },
     });
 
     expect(extractResult?.content).toContain('Structured data:');

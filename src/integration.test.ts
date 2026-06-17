@@ -20,8 +20,8 @@ import { BaseAgent, createAgentDefinition } from './agent/agent.js';
 import type { AgentContext, AgentResponse, UserMessage, ScheduleContext } from './agent/types.js';
 import { AgentState } from './agent/types.js';
 import type { AgentEvent } from './queue/event-bus.js';
-import { SentinelAgent } from './agents/sentinel.js';
 import { MessageRouter } from './runtime/message-router.js';
+import { SentinelAuditService } from './runtime/sentinel.js';
 
 // ─── Test Agents ──────────────────────────────────────────────
 
@@ -484,7 +484,7 @@ describe('Integration: Guardian Wired into Runtime', () => {
 describe('Integration: Sentinel Anomaly Detection', () => {
   it('should detect anomaly pattern and record in audit log', async () => {
     const runtime = new Runtime();
-    const sentinel = new SentinelAgent();
+    const sentinel = new SentinelAuditService();
 
     // Populate audit log with suspicious activity
     for (let i = 0; i < 40; i++) {
@@ -497,16 +497,7 @@ describe('Integration: Sentinel Anomaly Detection', () => {
     }
 
     // Run sentinel analysis
-    const ctx = {
-      agentId: 'sentinel',
-      capabilities: [] as string[],
-      emit: async () => {},
-      checkAction: () => {},
-      schedule: '*/5 * * * *',
-      auditLog: runtime.auditLog,
-    };
-
-    await sentinel.onSchedule(ctx);
+    await sentinel.runAudit(runtime.auditLog, 60_000);
 
     // Check that anomalies were recorded
     const anomalies = runtime.auditLog.query({ type: 'anomaly_detected' });

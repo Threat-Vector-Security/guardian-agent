@@ -28,6 +28,8 @@ import { isExplicitProviderConfigRequest } from './entity-resolvers/provider-con
 import {
   normalizeCalendarTarget,
   normalizeAutomationReadView,
+  normalizeBrowserAction,
+  normalizeBrowserExtractType,
   normalizeCalendarWindowDays,
   normalizeCodingBackend,
   normalizeCodeSessionSandboxProvider,
@@ -123,6 +125,22 @@ export function resolveIntentGatewayEntities(
       .filter(Boolean)
     : undefined;
   if (urls && urls.length > 0) provenance.urls = classifierSource;
+  const browserAction = route === 'browser_task'
+    ? normalizeBrowserAction(parsed.browserAction)
+    : undefined;
+  if (browserAction) provenance.browserAction = classifierSource;
+  const browserTarget = route === 'browser_task' && typeof parsed.browserTarget === 'string' && parsed.browserTarget.trim()
+    ? parsed.browserTarget.trim()
+    : undefined;
+  if (browserTarget) provenance.browserTarget = classifierSource;
+  const browserTextValue = route === 'browser_task' && typeof parsed.browserTextValue === 'string' && parsed.browserTextValue.trim()
+    ? parsed.browserTextValue.trim()
+    : undefined;
+  if (browserTextValue) provenance.browserTextValue = classifierSource;
+  const browserExtractType = route === 'browser_task'
+    ? normalizeBrowserExtractType(parsed.browserExtractType)
+    : undefined;
+  if (browserExtractType) provenance.browserExtractType = classifierSource;
   const parsedQuery = typeof parsed.query === 'string' && parsed.query.trim()
     ? parsed.query.trim()
     : undefined;
@@ -352,6 +370,10 @@ export function resolveIntentGatewayEntities(
     ...(typeof enabled === 'boolean' ? { enabled } : {}),
     ...(uiSurface ? { uiSurface } : {}),
     ...(urls && urls.length > 0 ? { urls } : {}),
+    ...(browserAction ? { browserAction } : {}),
+    ...(browserTarget ? { browserTarget } : {}),
+    ...(browserTextValue ? { browserTextValue } : {}),
+    ...(browserExtractType ? { browserExtractType } : {}),
     ...(query ? { query } : {}),
     ...(path ? { path } : {}),
     ...(fileExtension ? { fileExtension } : {}),

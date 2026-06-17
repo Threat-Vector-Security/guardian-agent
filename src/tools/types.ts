@@ -255,6 +255,8 @@ export interface ToolDefinition {
   deferLoading?: boolean;
   /** Usage examples to help LLMs understand parameter patterns. */
   examples?: Array<{ input: Record<string, unknown>; description: string }>;
+  /** Optional dry-run message for tools that need domain-specific preview wording. */
+  dryRunPreview?: (args: Record<string, unknown>) => string;
 }
 
 export interface ToolExecutionRequest {

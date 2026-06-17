@@ -350,6 +350,58 @@ export function normalizeCalendarWindowDays(value: unknown): number | undefined 
   return normalized;
 }
 
+export function normalizeBrowserAction(
+  value: unknown,
+): IntentGatewayEntities['browserAction'] | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  switch (normalized) {
+    case 'capabilities':
+    case 'navigate':
+    case 'read':
+    case 'links':
+    case 'extract':
+    case 'state':
+    case 'click':
+    case 'type':
+      return normalized;
+    case 'open':
+    case 'visit':
+    case 'go_to':
+    case 'goto':
+      return 'navigate';
+    case 'list_links':
+      return 'links';
+    case 'fill':
+    case 'enter':
+      return 'type';
+    case 'inspect':
+    case 'interactive_elements':
+      return 'state';
+    default:
+      return undefined;
+  }
+}
+
+export function normalizeBrowserExtractType(
+  value: unknown,
+): IntentGatewayEntities['browserExtractType'] | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  switch (normalized) {
+    case 'structured':
+    case 'semantic':
+    case 'both':
+      return normalized;
+    case 'metadata':
+    case 'open_graph':
+    case 'json_ld':
+      return 'structured';
+    default:
+      return undefined;
+  }
+}
+
 export function normalizeCodingBackend(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();

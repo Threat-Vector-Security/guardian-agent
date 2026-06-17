@@ -294,27 +294,19 @@ Cross-cutting: AuditLog records all security events in an in-memory ring buffer 
 
 ## ADR-017: Structured Orchestration Agents
 
-**Status:** Accepted
+**Status:** Superseded
 
-**Context:** GuardianAgent's EventBus provides low-level pub/sub communication between agents. Google ADK demonstrated that structured orchestration primitives (SequentialAgent, ParallelAgent, LoopAgent) significantly simplify multi-agent workflows without requiring developers to manage state passing and error handling manually.
+**Context:** GuardianAgent's EventBus provides low-level pub/sub communication between agents. Google ADK demonstrated that structured orchestration primitives can simplify multi-agent workflows without requiring developers to manage state passing and error handling manually.
 
-**Decision:** Add three orchestration agent types extending `BaseAgent`:
-- **SequentialAgent**: Runs sub-agents in order, passing state between steps via `inputKey`/`outputKey`
-- **ParallelAgent**: Runs sub-agents concurrently with optional `maxConcurrency`, combining results
-- **LoopAgent**: Runs a sub-agent repeatedly with configurable condition and mandatory `maxIterations` cap
+**Decision:** Removed the unused `SequentialAgent`, `ParallelAgent`, `LoopAgent`, `ConditionalAgent`, and recipe framework. The live system uses the Intent Gateway, brokered worker path, execution graph, pending actions, and shared runtime orchestration state instead of a second agent-composition API.
 
-All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMessage()` — ensuring every sub-call passes through the full Guardian admission pipeline.
+All delegated or tool-bearing work still flows through Guardian-owned routing, approvals, audit, budget, and broker boundaries.
 
 **Consequences:**
-- (+) Declarative multi-agent composition (no manual event wiring)
-- (+) Security preserved by construction — every dispatch goes through Guardian
-- (+) Fault tolerance built in (stopOnError toggle, error isolation in parallel)
-- (+) LoopAgent has mandatory iteration cap preventing infinite loops
-- (-) Dispatch loops possible if orchestrating agents invoke each other (mitigated by budget timeouts)
-- (-) Amplification risk — single message can trigger N sub-agent calls (mitigated by rate limiting)
-- (-) Indirect prompt injection through state pipeline is an open challenge
-
-**Spec:** `docs/design/ORCHESTRATION-DESIGN.md`
+- (+) One runtime orchestration model instead of parallel composition APIs
+- (+) Deleted unused implementation and tests
+- (+) Less documentation drift for operator and API references
+- (-) Any future reusable workflow abstraction must be added through the live execution graph/control-plane design, not the removed agent API
 
 ---
 
@@ -344,28 +336,23 @@ All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMes
 
 ## ADR-019: Agent Evaluation Framework
 
-**Status:** Accepted
+**Status:** Superseded
 
 **Context:** GuardianAgent has comprehensive unit tests but no structured way to evaluate agent *behavior* — whether agents produce correct, safe, helpful responses to realistic inputs. Google ADK's `.test.json` evalset format demonstrated a lightweight approach to agent evaluation.
 
-**Decision:** Build an evaluation framework with three components:
+**Decision:** Keep the pure evaluation helpers and remove the unused runtime `EvalRunner`:
 1. **Types** — `EvalTestCase` with input, expected content/tools/metadata/safety criteria
 2. **Metrics** — Content matching (5 strategies), tool trajectory, metadata match, safety checks (secrets, patterns, denials, injection score)
-3. **Runner** — Dispatches through real Runtime (Guardian active), computes per-metric pass rates
+3. **Harnesses** — Real runtime smoke/regression coverage lives in the maintained `scripts/` harnesses
 
-**Key design choice:** Evaluations run through the real Runtime, not mocks. Guardian, output scanning, rate limiting, and budget tracking are all active. This tests the actual security posture.
+**Key design choice:** Avoid a second test runner path. Use Vitest for pure helpers and script harnesses for real Guardian/runtime behavior.
 
 **Consequences:**
 - (+) Structured, repeatable agent behavior testing
-- (+) JSON-based test format compatible with CI pipelines
 - (+) Safety metrics use the same SecretScanner and InputSanitizer as production
-- (+) Real Runtime testing catches security regressions
-- (+) Per-metric pass rates enable targeted debugging
-- (-) Real Runtime eval is slower than mock-based testing
-- (-) Rate limiting may throttle rapid eval runs
-- (-) No LLM-as-judge or semantic matching (planned for future)
-
-**Spec:** `docs/design/EVAL-FRAMEWORK-DESIGN.md`
+- (+) Real Runtime testing stays in the same harnesses operators already run
+- (+) Deleted unused runner code and stale current-design docs
+- (-) JSON eval-suite loading/report formatting would need to be rebuilt if it becomes a real product requirement
 
 ---
 
@@ -373,11 +360,11 @@ All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMes
 
 **Status:** Accepted
 
-**Context:** Orchestration agents need to pass intermediate results between sub-agent invocations. Google ADK uses `session.state` with `output_key` — a shared dict that any agent in the graph can read/write. This creates cross-agent data leakage risks.
+**Context:** Runtime handoffs may need bounded per-invocation state. Google ADK uses `session.state` with `output_key` — a shared dict that any agent in the graph can read/write. This creates cross-agent data leakage risks.
 
 **Decision:** Implement `SharedState` as a key-value store with stricter access control than ADK:
-- **Owned by orchestrator** — Only the orchestrating agent creates and writes to SharedState
-- **Sub-agents cannot read or write** — They receive input as a `UserMessage`, not state references
+- **Owned by runtime flow** — Only the owning runtime flow creates and writes to SharedState
+- **Callees cannot write** — They receive input as a `UserMessage`, not mutable state references
 - **Per-invocation scope** — Fresh state for each `onMessage()` call, no persistence between messages
 - **Temp key convention** — Keys prefixed with `temp:` are bulk-cleaned via `clearTemp()`
 - **Read-only view** — `asReadOnly()` provides a `SharedStateView` interface (for future sub-agent access)
@@ -391,7 +378,7 @@ All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMes
 - (-) State is in-memory only — no persistence for long-running orchestrations
 - (-) State poisoning via crafted response content is an open challenge (InputSanitizer helps but doesn't fully solve)
 
-**Spec:** `docs/design/ORCHESTRATION-DESIGN.md`
+**Related spec:** `docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md`
 
 ---
 

@@ -396,7 +396,6 @@ npx vitest run src/integration.test.ts
 | `src/config/loader.test.ts` | YAML loading, env var interpolation, MCP config validation |
 | `src/channels/channels.test.ts` | All HTTP API endpoints, SSE, auth, static files |
 | `src/runtime/runtime.test.ts` | Agent lifecycle, event dispatch, watchdog, budgets |
-| `src/agent/orchestration.test.ts` | Sequential/Parallel/Loop agent workflows |
 | `src/runtime/shared-state.test.ts` | Inter-agent shared state, `temp:` prefix scoping |
 | `src/integration.test.ts` | End-to-end runtime integration |
 | `src/llm/provider.test.ts` | LLM provider chat/stream, tool call extraction |

@@ -138,7 +138,7 @@ Read-only direct reasoning is an execution mode inside the brokered worker, not 
 
 Direct reasoning must not call supervisor `ToolExecutor` or provider objects directly when brokered isolation is enabled. If the read-only loop exhausts its budget, the direct turn fails closed instead of automatically falling into delegated orchestration.
 
-Execution-graph direction: [ORCHESTRATION-DESIGN.md](./ORCHESTRATION-DESIGN.md) moves direct reasoning toward a durable graph `explore_readonly` node. This does not weaken the broker boundary. The worker still receives only broker-backed LLM/tool/event dependencies, and the supervisor remains the owner of graph state, tool execution, approvals, audit, and run-timeline projection.
+Execution-graph direction: [EXECUTION-STATE-DESIGN.md](./EXECUTION-STATE-DESIGN.md) moves direct reasoning toward graph-owned state. This does not weaken the broker boundary. The worker still receives only broker-backed LLM/tool/event dependencies, and the supervisor remains the owner of graph state, tool execution, approvals, audit, and run-timeline projection.
 
 ## Capability Tokens
 

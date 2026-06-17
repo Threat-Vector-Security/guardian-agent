@@ -84,12 +84,12 @@ export async function tryBrowserPreRoute(
   if (!gatewayBrowser) return null;
   const unsafeUrlBlock = await detectUnsafeGatewayUrl(options?.intentDecision?.entities.urls);
   if (unsafeUrlBlock) return unsafeUrlBlock;
-  const intent = parseDirectBrowserIntent(params.message.content)
-    ?? resolveBrowserListContinuationIntent(
+  const intent = resolveBrowserListContinuationIntent(
       params.continuityThread,
       params.message.content,
       options?.intentDecision,
-    );
+    )
+    ?? resolveGatewayBrowserIntent(options?.intentDecision);
   if (!intent) return null;
   if (isGoogleWorkspaceBrowserIntent(intent)) return null;
 
@@ -303,75 +303,41 @@ async function executeDirectBrowserAction(
   };
 }
 
-function parseDirectBrowserIntent(content: string): DirectBrowserIntent | null {
-  const normalized = content.trim();
-  if (!normalized) return null;
-
-  const urls = extractBrowserUrls(normalized);
-  const url = urls[0];
-  if (!url && isInternalDashboardPageReference(normalized)) {
-    return null;
-  }
-  const hasPageContext = /\b(browser|page|current page|this page|website|web page|form)\b/i.test(normalized);
-  const hasInteractiveContext = hasPageContext || /\b(link|links|button|input|field|interactive elements)\b/i.test(normalized);
-
-  if (/\bcapabilities\b/i.test(normalized) && /\b(playwright|browser)\b/i.test(normalized)) {
-    return { kind: 'capabilities' };
-  }
-
-  if (/\b(list|show)\b/i.test(normalized) && /\b(interactive elements|interactive refs|inputs?|buttons?|fields?|form controls?)\b/i.test(normalized)) {
-    return { kind: 'state', ...(url ? { url } : {}) };
-  }
-
-  if (/\bclick\b/i.test(normalized)) {
-    const clickLabel = extractBrowserClickLabel(normalized);
-    if (clickLabel && (url || hasInteractiveContext)) {
+function resolveGatewayBrowserIntent(decision: IntentGatewayDecision | null | undefined): DirectBrowserIntent | null {
+  if (!decision || decision.route !== 'browser_task') return null;
+  const entities = decision.entities;
+  const url = entities.urls?.find((candidate) => candidate.trim());
+  const action = entities.browserAction ?? inferBrowserActionFromGatewayOperation(decision.operation, !!url);
+  if (!action) return null;
+  switch (action) {
+    case 'capabilities':
+      return { kind: 'capabilities' };
+    case 'navigate':
+      return url ? { kind: 'navigate', url } : null;
+    case 'read':
+      return { kind: 'read', ...(url ? { url } : {}) };
+    case 'links':
+      return { kind: 'links', ...(url ? { url } : {}) };
+    case 'extract':
       return {
-        kind: 'click',
+        kind: 'extract',
         ...(url ? { url } : {}),
-        target: { kind: 'click_label', value: clickLabel },
+        type: entities.browserExtractType ?? 'structured',
       };
+    case 'state':
+      return { kind: 'state', ...(url ? { url } : {}) };
+    case 'click': {
+      const target = resolveGatewayBrowserTarget(entities.browserTarget, 'click');
+      return target ? { kind: 'click', ...(url ? { url } : {}), target } : null;
     }
-  }
-
-  if (/\b(?:type|fill)\b/i.test(normalized)) {
-    const typedValue = extractBrowserQuotedValue(normalized, ['type', 'fill', 'enter']);
-    const fieldLabel = extractBrowserFieldLabel(normalized);
-    if (typedValue && fieldLabel && (url || hasInteractiveContext)) {
-      return {
-        kind: 'type',
-        ...(url ? { url } : {}),
-        value: typedValue,
-        target: fieldLabel === '__first_text_field__'
-          ? { kind: 'first_text_field' }
-          : { kind: 'field_label', value: fieldLabel },
-      };
+    case 'type': {
+      const value = entities.browserTextValue?.trim();
+      const target = resolveGatewayBrowserTarget(entities.browserTarget, 'type');
+      return value && target ? { kind: 'type', ...(url ? { url } : {}), value, target } : null;
     }
+    default:
+      return null;
   }
-
-  if (/\blinks?\b/i.test(normalized) && (url || hasPageContext)) {
-    return { kind: 'links', ...(url ? { url } : {}) };
-  }
-
-  if ((url || hasPageContext) && /\bextract\b/i.test(normalized) && /\b(metadata|semantic|outline|structured|json-ld|open graph)\b/i.test(normalized)) {
-    return { kind: 'extract', ...(url ? { url } : {}), type: inferBrowserExtractType(normalized) };
-  }
-
-  if ((url || /\b(current page|this page|page title|browser|website|web page)\b/i.test(normalized))
-    && (/\bread\b|\bsummar(?:i|y|ize)\b/i.test(normalized) || /\bpage title\b/i.test(normalized))) {
-    return { kind: 'read', ...(url ? { url } : {}) };
-  }
-
-  if (url && /\b(open|go\s+to|goto|navigate|visit|load)\b/i.test(normalized)) {
-    return { kind: 'navigate', url };
-  }
-
-  return null;
-}
-
-function isInternalDashboardPageReference(text: string): boolean {
-  return /\b(?:automations?|automation catalog|workflow(?:s)?|system|dashboard|config|security|network|operations|chat)\s+page\b/i.test(text)
-    || /\bin\s+the\s+(?:automations?|automation catalog|workflow(?:s)?|system|dashboard|config|security|network|operations|chat)\s+page\b/i.test(text);
 }
 
 function isGoogleWorkspaceBrowserIntent(intent: DirectBrowserIntent): boolean {
@@ -391,48 +357,30 @@ function isGoogleWorkspaceBrowserIntent(intent: DirectBrowserIntent): boolean {
   }
 }
 
-function extractBrowserUrls(text: string): string[] {
-  const urls = new Set<string>();
-  for (const match of text.matchAll(/\bhttps?:\/\/[^\s"',;]+/gi)) {
-    const value = match[0]?.trim();
-    if (value) {
-      urls.add(value.replace(/[.,;!?]+$/g, ''));
-    }
+function inferBrowserActionFromGatewayOperation(
+  operation: IntentGatewayDecision['operation'],
+  hasUrl: boolean,
+): DirectBrowserIntent['kind'] | null {
+  if (operation === 'navigate' && hasUrl) return 'navigate';
+  if (operation === 'read') return 'read';
+  if (operation === 'inspect') return 'state';
+  if (operation === 'search') return 'links';
+  return null;
+}
+
+function resolveGatewayBrowserTarget(
+  value: string | undefined,
+  action: 'click' | 'type',
+): DirectBrowserTargetSelector | null {
+  const target = value?.trim();
+  if (!target) return null;
+  const normalized = target.toLowerCase().replace(/[\s_-]+/g, ' ');
+  if (action === 'type' && ['first text field', 'first text input', 'first textbox'].includes(normalized)) {
+    return { kind: 'first_text_field' };
   }
-  return [...urls];
-}
-
-function extractBrowserQuotedValue(text: string, verbs: string[]): string | null {
-  const pattern = new RegExp(`\\b(?:${verbs.join('|')})(?:s|d|ing)?\\s+["'\`]([^"'\\\`]+)["'\`]`, 'i');
-  const match = text.match(pattern);
-  return match?.[1]?.trim() || null;
-}
-
-function extractBrowserClickLabel(text: string): string | null {
-  const quoted = text.match(/\bclick\s+(?:the\s+)?["'`]([^"'`]+)["'`]/i);
-  if (quoted?.[1]?.trim()) return quoted[1].trim();
-  const plain = text.match(/\bclick\s+(?:the\s+)?([^.,\n\r]+?)(?:\s+link|\s+button|$)/i);
-  return plain?.[1]?.trim() || null;
-}
-
-function extractBrowserFieldLabel(text: string): string | null {
-  if (/\bfirst\s+text\s+(?:field|input|textbox)\b/i.test(text)) {
-    return '__first_text_field__';
-  }
-
-  const quoted = text.match(/\b(?:into|in)\s+the\s+["'`]([^"'`]+)["'`]\s+(?:field|textbox|input)\b/i);
-  if (quoted?.[1]?.trim()) return quoted[1].trim();
-
-  const plain = text.match(/\b(?:into|in)\s+the\s+([^.,\n\r]+?)\s+(?:field|textbox|input)\b/i);
-  return plain?.[1]?.trim() || null;
-}
-
-function inferBrowserExtractType(text: string): 'structured' | 'semantic' | 'both' {
-  const wantsStructured = /\b(metadata|structured|json-ld|open graph)\b/i.test(text);
-  const wantsSemantic = /\bsemantic|outline\b/i.test(text);
-  if (wantsStructured && wantsSemantic) return 'both';
-  if (wantsSemantic) return 'semantic';
-  return 'structured';
+  return action === 'click'
+    ? { kind: 'click_label', value: target }
+    : { kind: 'field_label', value: target };
 }
 
 function extractBrowserState(output: unknown): {

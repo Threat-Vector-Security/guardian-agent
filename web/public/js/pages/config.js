@@ -47,20 +47,6 @@ const configUiState = {
     name: null,
   },
 };
-const FALLBACK_PROVIDER_TYPES = [
-  { name: 'ollama', displayName: 'Ollama', compatible: false, locality: 'local', tier: 'local', requiresCredential: false, defaultBaseUrl: 'http://127.0.0.1:11434' },
-  { name: 'ollama_cloud', displayName: 'Ollama Cloud', compatible: false, locality: 'external', tier: 'managed_cloud', requiresCredential: true, defaultBaseUrl: 'https://ollama.com' },
-  { name: 'openrouter', displayName: 'OpenRouter', compatible: true, locality: 'external', tier: 'managed_cloud', requiresCredential: true, defaultBaseUrl: 'https://openrouter.ai/api/v1' },
-  { name: 'nvidia', displayName: 'NVIDIA Cloud', compatible: true, locality: 'external', tier: 'managed_cloud', requiresCredential: true, defaultBaseUrl: 'https://integrate.api.nvidia.com/v1' },
-  { name: 'openai', displayName: 'OpenAI', compatible: false, locality: 'external', tier: 'frontier', requiresCredential: true },
-  { name: 'anthropic', displayName: 'Anthropic', compatible: false, locality: 'external', tier: 'frontier', requiresCredential: true },
-  { name: 'groq', displayName: 'Groq', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.groq.com/openai/v1' },
-  { name: 'mistral', displayName: 'Mistral AI', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.mistral.ai/v1' },
-  { name: 'deepseek', displayName: 'DeepSeek', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.deepseek.com' },
-  { name: 'together', displayName: 'Together AI', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.together.xyz/v1' },
-  { name: 'xai', displayName: 'xAI (Grok)', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.x.ai/v1' },
-  { name: 'google', displayName: 'Google Gemini', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai' },
-];
 const CONFIG_TAB_IDS = [
   'overview',
   'ai-providers',
@@ -353,14 +339,12 @@ function loadSharedConfig(options = {}) {
     api.config(),
     api.providers().catch(() => []),
     api.authStatus().catch(() => null),
-    api.providerTypes().catch(() => FALLBACK_PROVIDER_TYPES),
+    api.providerTypes().catch(() => []),
   ]).then(([config, providers, authStatus, providerTypes]) => {
     sharedConfig = config || {};
     sharedProviders = Array.isArray(providers) ? providers : [];
     sharedAuthStatus = authStatus;
-    sharedProviderTypes = Array.isArray(providerTypes) && providerTypes.length > 0
-      ? providerTypes
-      : FALLBACK_PROVIDER_TYPES;
+    sharedProviderTypes = Array.isArray(providerTypes) ? providerTypes : [];
     void loadDeferredConfigStatus({ force });
     return sharedConfig;
   }).catch((err) => {
@@ -1450,35 +1434,11 @@ function createProviderPanel(config, providers, panel) {
   }
 
   function getDefaultModel(side, type, providerName = '') {
-    const normalizedType = String(type || '').trim().toLowerCase();
-    if (normalizedType === 'ollama') return 'gpt-oss:120b';
-    if (normalizedType === 'ollama_cloud') {
-      const inferredRole = inferManagedCloudRoleFromProfileName(providerName);
-      if (inferredRole === 'coding') return 'qwen3-coder:480b';
-      if (inferredRole === 'toolLoop') return 'glm-4.7';
-      if (inferredRole === 'direct') return 'minimax-m2.1';
-      return 'gpt-oss:120b';
-    }
-    if (normalizedType === 'openrouter') {
-      const inferredRole = inferManagedCloudRoleFromProfileName(providerName);
-      if (inferredRole === 'direct' || inferredRole === 'toolLoop') return 'moonshotai/kimi-k2.6';
-      return 'qwen/qwen3.6-plus';
-    }
-    if (normalizedType === 'nvidia') {
-      const inferredRole = inferManagedCloudRoleFromProfileName(providerName);
-      if (inferredRole === 'coding') return 'qwen/qwen3-coder-480b-a35b-instruct';
-      if (inferredRole === 'toolLoop') return 'moonshotai/kimi-k2-thinking';
-      if (inferredRole === 'direct') return 'moonshotai/kimi-k2-instruct';
-      return 'qwen/qwen3-5-122b-a10b';
-    }
-    if (normalizedType === 'anthropic') return 'claude-sonnet-4-6';
-    if (normalizedType === 'openai') return 'gpt-4o';
-    if (normalizedType === 'groq') return 'llama-3.3-70b-versatile';
-    if (normalizedType === 'mistral') return 'mistral-large-latest';
-    if (normalizedType === 'deepseek') return 'deepseek-chat';
-    if (normalizedType === 'together') return 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
-    if (normalizedType === 'xai') return 'grok-4-1-fast-reasoning';
-    if (normalizedType === 'google') return 'gemini-2.0-flash';
+    const meta = getProviderTypeMeta(type);
+    const inferredRole = inferManagedCloudRoleFromProfileName(providerName);
+    const roleDefault = meta?.roleDefaultModels?.[inferredRole];
+    if (roleDefault) return roleDefault;
+    if (meta?.defaultModel) return meta.defaultModel;
     return side === 'local' ? 'local-model' : 'provider-model';
   }
 
@@ -2453,7 +2413,7 @@ function getProviderTypeCatalog() {
   if (Array.isArray(sharedProviderTypes) && sharedProviderTypes.length > 0) {
     return sharedProviderTypes;
   }
-  return FALLBACK_PROVIDER_TYPES;
+  return [];
 }
 
 function getProviderTypeMeta(providerType) {

@@ -35,5 +35,5 @@ The verifier and worker manager should fail loudly rather than hide incomplete w
 ## Related Contracts
 
 - `docs/design/CODING-WORKSPACE-DESIGN.md` defines code-session ownership, external coding backend delegation, and repo-scoped execution.
-- `docs/design/ORCHESTRATION-DESIGN.md` defines delegated-worker retry, recovery, verification, and graph-owned execution boundaries.
+- `docs/design/EXECUTION-STATE-DESIGN.md` defines delegated-worker retry, recovery, verification, and graph-owned execution boundaries.
 - `docs/guides/INTEGRATION-TEST-HARNESS.md` defines the focused Vitest and harness loops required for coding-assistant regression work.

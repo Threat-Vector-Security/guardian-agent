@@ -596,69 +596,6 @@ sentinel.setProvider(llmProvider);
 
 ---
 
-## SentinelAgent (Legacy)
-
-**File:** `src/agents/sentinel.ts`
-
-Legacy Layer 4 agent — kept for test compatibility. Active implementation is `SentinelAuditService` above.
-
-```typescript
-import { SentinelAgent } from './agents/sentinel.js';
-
-const sentinel = new SentinelAgent({
-  volumeSpikeMultiplier: 3,        // denial rate multiplier (default: 3)
-  capabilityProbeThreshold: 5,     // distinct denied action types (default: 5)
-  secretDetectionThreshold: 3,     // secret scans per agent (default: 3)
-});
-```
-
-### Agent Properties
-
-- `id`: `'sentinel'`
-- `name`: `'Sentinel Security Agent'`
-- `handleMessages`: `false`
-- `handleEvents`: `true`
-- `handleSchedule`: `true`
-
-### Methods
-
-**`detectAnomalies(summary, auditLog?)`**
-
-Run heuristic anomaly detection on an audit summary. Returns array of detected anomalies.
-
-```typescript
-const anomalies = sentinel.detectAnomalies(summary, auditLog);
-// → [{ type: 'volume_spike', severity: 'warn', description: '...', evidence: {...} }]
-```
-
-**`onSchedule(ctx)`**
-
-Called by the cron scheduler. Analyzes the AuditLog, detects anomalies, optionally runs LLM analysis, and records findings back to the AuditLog.
-
-**`onEvent(event, ctx)`**
-
-Listens for `guardian.critical` events for real-time response.
-
-### Types
-
-```typescript
-interface Anomaly {
-  type: string;                        // e.g. 'volume_spike', 'capability_probe'
-  severity: 'warn' | 'critical';
-  description: string;
-  agentId?: string;
-  evidence: Record<string, unknown>;
-}
-
-interface AnomalyThresholds {
-  volumeSpikeMultiplier: number;       // default: 3
-  capabilityProbeThreshold: number;    // default: 5
-  secretDetectionThreshold: number;    // default: 3
-}
-```
-
----
-
 ## Capabilities
 
 **File:** `src/guardian/capabilities.ts`
@@ -717,7 +654,7 @@ Injects security-aware context:
 - `ctx.checkAction(action)` — calls `guardian.check()`, throws on denial, records to AuditLog
 - `ctx.emit(partial)` — scans payload via `outputGuardian.scanPayload()`, throws if secrets found, records `event_blocked`
 - `ctx.dispatch(agentId, message)` — calls `Runtime.dispatchMessage()`, ensuring full Guardian pipeline runs for each sub-agent call. Enabled by default; set `options.enableDispatch` to `false` to disable.
-- `ctx.sharedState` — optional `SharedStateView` (read-only) for sub-agents in orchestration patterns
+- `ctx.sharedState` — optional `SharedStateView` (read-only) for runtime-scoped handoff metadata
 
 ### `Runtime.dispatchSchedule(agentId, schedule)`
 
@@ -725,102 +662,11 @@ Injects `auditLog` into `ScheduleContext` for Sentinel access.
 
 ---
 
-## Orchestration Agents
-
-**File:** `src/agent/orchestration.ts`
-
-Three orchestration primitives that compose sub-agents into structured workflows. All extend `BaseAgent`.
-
-### `SequentialAgent`
-
-Runs sub-agents in order, passing state between steps.
-
-```typescript
-import { SequentialAgent } from './agent/orchestration.js';
-
-const pipeline = new SequentialAgent('my-pipeline', 'Pipeline Name', {
-  steps: [
-    { agentId: 'step-1', outputKey: 'result1' },
-    { agentId: 'step-2', inputKey: 'result1', outputKey: 'result2' },
-  ],
-  stopOnError: true,   // default: true — halt on first error
-});
-```
-
-#### Step Configuration
-
-```typescript
-interface OrchestrationStep {
-  agentId: string;      // target agent ID (must be registered)
-  inputKey?: string;     // read from SharedState as message content
-  outputKey?: string;    // write response to SharedState (default: agentId)
-}
-```
-
-### `ParallelAgent`
-
-Runs sub-agents concurrently with optional concurrency limit.
-
-```typescript
-import { ParallelAgent } from './agent/orchestration.js';
-
-const fanout = new ParallelAgent('search', 'Multi-Search', {
-  steps: [
-    { agentId: 'web-search',  outputKey: 'web' },
-    { agentId: 'doc-search',  outputKey: 'docs' },
-    { agentId: 'code-search', outputKey: 'code' },
-  ],
-  maxConcurrency: 2,   // optional — limit concurrent dispatches
-});
-```
-
-When `maxConcurrency` is set, uses a worker-pool pattern to process steps in batches.
-
-### `LoopAgent`
-
-Runs a single sub-agent repeatedly until a condition is met or `maxIterations` is reached.
-
-```typescript
-import { LoopAgent } from './agent/orchestration.js';
-
-const loop = new LoopAgent('refiner', 'Iterative Refiner', {
-  agentId: 'editor',
-  outputKey: 'draft',
-  maxIterations: 5,     // mandatory safety cap
-  condition: (iteration, lastResponse) => {
-    return !lastResponse?.content.includes('[DONE]');
-  },
-});
-```
-
-### Orchestration Types
-
-```typescript
-interface SequentialAgentOptions {
-  steps: OrchestrationStep[];
-  stopOnError?: boolean;
-}
-
-interface ParallelAgentOptions {
-  steps: OrchestrationStep[];
-  maxConcurrency?: number;
-}
-
-interface LoopAgentOptions {
-  agentId: string;
-  outputKey?: string;
-  maxIterations: number;
-  condition?: (iteration: number, lastResponse?: AgentResponse) => boolean;
-}
-```
-
----
-
 ## Shared State
 
 **File:** `src/runtime/shared-state.ts`
 
-Inter-agent data passing for orchestration patterns.
+Bounded per-invocation state for runtime handoffs.
 
 ### `SharedState` (Mutable)
 
@@ -955,24 +801,20 @@ interface MCPToolCallResult {
 
 ---
 
-## Evaluation Framework
+## Evaluation Metrics
 
-**Files:** `src/eval/types.ts`, `src/eval/metrics.ts`, `src/eval/runner.ts`
+**Files:** `src/eval/types.ts`, `src/eval/metrics.ts`
 
-### `EvalRunner`
-
-Runs eval test cases through the real Runtime (Guardian active).
-
-```typescript
-import { EvalRunner, loadEvalSuite, formatEvalReport } from './eval/runner.js';
-
-const runner = new EvalRunner({ runtime });
-const suite = await loadEvalSuite('tests/assistant.eval.json');
-const result = await runner.runSuite(suite.name, suite.tests);
-console.log(formatEvalReport(result));
-```
+The eval package keeps pure matcher and scoring helpers. Full runtime smoke and regression coverage lives in the `scripts/` harnesses.
 
 ### Content Matchers
+
+```typescript
+import { evaluateContent, evaluateSafety } from './eval/metrics.js';
+
+const content = evaluateContent('hello world', { type: 'contains', value: 'world' });
+const safety = evaluateSafety({ content: 'safe output' }, { noSecrets: true });
+```
 
 ```typescript
 type ContentMatcher =

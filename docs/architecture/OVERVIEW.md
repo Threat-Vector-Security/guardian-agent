@@ -53,17 +53,13 @@ Current extensions:
 │  │  └────┬────┘  └────┬────┘  └────┬─────┘  └────┬─────┘        │  │
 │  │                                                                │  │
 │  │  ┌──────────────────────────────────────────────────────────┐  │  │
-│  │  │  Orchestration Agents (optional composition layer)       │  │  │
+│  │  │  Runtime Routing                                         │  │  │
 │  │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐         │  │  │
-│  │  │  │ Sequential │  │  Parallel  │  │    Loop    │         │  │  │
-│  │  │  │   Agent    │  │   Agent    │  │   Agent    │         │  │  │
+│  │  │  │  Intent    │  │  Worker    │  │  Direct    │         │  │  │
+│  │  │  │ Gateway    │  │  Broker    │  │  Tools     │         │  │  │
 │  │  │  └────────────┘  └────────────┘  └────────────┘         │  │  │
-│  │  │  ┌────────────┐  Per-step retry + fail-branch            │  │  │
-│  │  │  │Conditional │  Array iteration mode for LoopAgent      │  │  │
-│  │  │  │   Agent    │                                          │  │  │
-│  │  │  └────────────┘                                          │  │  │
-│  │  │  Uses ctx.dispatch() → full Guardian pipeline per step   │  │  │
-│  │  │  SharedState: per-invocation, orchestrator-owned         │  │  │
+│  │  │  Shared approvals, pending actions, timeline events,     │  │  │
+│  │  │  profile selection, and control-plane callbacks          │  │  │
 │  │  └──────────────────────────────────────────────────────────┘  │  │
 │  └───────┼─────────────┼────────────┼──────────────┼──────────────┘  │
 │          │             │            │              │                   │
@@ -167,20 +163,15 @@ Runtime (src/runtime/runtime.ts)
 │   └── trust-presets.ts              — predefined security postures (locked/safe/balanced/power)
 ├── Guardian Agent (src/runtime/sentinel.ts) — inline LLM action evaluation (Layer 2)
 ├── Sentinel Audit (src/runtime/sentinel.ts) — retrospective anomaly detection (Layer 4)
-├── Orchestration (src/agent/orchestration.ts) — SequentialAgent, ParallelAgent, LoopAgent
-│   ├── ConditionalAgent (src/agent/conditional.ts) — conditional branching orchestration
-│   └── Recipes (src/agent/recipes.ts) — reusable planner/executor/reviewer workflow templates
-├── Shared State (src/runtime/shared-state.ts) — per-invocation inter-agent data passing
+├── Shared State (src/runtime/shared-state.ts) — bounded per-invocation handoff state
 ├── Document Search (src/search/) — native hybrid search (BM25 + vector) over document collections
 ├── MCP Client (src/tools/mcp-client.ts) — Model Context Protocol tool server consumption
 ├── Native Google Service (src/google/)  — direct googleapis SDK integration (OAuth PKCE, encrypted tokens)
 ├── Native Microsoft Service (src/microsoft/) — Microsoft Graph integration for Outlook, calendar, OneDrive, and contacts
 ├── Managed Provider Tool Facade         — stable tool names such as `gws`, Microsoft provider tools, cloud tools, and sandbox tools backed by native adapters
-├── Eval Framework (src/eval/)           — agent evaluation with metrics and reporting
+├── Eval Metrics (src/eval/)             — pure matcher and scoring helpers
 │   ├── types.ts                        — test case, matcher, and result types
-│   ├── metrics.ts                      — content, trajectory, metadata, workflow, evidence, and safety metrics
-│   └── runner.ts                       — test runner with real Runtime dispatch
-├── Sentinel (src/agents/sentinel.ts)   — legacy agent (kept for test compat, see src/runtime/sentinel.ts)
+│   └── metrics.ts                      — content, trajectory, metadata, workflow, evidence, and safety metrics
 ├── Budget (src/runtime/budget.ts)      — compute budget tracking, schedule caps, and budget exhaustion decisions
 ├── Watchdog (src/runtime/watchdog.ts)  — stall detection (timestamp-based)
 ├── Scheduler (src/runtime/scheduler.ts)— cron scheduling (croner)
@@ -228,58 +219,6 @@ This gives us:
 - **Budget enforcement** via wall-clock tracking per invocation
 - **Lifecycle management** via explicit state machine
 - **Mandatory security** — the Runtime checks every message before it reaches the agent, scans every LLM response via GuardedLLMProvider, classifies tool output before reinjection, scans every outbound response before it reaches the user, and scans every inter-agent event payload before dispatch
-
-### Orchestration Agents
-
-Four orchestration primitives extend `BaseAgent` to compose sub-agents into structured workflows:
-
-```typescript
-// Sequential: pipeline of steps with state passing, per-step retry + fail-branch
-const pipeline = new SequentialAgent('scan', 'Security Pipeline', {
-  steps: [
-    { agentId: 'analyzer', outputKey: 'analysis' },
-    { agentId: 'scanner',  inputKey: 'analysis', outputKey: 'vulns',
-      retry: { maxRetries: 2, initialDelayMs: 1000, backoffMultiplier: 2 },
-      onError: { agentId: 'fallback-scanner' } },
-    { agentId: 'reporter', inputKey: 'vulns',    outputKey: 'report' },
-  ],
-});
-
-// Parallel: fan-out with optional concurrency limit
-const research = new ParallelAgent('search', 'Multi-Source', {
-  steps: [
-    { agentId: 'web-search',  outputKey: 'web' },
-    { agentId: 'doc-search',  outputKey: 'docs' },
-  ],
-  maxConcurrency: 3,
-});
-
-// Loop: iterate until condition or maxIterations
-const refiner = new LoopAgent('refine', 'Refiner', {
-  agentId: 'editor',
-  maxIterations: 5,
-  condition: (i, resp) => !resp?.content.includes('[DONE]'),
-});
-
-// Loop: array iteration mode with configurable concurrency
-const processor = new LoopAgent('process', 'Batch Processor', {
-  agentId: 'item-handler',
-  items: { key: 'itemList', concurrency: 3, collectKey: 'results' },
-});
-
-// Conditional: ordered branch evaluation, first match wins
-const router = new ConditionalAgent('route', 'Intent Router', {
-  branches: [
-    { name: 'billing', condition: (s) => s.get('intent') === 'billing', steps: billingSteps },
-    { name: 'technical', condition: (s) => s.get('intent') === 'technical', steps: techSteps },
-  ],
-  defaultSteps: generalSteps,
-});
-```
-
-Key design: every sub-agent dispatch goes through `ctx.dispatch()` → `Runtime.dispatchMessage()` → full Guardian pipeline. When the target is a built-in chat agent, that dispatch then crosses into the brokered worker path. Orchestration does not create a bypass path.
-
-See [Orchestration Spec](../design/ORCHESTRATION-DESIGN.md) for full details.
 
 ### MCP Client
 
@@ -418,29 +357,18 @@ Next stage:
 
 See [Security](../../SECURITY.md) and [Remote Sandboxing Design](../design/REMOTE-SANDBOXING-DESIGN.md) for the security details and remaining gaps.
 
-### Agent Evaluation Framework
+### Evaluation Helpers
 
-The eval framework tests agent behavior through the real Runtime (Guardian active):
-
-```typescript
-const runner = new EvalRunner({ runtime });
-const suite = await loadEvalSuite('tests/assistant.eval.json');
-const result = await runner.runSuite(suite.name, suite.tests);
-console.log(formatEvalReport(result));
-```
-
-Supports content matchers, tool trajectory validation, metadata checks, and 4 independent safety metrics. See [Evaluation Framework Spec](../design/EVAL-FRAMEWORK-DESIGN.md).
+The eval package exposes pure matcher helpers for content, tool trajectory, metadata, evidence, workflow, and safety checks. Runtime-level coverage lives in the `scripts/` harnesses.
 
 ### Shared State
 
-`SharedState` enables inter-agent data passing within orchestration patterns:
+`SharedState` provides bounded per-invocation handoff state:
 
 - **Owned by orchestrator** — sub-agents cannot read or write
 - **Scoped to invocation** — fresh state per `onMessage()` call, no persistence
 - **Temp key convention** — `temp:` prefixed keys cleaned up via `clearTemp()`
 - **Bounded state** — default 10 MB capacity with per-key metadata for producer, validation, and taint context
-
-See [Orchestration Design](../design/ORCHESTRATION-DESIGN.md).
 
 ## Message Flow with Security
 
@@ -468,9 +396,8 @@ User Message
            ▼
 ┌──────────────────────────────┐
 │ Brokered worker path         │
-│ (built-in chat/planner)      │
+│ (chat/planner/direct tools)  │
 │ or supervisor handler path   │
-│ (framework/orchestration)    │
 └──────────┬───────────────────┘
            │
            ▼
@@ -521,43 +448,6 @@ All security enforcement is mandatory. The Runtime controls every path where dat
 - **Context immutability** — Agent contexts are frozen. Agents cannot modify their own capabilities.
 
 There is no default `ctx.fs`, `ctx.http`, or `ctx.exec`. The agent's framework-managed interaction points are `ctx.llm` (guarded), `ctx.emit()` (scanned), `ctx.dispatch()` (Guardian-checked per call), and returning a response (scanned). For built-in chat execution, these interactions occur inside the worker-backed brokered path.
-
-### Orchestration Message Flow
-
-When an orchestration agent dispatches to sub-agents, each dispatch passes through the full security pipeline:
-
-```
-SequentialAgent.onMessage()
-    │
-    ▼
-  SharedState created (orchestrator-owned)
-    │
-    ├── ctx.dispatch('step-1', msg)
-    │       │
-    │       ▼
-    │     LAYER 1: Guardian Pipeline (full check)
-    │       │ ✓
-    │       ▼
-    │     step-1.onMessage()
-    │       │
-    │       ▼
-    │     LAYER 2: OutputGuardian (scan response)
-    │       │
-    │       ▼
-    │     state.set('step-1', response)
-    │
-    ├── ctx.dispatch('step-2', enrichedMsg)
-    │       │
-    │       ▼
-    │     LAYER 1 → step-2.onMessage() → LAYER 2
-    │       │
-    │       ▼
-    │     state.set('step-2', response)
-    │
-    ▼
-  state.clearTemp()
-  Return final response
-```
 
 See [SECURITY.md](../../SECURITY.md) for comprehensive security documentation.
 

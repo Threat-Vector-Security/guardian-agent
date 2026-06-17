@@ -199,6 +199,7 @@ describe('createProviderDashboardCallbacks', () => {
           tier: 'local' as const,
           requiresCredential: false,
           defaultBaseUrl: 'http://127.0.0.1:11434',
+          defaultModel: 'gpt-oss:120b',
         },
         {
           name: 'openai',
@@ -207,6 +208,7 @@ describe('createProviderDashboardCallbacks', () => {
           locality: 'external' as const,
           tier: 'frontier' as const,
           requiresCredential: true,
+          defaultModel: 'gpt-4o',
         },
       ]),
       hasProvider: vi.fn((name: string) => name === 'ollama' || name === 'openai'),
@@ -236,6 +238,7 @@ describe('createProviderDashboardCallbacks', () => {
         tier: 'local',
         requiresCredential: false,
         defaultBaseUrl: 'http://127.0.0.1:11434',
+        defaultModel: 'gpt-oss:120b',
       },
       {
         name: 'openai',
@@ -244,6 +247,7 @@ describe('createProviderDashboardCallbacks', () => {
         locality: 'external',
         tier: 'frontier',
         requiresCredential: true,
+        defaultModel: 'gpt-4o',
       },
     ]);
     await expect(callbacks.onProvidersStatus?.()).resolves.toEqual(status);
@@ -290,6 +294,7 @@ describe('createProviderDashboardCallbacks', () => {
             locality: 'external',
             tier: 'frontier',
             requiresCredential: true,
+            defaultModel: 'gpt-4o',
           },
         ],
         hasProvider: (name: string) => name === 'openai',
@@ -320,6 +325,7 @@ describe('createProviderDashboardCallbacks', () => {
             locality: 'external',
             tier: 'frontier',
             requiresCredential: true,
+            defaultModel: 'gpt-4o',
           },
         ],
         hasProvider: (name: string) => name === 'openai',

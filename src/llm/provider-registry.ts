@@ -30,6 +30,8 @@ export interface ProviderTypeInfo {
   tier: ProviderTier;
   requiresCredential: boolean;
   defaultBaseUrl?: string;
+  defaultModel: string;
+  roleDefaultModels?: Partial<Record<'coding' | 'toolLoop' | 'direct' | 'general', string>>;
 }
 
 type ProviderFactory = (config: LLMConfig) => LLMProvider;
@@ -73,6 +75,8 @@ export class ProviderRegistry {
       tier: metadata.tier,
       requiresCredential: metadata.requiresCredential,
       defaultBaseUrl: metadata.defaultBaseUrl,
+      defaultModel: metadata.defaultModel,
+      roleDefaultModels: metadata.roleDefaultModels,
     });
   }
 
@@ -123,6 +127,8 @@ export class ProviderRegistry {
       tier: type.tier,
       requiresCredential: type.requiresCredential,
       defaultBaseUrl: type.defaultBaseUrl,
+      defaultModel: type.defaultModel,
+      roleDefaultModels: type.roleDefaultModels,
     }));
   }
 }

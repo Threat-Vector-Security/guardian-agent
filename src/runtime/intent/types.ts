@@ -121,6 +121,10 @@ export interface IntentGatewayEntities {
   enabled?: boolean;
   uiSurface?: 'automations' | 'system' | 'dashboard' | 'config' | 'chat' | 'unknown';
   urls?: string[];
+  browserAction?: 'capabilities' | 'navigate' | 'read' | 'links' | 'extract' | 'state' | 'click' | 'type';
+  browserTarget?: string;
+  browserTextValue?: string;
+  browserExtractType?: 'structured' | 'semantic' | 'both';
   query?: string;
   path?: string;
   fileExtension?: string;

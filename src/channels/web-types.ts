@@ -923,6 +923,8 @@ export interface DashboardProviderTypeInfo {
   tier: 'local' | 'managed_cloud' | 'frontier';
   requiresCredential: boolean;
   defaultBaseUrl?: string;
+  defaultModel: string;
+  roleDefaultModels?: Partial<Record<'coding' | 'toolLoop' | 'direct' | 'general', string>>;
 }
 
 export interface DashboardProviderModelsInput {

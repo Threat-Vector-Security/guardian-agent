@@ -21,6 +21,8 @@ interface ProviderRegistryLike {
     tier: 'local' | 'managed_cloud' | 'frontier';
     requiresCredential: boolean;
     defaultBaseUrl?: string;
+    defaultModel: string;
+    roleDefaultModels?: Partial<Record<'coding' | 'toolLoop' | 'direct' | 'general', string>>;
   }>;
   hasProvider(name: string): boolean;
   createProvider(config: LLMConfig): {

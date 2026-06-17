@@ -10,6 +10,8 @@ export interface ProviderTypeMetadata {
   tier: ProviderTier;
   requiresCredential: boolean;
   defaultBaseUrl?: string;
+  defaultModel: string;
+  roleDefaultModels?: Partial<Record<'coding' | 'toolLoop' | 'direct' | 'general', string>>;
 }
 
 const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
@@ -21,6 +23,7 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     tier: 'local',
     requiresCredential: false,
     defaultBaseUrl: 'http://127.0.0.1:11434',
+    defaultModel: 'gpt-oss:120b',
   },
   ollama_cloud: {
     name: 'ollama_cloud',
@@ -30,6 +33,12 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     tier: 'managed_cloud',
     requiresCredential: true,
     defaultBaseUrl: 'https://ollama.com',
+    defaultModel: 'gpt-oss:120b',
+    roleDefaultModels: {
+      coding: 'qwen3-coder:480b',
+      toolLoop: 'glm-4.7',
+      direct: 'minimax-m2.1',
+    },
   },
   openrouter: {
     name: 'openrouter',
@@ -39,6 +48,11 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     tier: 'managed_cloud',
     requiresCredential: true,
     defaultBaseUrl: 'https://openrouter.ai/api/v1',
+    defaultModel: 'qwen/qwen3.6-plus',
+    roleDefaultModels: {
+      direct: 'moonshotai/kimi-k2.6',
+      toolLoop: 'moonshotai/kimi-k2.6',
+    },
   },
   nvidia: {
     name: 'nvidia',
@@ -48,6 +62,12 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     tier: 'managed_cloud',
     requiresCredential: true,
     defaultBaseUrl: 'https://integrate.api.nvidia.com/v1',
+    defaultModel: 'qwen/qwen3-coder-480b-a35b-instruct',
+    roleDefaultModels: {
+      coding: 'qwen/qwen3-coder-480b-a35b-instruct',
+      toolLoop: 'moonshotai/kimi-k2-thinking',
+      direct: 'moonshotai/kimi-k2-instruct',
+    },
   },
   openai: {
     name: 'openai',
@@ -56,6 +76,7 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     locality: 'external',
     tier: 'frontier',
     requiresCredential: true,
+    defaultModel: 'gpt-4o',
   },
   anthropic: {
     name: 'anthropic',
@@ -64,6 +85,7 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     locality: 'external',
     tier: 'frontier',
     requiresCredential: true,
+    defaultModel: 'claude-sonnet-4-6',
   },
   groq: {
     name: 'groq',
@@ -73,6 +95,7 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     tier: 'frontier',
     requiresCredential: true,
     defaultBaseUrl: 'https://api.groq.com/openai/v1',
+    defaultModel: 'llama-3.3-70b-versatile',
   },
   mistral: {
     name: 'mistral',
@@ -82,6 +105,7 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     tier: 'frontier',
     requiresCredential: true,
     defaultBaseUrl: 'https://api.mistral.ai/v1',
+    defaultModel: 'mistral-large-latest',
   },
   deepseek: {
     name: 'deepseek',
@@ -91,6 +115,7 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     tier: 'frontier',
     requiresCredential: true,
     defaultBaseUrl: 'https://api.deepseek.com',
+    defaultModel: 'deepseek-chat',
   },
   together: {
     name: 'together',
@@ -100,6 +125,7 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     tier: 'frontier',
     requiresCredential: true,
     defaultBaseUrl: 'https://api.together.xyz/v1',
+    defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
   },
   xai: {
     name: 'xai',
@@ -109,6 +135,7 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     tier: 'frontier',
     requiresCredential: true,
     defaultBaseUrl: 'https://api.x.ai/v1',
+    defaultModel: 'grok-4-1-fast-reasoning',
   },
   google: {
     name: 'google',
@@ -118,6 +145,7 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     tier: 'frontier',
     requiresCredential: true,
     defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    defaultModel: 'gemini-2.0-flash',
   },
 };
 
@@ -169,6 +197,14 @@ export function providerRequiresCredential(providerType: string | undefined): bo
 
 export function getDefaultBaseUrlForProviderType(providerType: string | undefined): string | undefined {
   return getProviderTypeMetadata(providerType)?.defaultBaseUrl;
+}
+
+export function getDefaultModelForProviderType(
+  providerType: string | undefined,
+  role: 'coding' | 'toolLoop' | 'direct' | 'general' = 'general',
+): string {
+  const metadata = getProviderTypeMetadata(providerType);
+  return metadata?.roleDefaultModels?.[role] ?? metadata?.defaultModel ?? 'provider-model';
 }
 
 export function isOllamaProviderType(providerType: string | undefined): boolean {

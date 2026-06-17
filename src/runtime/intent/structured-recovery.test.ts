@@ -478,6 +478,41 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.summary).toContain('What should I search the web for?');
   });
 
+  it('keeps structured browser action entities from the classifier', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'browser_task',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Click a page link.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      urls: ['https://example.com'],
+      browserAction: 'click',
+      browserTarget: 'More information',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'simple',
+    }, {
+      sourceContent: 'Go to https://example.com and click the More information link.',
+    }, {
+      classifierSource: 'classifier.primary',
+    });
+
+    expect(decision.entities).toMatchObject({
+      urls: ['https://example.com'],
+      browserAction: 'click',
+      browserTarget: 'More information',
+    });
+    expect(decision.provenance?.entities).toMatchObject({
+      browserAction: 'classifier.primary',
+      browserTarget: 'classifier.primary',
+    });
+  });
+
   it('asks for a web search query when low-confidence browser routing lacks extracted query entities', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'browser_task',

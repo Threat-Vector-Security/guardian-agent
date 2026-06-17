@@ -148,6 +148,20 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
           type: 'string',
         },
       },
+      browserAction: {
+        type: 'string',
+        enum: ['capabilities', 'navigate', 'read', 'links', 'extract', 'state', 'click', 'type'],
+      },
+      browserTarget: {
+        type: 'string',
+      },
+      browserTextValue: {
+        type: 'string',
+      },
+      browserExtractType: {
+        type: 'string',
+        enum: ['structured', 'semantic', 'both'],
+      },
       query: {
         type: 'string',
       },
@@ -529,6 +543,7 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'memory_task means explicit remember, save, recall, or search memory requests.',
   'email_task means direct email inbox, read, send, reply, forward, or draft work in Gmail or Outlook. workspace_task means explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, direct Google Calendar or Outlook Calendar event edits, OneDrive, SharePoint, or Teams. personal_assistant_task means Second Brain work such as notes, tasks, calendar planning, meeting prep, contact context, briefs, and personal retrieval across messages, docs, events, and notes.',
   'ui_control means Guardian pages or internal catalog surfaces. browser_task means external website navigation or interaction. search_task means generic web search or indexed document search.',
+  'For browser_task, set browserAction to navigate, read, links, extract, state, click, type, or capabilities when known. Put URLs in urls. For click/type, put the visible button/link/field label in browserTarget. For type, put the text to enter in browserTextValue. For extract, set browserExtractType to structured, semantic, or both.',
   'Prefer search_task over memory_task when the user asks to search documents, indexed docs, configured document sources, document collections, or doc_search. Use planned_steps with expectedToolCategories=["doc_search"] for document content search and ["doc_search_list"] for listing indexed files by type or extension. Use memory_task only for explicit persistent-memory search or recall.',
   'For follow-up narrowing or refining previous web research, keep using web search and set resolution="ready"; do not ask for search_surface unless the user is selecting among configured documents, workspace files, and web search.',
   'For follow-ups like fetching or summarizing one of the previously cited pages, use browser_task with resolution="ready" even when the user does not repeat the URL.',
@@ -567,6 +582,9 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Examples: "Run the cloud tool whm_status using profileId social." -> route="general_assistant", operation="run", toolName="whm_status", profileId="social".',
   'Examples: "Find any automations or routines related to approval, routing, or code review, then suggest one useful automation I could create. Do not create it yet." -> route="general_assistant", operation="search", executionClass="tool_orchestration", preferredTier="external", requiresToolSynthesis=true, preferredAnswerPath="tool_loop", planned_steps=[{"kind":"read","expectedToolCategories":["automation_list"],"required":true},{"kind":"read","expectedToolCategories":["second_brain_routine_list","second_brain_routine_catalog"],"required":true},{"kind":"answer","required":true,"dependsOn":["step_1","step_2"]}].',
   'Examples: "List my configured AI providers." -> route="general_assistant", operation="read", uiSurface="config", executionClass="provider_crud", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop".',
+  'Examples: "Go to https://example.com and click the More information link." -> route="browser_task", operation="run", browserAction="click", urls=["https://example.com"], browserTarget="More information".',
+  'Examples: "Type hello into the search field on https://example.com." -> route="browser_task", operation="run", browserAction="type", urls=["https://example.com"], browserTarget="search", browserTextValue="hello".',
+  'Examples: "Show the links on https://example.com." -> route="browser_task", operation="read", browserAction="links", urls=["https://example.com"].',
   'Examples: "Show the available models for my ollama-cloud-tools profile." -> route="general_assistant", operation="inspect", uiSurface="config", executionClass="provider_crud", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop".',
   'Examples: "Create an app diagnostics GitHub issue for the last bad response." -> route="diagnostics_task", operation="draft", toolName="guardian_issue_draft", executionClass="tool_orchestration", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop".',
   'Examples: "Can you see the routing trace for Guardian?" -> route="diagnostics_task", operation="inspect", toolName="guardian_trace_inspect", executionClass="tool_orchestration", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop", resolution="ready".',
