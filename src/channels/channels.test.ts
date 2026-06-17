@@ -4201,11 +4201,11 @@ describe('WebChannel', () => {
       expect(body.error).toBe('Too many authentication failures. Try again later.');
     });
 
-    it('should still accept a valid token after previous auth failures', async () => {
+    it('should clear previous auth failures after a valid token before lockout', async () => {
       web = new WebChannel({ port: 18966, authToken: 'secret-token-123' });
       await web.start(async () => ({ content: 'ok' }));
 
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 3; i++) {
         await fetch('http://localhost:18966/api/status', {
           headers: { Authorization: `Bearer wrong-token-${i}` },
         });
@@ -4215,6 +4215,43 @@ describe('WebChannel', () => {
         headers: { Authorization: 'Bearer secret-token-123' },
       });
       expect(res.status).toBe(200);
+    });
+
+    it('should keep blocking requests during an active auth lockout even with a valid token', async () => {
+      web = new WebChannel({ port: 19030, authToken: 'secret-token-123' });
+      await web.start(async () => ({ content: 'ok' }));
+
+      for (let i = 0; i < 10; i++) {
+        await fetch('http://localhost:19030/api/status', {
+          headers: { Authorization: `Bearer wrong-token-${i}` },
+        });
+      }
+
+      const res = await fetch('http://localhost:19030/api/status', {
+        headers: { Authorization: 'Bearer secret-token-123' },
+      });
+      expect(res.status).toBe(429);
+      expect(res.headers.get('retry-after')).not.toBeNull();
+      const body = await res.json() as { error: string };
+      expect(body.error).toBe('Too many authentication failures. Try again later.');
+    });
+
+    it('should rate limit by Fly client IP before forwarded-for headers', async () => {
+      web = new WebChannel({ port: 19031, authToken: 'secret-token-123' });
+      await web.start(async () => ({ content: 'ok' }));
+
+      let lastResponse: Response | null = null;
+      for (let i = 0; i < 10; i++) {
+        lastResponse = await fetch('http://localhost:19031/api/status', {
+          headers: {
+            Authorization: `Bearer wrong-token-${i}`,
+            'Fly-Client-IP': '203.0.113.10',
+            'X-Forwarded-For': `198.51.100.${i}`,
+          },
+        });
+      }
+
+      expect(lastResponse?.status).toBe(429);
     });
 
     it('should allow API access without auth when web auth is disabled', async () => {

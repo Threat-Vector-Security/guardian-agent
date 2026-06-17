@@ -500,6 +500,10 @@ export class WebChannel implements ChannelAdapter {
   }
 
   private getClientAddress(req: IncomingMessage): string {
+    const flyClientIp = req.headers['fly-client-ip'];
+    if (typeof flyClientIp === 'string' && flyClientIp.trim()) {
+      return flyClientIp.trim();
+    }
     const forwarded = req.headers['x-forwarded-for'];
     if (typeof forwarded === 'string' && forwarded.trim()) {
       return forwarded.split(',')[0].trim();
@@ -515,6 +519,13 @@ export class WebChannel implements ChannelAdapter {
     const state = this.authFailures.get(this.getClientAddress(req));
     const blockedUntil = state?.blockedUntil ?? 0;
     return Math.max(0, blockedUntil - Date.now());
+  }
+
+  private rejectIfAuthBlocked(req: IncomingMessage, res: ServerResponse): boolean {
+    const remainingMs = this.getAuthBlockRemainingMs(req);
+    if (remainingMs <= 0) return false;
+    this.sendAuthBlocked(res, remainingMs);
+    return true;
   }
 
   private recordAuthFailure(req: IncomingMessage): number {
@@ -545,10 +556,7 @@ export class WebChannel implements ChannelAdapter {
   }
 
   private rejectAuth(req: IncomingMessage, res: ServerResponse, invalidToken: boolean): false {
-    const remainingMs = this.getAuthBlockRemainingMs(req);
-    if (remainingMs > 0) {
-      return this.sendAuthBlocked(res, remainingMs);
-    }
+    if (this.rejectIfAuthBlocked(req, res)) return false;
 
     const blockMs = this.recordAuthFailure(req);
     if (blockMs > 0) {
@@ -695,6 +703,7 @@ export class WebChannel implements ChannelAdapter {
       sendJSON(res, 401, { error: 'Authentication required' });
       return false;
     }
+    if (this.rejectIfAuthBlocked(req, res)) return false;
 
     // Try bearer token first
     const authHeader = req.headers.authorization;
@@ -733,6 +742,7 @@ export class WebChannel implements ChannelAdapter {
       sendJSON(res, 401, { error: 'Authentication required' });
       return false;
     }
+    if (this.rejectIfAuthBlocked(req, res)) return false;
 
     // Allow bearer header for non-browser SSE clients
     const authHeader = req.headers.authorization;
@@ -748,11 +758,6 @@ export class WebChannel implements ChannelAdapter {
     if (this.validateSessionCookie(req)) {
       this.clearAuthFailures(req);
       return true;
-    }
-
-    const remainingMs = this.getAuthBlockRemainingMs(req);
-    if (remainingMs > 0) {
-      return this.sendAuthBlocked(res, remainingMs);
     }
 
     const blockMs = this.recordAuthFailure(req);
