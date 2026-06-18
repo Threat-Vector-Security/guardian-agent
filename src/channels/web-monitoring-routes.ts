@@ -367,7 +367,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     const rawCurrentMode = trimOptionalString(url.searchParams.get('currentMode'))?.toLowerCase();
     const includeAcknowledged = (url.searchParams.get('includeAcknowledged') ?? 'false').toLowerCase() === 'true';
     if (rawProfile && !isDeploymentProfile(rawProfile)) {
-      sendJSON(res, 400, { error: "profile must be one of 'personal', 'home', or 'organization'" });
+      sendJSON(res, 400, { error: "profile must be one of 'personal', 'home', 'organization', or 'cloud'" });
       return true;
     }
     if (rawCurrentMode && !isSecurityOperatingMode(rawCurrentMode)) {
@@ -392,7 +392,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     const rawProfile = trimOptionalString(url.searchParams.get('profile'))?.toLowerCase();
     const rawCurrentMode = trimOptionalString(url.searchParams.get('currentMode'))?.toLowerCase();
     if (rawProfile && !isDeploymentProfile(rawProfile)) {
-      sendJSON(res, 400, { error: "profile must be one of 'personal', 'home', or 'organization'" });
+      sendJSON(res, 400, { error: "profile must be one of 'personal', 'home', 'organization', or 'cloud'" });
       return true;
     }
     if (rawCurrentMode && !isSecurityOperatingMode(rawCurrentMode)) {

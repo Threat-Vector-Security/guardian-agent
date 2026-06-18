@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assessSecurityPosture } from './security-posture.js';
+import { inferRuntimeDeploymentProfile } from './security-controls.js';
 
 describe('assessSecurityPosture', () => {
   it('stays in monitor when there are no active alerts', () => {
@@ -13,6 +14,21 @@ describe('assessSecurityPosture', () => {
     expect(result.recommendedMode).toBe('monitor');
     expect(result.shouldEscalate).toBe(false);
     expect(result.counts.total).toBe(0);
+  });
+
+  it('adds cloud-runtime security interpretation without changing escalation', () => {
+    const result = assessSecurityPosture({
+      profile: 'cloud',
+      currentMode: 'monitor',
+      alerts: [],
+      availableSources: ['assistant'],
+    });
+
+    expect(result.recommendedMode).toBe('monitor');
+    expect(result.shouldEscalate).toBe(false);
+    expect(result.reasons.join(' ')).toContain('Cloud runtime profile');
+    expect(result.reasons.join(' ')).toContain('platform logs');
+    expect(result.reasons.join(' ')).toContain('managed-runtime boundaries');
   });
 
   it('recommends guarded for a single high alert', () => {
@@ -220,5 +236,15 @@ describe('assessSecurityPosture', () => {
 
     expect(result.recommendedMode).toBe('ir_assist');
     expect(result.shouldEscalate).toBe(true);
+  });
+});
+
+describe('inferRuntimeDeploymentProfile', () => {
+  it('detects Fly.io runtimes as cloud deployments', () => {
+    expect(inferRuntimeDeploymentProfile({ FLY_APP_NAME: 'guardian-agent-example' })).toBe('cloud');
+  });
+
+  it('defaults non-cloud runtimes to personal', () => {
+    expect(inferRuntimeDeploymentProfile({})).toBe('personal');
   });
 });

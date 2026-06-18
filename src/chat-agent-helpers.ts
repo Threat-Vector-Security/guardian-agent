@@ -10,6 +10,7 @@ import { DEFAULT_CONFIG, type GuardianAgentConfig } from './config/types.js';
 import { normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from './config/input-normalization.js';
 import { getProviderLocality } from './llm/provider-metadata.js';
 import type { ChatMessage } from './llm/types.js';
+import type { PromptAssemblyAdditionalSection } from './runtime/context-assembly.js';
 import {
   formatCodeSessionFileReferencesForPrompt,
   resolveCodeSessionFileReferences,
@@ -23,9 +24,9 @@ import {
   DEFAULT_ASSISTANT_SECURITY_AUTO_CONTAINMENT_SEVERITY,
   DEFAULT_ASSISTANT_SECURITY_MONITORING_CRON,
   DEFAULT_ASSISTANT_SECURITY_MONITORING_PROFILE,
-  DEFAULT_DEPLOYMENT_PROFILE,
   DEFAULT_SECURITY_OPERATING_MODE,
   DEFAULT_SECURITY_TRIAGE_LLM_PROVIDER,
+  inferRuntimeDeploymentProfile,
 } from './runtime/security-controls.js';
 import { resolveDegradedFallbackConfig } from './sandbox/security-controls.js';
 import { normalizeCpanelConnectionConfig } from './tools/cloud/cpanel-profile.js';
@@ -82,6 +83,55 @@ function normalizeScheduledEmailBody(body: string | undefined, subject: string):
   if (/^the same as the subject\.?$/i.test(trimmed)) return subject;
   if (/^same as the subject\.?$/i.test(trimmed)) return subject;
   return trimmed;
+}
+
+function describeDeploymentProfile(profile: string): string {
+  switch (profile) {
+    case 'cloud':
+      return 'hosted cloud deployment';
+    case 'home':
+      return 'home or lab runtime';
+    case 'organization':
+      return 'organization-managed runtime';
+    default:
+      return 'personal local runtime';
+  }
+}
+
+function describeRuntimePlatform(env: NodeJS.ProcessEnv): string | undefined {
+  if (env.FLY_APP_NAME || env.FLY_MACHINE_ID) {
+    return env.FLY_APP_NAME ? `Fly.io app ${env.FLY_APP_NAME}` : 'Fly.io';
+  }
+  if (env.K_SERVICE) return `Google Cloud Run service ${env.K_SERVICE}`;
+  if (env.VERCEL) return 'Vercel';
+  if (env.AWS_EXECUTION_ENV) return 'AWS runtime';
+  if (env.WEBSITE_SITE_NAME) return `Azure App Service ${env.WEBSITE_SITE_NAME}`;
+  if (env.RENDER_SERVICE_ID) return 'Render';
+  return undefined;
+}
+
+function buildRuntimeEnvironmentPromptSection(
+  config: GuardianAgentConfig | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): PromptAssemblyAdditionalSection {
+  const profile = config?.assistant.security?.deploymentProfile ?? inferRuntimeDeploymentProfile(env);
+  const platform = describeRuntimePlatform(env);
+  const runtimeLabel = describeDeploymentProfile(profile);
+  return {
+    section: 'runtime_environment',
+    mode: 'explicit',
+    itemCount: 1,
+    content: [
+      '<runtime-environment>',
+      `guardianDeploymentProfile: ${profile}`,
+      `guardianRuntime: ${runtimeLabel}`,
+      ...(platform ? [`runtimePlatform: ${platform}`] : []),
+      'providerLane: The response source/model label is separate from where Guardian itself is running. Managed cloud, Ollama Cloud, frontier, and model names describe the LLM provider for this turn.',
+      'executionSandbox: Coding backends and remote sandboxes are also separate from Guardian runtime. Only claim sandbox execution when an active coding/backend workspace is actually running there.',
+      'securityPosture: Use guardianDeploymentProfile for security recommendations and explain cloud/workstation capability differences instead of assuming local host or filesystem access.',
+      '</runtime-environment>',
+    ].join('\n'),
+  };
 }
 
 function formatDirectCodeSessionLine(
@@ -1775,7 +1825,7 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         enabled: config.assistant.quickActions.enabled,
       },
       security: {
-        deploymentProfile: config.assistant.security?.deploymentProfile ?? DEFAULT_DEPLOYMENT_PROFILE,
+        deploymentProfile: config.assistant.security?.deploymentProfile ?? inferRuntimeDeploymentProfile(),
         operatingMode: config.assistant.security?.operatingMode ?? DEFAULT_SECURITY_OPERATING_MODE,
         triageLlmProvider: config.assistant.security?.triageLlmProvider ?? DEFAULT_SECURITY_TRIAGE_LLM_PROVIDER,
         continuousMonitoring: {
@@ -1950,6 +2000,7 @@ export {
   formatToolThreatWarnings,
   formatToolResultForLLM,
   getCodeSessionPromptRelativePath,
+  buildRuntimeEnvironmentPromptSection,
   isAffirmativeContinuation,
   isRecord,
   mergeCloudConfigForValidation,

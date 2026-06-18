@@ -30,6 +30,7 @@ import {
   isConversationTranscriptReferenceRequest,
   isExplicitExternalPromptInjectionRequest,
   isExplicitRepoInspectionRequest,
+  isExplicitSecurityPostureRequest,
   isRawCredentialDisclosureRequest,
   requestNeedsExactFileReferences,
 } from './request-patterns.js';
@@ -883,6 +884,23 @@ function synthesizeIntentGatewayPlannedSteps(input: {
     return buildRepoMutationPlannedSteps(input);
   }
 
+  if (input.route === 'security_task' && isExplicitSecurityPostureRequest(sourceContent)) {
+    return [
+      {
+        kind: 'tool_call',
+        summary: 'Read current Guardian security posture and active security alert status.',
+        required: true,
+        expectedToolCategories: ['security_posture_status'],
+      },
+      {
+        kind: 'answer',
+        summary: 'Summarize the security posture and operating-mode recommendation from the tool result.',
+        required: true,
+        dependsOn: ['step_1'],
+      },
+    ];
+  }
+
   const sequentialClauses = splitSequentialRequestClauses(sourceContent);
   if (sequentialClauses.length >= 2) {
     return sequentialClauses.map((summary, index) => {
@@ -1423,8 +1441,19 @@ function isToolBackedEvidenceCategory(category: string): boolean {
     || isDocumentSearchEvidenceCategory(normalized)
     || isProviderStatusEvidenceCategory(normalized)
     || isWebEvidenceCategory(normalized)
+    || isGeneralToolEvidenceCategory(normalized)
     || normalized === 'second_brain'
     || normalized.startsWith('second_brain_');
+}
+
+function isGeneralToolEvidenceCategory(category: string): boolean {
+  return category === 'cloud'
+    || category === 'cloud_profile_list'
+    || category === 'shell'
+    || category === 'shell_safe'
+    || category === 'package_install'
+    || category === 'forum'
+    || category === 'forum_post';
 }
 
 function buildSearchQueryClarification(input: {

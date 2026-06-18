@@ -22,6 +22,10 @@ channels:
       rotateOnStartup: false
 
 assistant:
+  security:
+    deploymentProfile: cloud
+    operatingMode: monitor
+    triageLlmProvider: auto
   hostMonitoring:
     enabled: false
   gatewayMonitoring:

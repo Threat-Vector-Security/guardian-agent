@@ -170,6 +170,12 @@ export function assessSecurityPosture(input: SecurityPostureAssessmentInput): Se
   if (availableSources.length === 0) {
     reasons.push('No alert sources are currently available, so recommendations are based on limited visibility.');
   }
+  if (input.profile === 'cloud') {
+    const hasHostVisibility = availableSources.includes('host') || availableSources.includes('native');
+    reasons.push(hasHostVisibility
+      ? 'Cloud runtime profile: interpret host findings as container or platform signals, not workstation ownership by default.'
+      : 'Cloud runtime profile: local workstation sensors may be unavailable, so prioritize platform logs, ingress, secrets, deployment controls, and managed-runtime boundaries.');
+  }
 
   const shouldEscalate = MODE_RANK[recommendedMode] > MODE_RANK[input.currentMode];
   const summary = buildSummary({

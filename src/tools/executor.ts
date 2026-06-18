@@ -20,6 +20,7 @@ import {
 } from '../guardian/shell-validator.js';
 import { normalizeHttpUrlInput, normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from '../config/input-normalization.js';
 import type { ThreatIntelService } from '../runtime/threat-intel.js';
+import type { DeploymentProfile, SecurityOperatingMode } from '../runtime/security-controls.js';
 import type {
   AiSecurityRunSource,
   AiSecurityScanResult,
@@ -642,6 +643,11 @@ export interface ToolExecutorOptions {
   windowsDefender?: WindowsDefenderProvider;
   /** Security containment evaluation for effective mode and bounded response state. */
   containmentService?: ContainmentService;
+  /** Security posture defaults from runtime config/environment; explicit tool args still win. */
+  securityDefaults?: () => {
+    profile: DeploymentProfile;
+    currentMode: SecurityOperatingMode;
+  };
   /** Network feature configuration. */
   networkConfig?: AssistantNetworkConfig;
   /** External coding CLI backend orchestration service. */
@@ -6209,6 +6215,7 @@ export class ToolExecutor {
       networkBaseline: this.options.networkBaseline,
       packageInstallTrust: this.options.packageInstallTrust,
       containmentService: this.options.containmentService,
+      securityDefaults: this.options.securityDefaults,
     });
 
     registerBuiltinNetworkSystemTools({

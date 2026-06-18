@@ -112,9 +112,11 @@ import {
 import {
   DEFAULT_ASSISTANT_SECURITY_MONITORING_CRON,
   DEFAULT_ASSISTANT_SECURITY_MONITORING_PROFILE,
-  DEFAULT_DEPLOYMENT_PROFILE,
   DEFAULT_SECURITY_OPERATING_MODE,
   DEFAULT_SECURITY_TRIAGE_LLM_PROVIDER,
+  inferRuntimeDeploymentProfile,
+  type DeploymentProfile,
+  type SecurityOperatingMode,
 } from './runtime/security-controls.js';
 import { buildChatProviderSelectorOptions } from './runtime/chat-provider-selection.js';
 import { ContainmentService } from './runtime/containment-service.js';
@@ -660,8 +662,8 @@ function buildDashboardCallbacks(
   containmentService: ContainmentService,
   securityActivityLog: SecurityActivityLogService,
   getSecurityContainmentInputs: () => {
-    profile: 'personal' | 'home' | 'organization';
-    currentMode: 'monitor' | 'guarded' | 'lockdown' | 'ir_assist';
+    profile: DeploymentProfile;
+    currentMode: SecurityOperatingMode;
     alerts: ReturnType<typeof collectUnifiedSecurityAlerts>;
     posture: ReturnType<typeof assessSecurityPosture>;
   },
@@ -4438,7 +4440,7 @@ async function main(): Promise<void> {
 
   const getSecurityContainmentInputs = () => {
     const configuredSecurity = configRef.current.assistant.security;
-    const profile = configuredSecurity?.deploymentProfile ?? DEFAULT_DEPLOYMENT_PROFILE;
+    const profile = configuredSecurity?.deploymentProfile ?? inferRuntimeDeploymentProfile();
     const currentMode = configuredSecurity?.operatingMode ?? DEFAULT_SECURITY_OPERATING_MODE;
     const assistantAutoContainment = configuredSecurity?.autoContainment;
     const alerts = collectUnifiedSecurityAlerts({
@@ -5002,6 +5004,12 @@ async function main(): Promise<void> {
     allowedCommands: config.assistant.tools.allowedCommands,
     allowedDomains: config.assistant.tools.allowedDomains,
     allowExternalPosting: config.assistant.tools.allowExternalPosting,
+    securityDefaults: () => ({
+      profile: configRef.current.assistant.security?.deploymentProfile
+        ?? inferRuntimeDeploymentProfile(),
+      currentMode: configRef.current.assistant.security?.operatingMode
+        ?? DEFAULT_SECURITY_OPERATING_MODE,
+    }),
     deliverMessage: async (channel, targetId, content) => {
       if (deliverMessageClosure) {
         return deliverMessageClosure(channel, targetId, content);

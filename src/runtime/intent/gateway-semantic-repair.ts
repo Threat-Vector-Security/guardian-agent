@@ -33,6 +33,7 @@ import {
   isExplicitCodingSessionControlRequest,
   isExplicitComplexPlanningRequest,
   isExplicitExternalPromptInjectionRequest,
+  isExplicitSecurityPostureRequest,
   isExplicitRepoInspectionRequest,
   isExplicitRepoPlanningRequest,
   isExplicitWorkspaceScopedRepoWorkRequest,
@@ -70,6 +71,7 @@ export function repairStructuredIntentGatewayRoute(
   const explicitProviderConfig = isExplicitProviderConfigRequest(rawSourceContent);
   const rawCredentialDisclosure = isRawCredentialDisclosureRequest(rawSourceContent);
   const externalPromptInjection = isExplicitExternalPromptInjectionRequest(rawSourceContent);
+  const explicitSecurityPosture = isExplicitSecurityPostureRequest(rawSourceContent);
   const explicitCodingSessionControl = isExplicitCodingSessionControlRequest(rawSourceContent);
   const explicitCodingBackendResume = isExplicitCodingBackendResumeRequest(rawSourceContent);
   const explicitCodingExecution = isExplicitCodingExecutionRequest(rawSourceContent);
@@ -121,6 +123,9 @@ export function repairStructuredIntentGatewayRoute(
     return 'automation_control';
   }
   if (rawCredentialDisclosure || externalPromptInjection) {
+    return 'security_task';
+  }
+  if ((route === 'unknown' || route === 'general_assistant') && explicitSecurityPosture) {
     return 'security_task';
   }
   if (
@@ -298,6 +303,9 @@ export function repairStructuredIntentGatewayOperation(
     return 'read';
   }
   if (route === 'security_task' && isExplicitExternalPromptInjectionRequest(rawSourceContent)) {
+    return 'inspect';
+  }
+  if (route === 'security_task' && isExplicitSecurityPostureRequest(rawSourceContent)) {
     return 'inspect';
   }
   if (route === 'coding_session_control' && isManagedSandboxStatusInspectionRequest(rawSourceContent, normalizedSourceContent)) {

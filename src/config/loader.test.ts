@@ -176,7 +176,7 @@ describe('validateConfig', () => {
       },
     };
 
-    expect(validateConfig(config)).toContain('assistant.security.deploymentProfile must be one of: personal, home, organization');
+    expect(validateConfig(config)).toContain('assistant.security.deploymentProfile must be one of: personal, home, organization, cloud');
     expect(validateConfig(config)).toContain('assistant.security.operatingMode must be one of: monitor, guarded, lockdown, ir_assist');
     expect(validateConfig(config)).toContain('assistant.security.triageLlmProvider must be one of: auto, local, external');
   });
@@ -1455,6 +1455,39 @@ runtime:
     expect(config.runtime.maxStallDurationMs).toBe(180_000); // from default
   });
 
+  it('infers cloud deployment profile from Fly env when the config omits it', () => {
+    vi.stubEnv('FLY_APP_NAME', 'guardian-agent-example');
+    const configPath = join(TEST_DIR, 'fly-profile.yaml');
+    writeFileSync(
+      configPath,
+      `
+runtime:
+  logLevel: info
+`,
+    );
+
+    const config = loadConfigFromFile(configPath);
+    expect(config.assistant.security?.deploymentProfile).toBe('cloud');
+    vi.unstubAllEnvs();
+  });
+
+  it('preserves an explicit deployment profile in cloud runtime envs', () => {
+    vi.stubEnv('FLY_APP_NAME', 'guardian-agent-example');
+    const configPath = join(TEST_DIR, 'explicit-profile.yaml');
+    writeFileSync(
+      configPath,
+      `
+assistant:
+  security:
+    deploymentProfile: personal
+`,
+    );
+
+    const config = loadConfigFromFile(configPath);
+    expect(config.assistant.security?.deploymentProfile).toBe('personal');
+    vi.unstubAllEnvs();
+  });
+
   it('should interpolate environment variables', () => {
     vi.stubEnv('TEST_OLLAMA_MODEL', 'codellama');
     const configPath = join(TEST_DIR, 'config.yaml');
@@ -1966,5 +1999,12 @@ describe('loadConfig', () => {
   it('should return defaults when no config file exists', () => {
     const config = loadConfig('/nonexistent/path/config.yaml');
     expect(config).toEqual(DEFAULT_CONFIG);
+  });
+
+  it('infers cloud deployment profile for missing config files on Fly', () => {
+    vi.stubEnv('FLY_MACHINE_ID', 'machine-example');
+    const config = loadConfig('/nonexistent/path/config.yaml');
+    expect(config.assistant.security?.deploymentProfile).toBe('cloud');
+    vi.unstubAllEnvs();
   });
 });

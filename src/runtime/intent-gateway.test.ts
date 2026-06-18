@@ -5349,6 +5349,38 @@ describe('IntentGateway', () => {
     expect(result.decision.summary).toContain('What should I check?');
   });
 
+  it('repairs current security posture requests away from generic direct chat', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Show the current Guardian security posture in a concise, operator-friendly paragraph. Do not change settings.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'general_assistant',
+          operation: 'read',
+          confidence: 'low',
+          summary: 'Answer the user directly.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          executionClass: 'direct_assistant',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          preferredAnswerPath: 'direct',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('security_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.entities.toolName).toBe('security_posture_status');
+    expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
+    expect(result.decision.plannedSteps?.[0]?.expectedToolCategories).toEqual(['security_posture_status']);
+  });
+
   it('asks what to search for when memory routing targets an unresolved prior thing', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

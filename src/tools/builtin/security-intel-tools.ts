@@ -11,7 +11,13 @@ import type { WindowsDefenderProvider } from '../../runtime/windows-defender-pro
 import type { NetworkBaselineService } from '../../runtime/network-baseline.js';
 import type { PackageInstallTrustService } from '../../runtime/package-install-trust-service.js';
 import type { ContainmentService } from '../../runtime/containment-service.js';
-import { assessSecurityPosture, isDeploymentProfile, isSecurityOperatingMode } from '../../runtime/security-posture.js';
+import {
+  assessSecurityPosture,
+  isDeploymentProfile,
+  isSecurityOperatingMode,
+  type DeploymentProfile,
+  type SecurityOperatingMode,
+} from '../../runtime/security-posture.js';
 import {
   acknowledgeUnifiedSecurityAlert,
   availableSecurityAlertSources,
@@ -53,6 +59,10 @@ interface SecurityIntelToolRegistrarContext {
   networkBaseline?: NetworkBaselineService;
   packageInstallTrust?: PackageInstallTrustService;
   containmentService?: ContainmentService;
+  securityDefaults?: () => {
+    profile: DeploymentProfile;
+    currentMode: SecurityOperatingMode;
+  };
 }
 
 export function registerBuiltinSecurityIntelTools(context: SecurityIntelToolRegistrarContext): void {
@@ -777,18 +787,19 @@ export function registerBuiltinSecurityIntelTools(context: SecurityIntelToolRegi
       parameters: {
         type: 'object',
         properties: {
-          profile: { type: 'string', description: 'Deployment profile: personal, home, or organization. Defaults to personal.' },
-          currentMode: { type: 'string', description: 'Current operating mode: monitor, guarded, lockdown, or ir_assist. Defaults to monitor.' },
+          profile: { type: 'string', description: 'Deployment profile: personal, home, organization, or cloud. Defaults to the running app profile.' },
+          currentMode: { type: 'string', description: 'Current operating mode: monitor, guarded, lockdown, or ir_assist. Defaults to the configured mode.' },
           includeAcknowledged: { type: 'boolean', description: 'Include acknowledged alerts when assessing posture (default false).' },
         },
       },
     },
     async (args, request) => {
-      const profileRaw = context.asString(args.profile, 'personal').trim().toLowerCase() || 'personal';
+      const defaults = resolveSecurityDefaults(context);
+      const profileRaw = context.asString(args.profile, defaults.profile).trim().toLowerCase() || defaults.profile;
       if (!isDeploymentProfile(profileRaw)) {
-        return { success: false, error: "Profile must be one of 'personal', 'home', or 'organization'." };
+        return { success: false, error: "Profile must be one of 'personal', 'home', 'organization', or 'cloud'." };
       }
-      const modeRaw = context.asString(args.currentMode, 'monitor').trim().toLowerCase() || 'monitor';
+      const modeRaw = context.asString(args.currentMode, defaults.currentMode).trim().toLowerCase() || defaults.currentMode;
       if (!isSecurityOperatingMode(modeRaw)) {
         return { success: false, error: "currentMode must be one of 'monitor', 'guarded', 'lockdown', or 'ir_assist'." };
       }
@@ -831,8 +842,8 @@ export function registerBuiltinSecurityIntelTools(context: SecurityIntelToolRegi
       parameters: {
         type: 'object',
         properties: {
-          profile: { type: 'string', description: 'Deployment profile: personal, home, or organization. Defaults to personal.' },
-          currentMode: { type: 'string', description: 'Current operating mode: monitor, guarded, lockdown, or ir_assist. Defaults to monitor.' },
+          profile: { type: 'string', description: 'Deployment profile: personal, home, organization, or cloud. Defaults to the running app profile.' },
+          currentMode: { type: 'string', description: 'Current operating mode: monitor, guarded, lockdown, or ir_assist. Defaults to the configured mode.' },
         },
       },
     },
@@ -840,11 +851,12 @@ export function registerBuiltinSecurityIntelTools(context: SecurityIntelToolRegi
       if (!context.containmentService) {
         return { success: false, error: 'Security containment is not available.' };
       }
-      const profileRaw = context.asString(args.profile, 'personal').trim().toLowerCase() || 'personal';
+      const defaults = resolveSecurityDefaults(context);
+      const profileRaw = context.asString(args.profile, defaults.profile).trim().toLowerCase() || defaults.profile;
       if (!isDeploymentProfile(profileRaw)) {
-        return { success: false, error: "Profile must be one of 'personal', 'home', or 'organization'." };
+        return { success: false, error: "Profile must be one of 'personal', 'home', 'organization', or 'cloud'." };
       }
-      const modeRaw = context.asString(args.currentMode, 'monitor').trim().toLowerCase() || 'monitor';
+      const modeRaw = context.asString(args.currentMode, defaults.currentMode).trim().toLowerCase() || defaults.currentMode;
       if (!isSecurityOperatingMode(modeRaw)) {
         return { success: false, error: "currentMode must be one of 'monitor', 'guarded', 'lockdown', or 'ir_assist'." };
       }
@@ -1065,4 +1077,11 @@ function buildSecurityAlertServices(context: SecurityIntelToolRegistrarContext):
     assistantSecurity: context.assistantSecurity,
     packageInstallTrust: context.packageInstallTrust,
   };
+}
+
+function resolveSecurityDefaults(context: SecurityIntelToolRegistrarContext): {
+  profile: DeploymentProfile;
+  currentMode: SecurityOperatingMode;
+} {
+  return context.securityDefaults?.() ?? { profile: 'personal', currentMode: 'monitor' };
 }

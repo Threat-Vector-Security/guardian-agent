@@ -11752,6 +11752,32 @@ describe('ToolExecutor', () => {
       });
     });
 
+    it('uses runtime security defaults when posture args are omitted', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+        securityDefaults: () => ({ profile: 'cloud', currentMode: 'guarded' }),
+      });
+
+      const result = await executor.runTool({
+        toolName: 'security_posture_status',
+        args: {},
+        origin: 'cli',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toMatchObject({
+        profile: 'cloud',
+        currentMode: 'guarded',
+      });
+    });
+
     it('validates security posture tool inputs', async () => {
       const root = createExecutorRoot();
       const executor = new ToolExecutor({
@@ -11770,7 +11796,7 @@ describe('ToolExecutor', () => {
         origin: 'cli',
       });
       expect(badProfile.success).toBe(false);
-      expect(String((badProfile as any).error ?? (badProfile as any).message)).toContain("Profile must be one of 'personal', 'home', or 'organization'.");
+      expect(String((badProfile as any).error ?? (badProfile as any).message)).toContain("Profile must be one of 'personal', 'home', 'organization', or 'cloud'.");
 
       const badMode = await executor.runTool({
         toolName: 'security_posture_status',

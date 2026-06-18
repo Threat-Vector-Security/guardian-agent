@@ -25,6 +25,7 @@ import {
   normalizePersonalItemType,
 } from './entity-resolvers/personal-assistant.js';
 import { isExplicitProviderConfigRequest } from './entity-resolvers/provider-config.js';
+import { isExplicitSecurityPostureRequest } from './request-patterns.js';
 import {
   normalizeCalendarTarget,
   normalizeAutomationReadView,
@@ -319,7 +320,9 @@ export function resolveIntentGatewayEntities(
     : undefined;
   const inferredToolName = parsedToolName
     ? undefined
-    : findExplicitBuiltinToolName(rawSourceContent);
+    : route === 'security_task' && isExplicitSecurityPostureRequest(rawSourceContent)
+      ? 'security_posture_status'
+      : findExplicitBuiltinToolName(rawSourceContent);
   const toolName = parsedToolName ?? inferredToolName;
   if (toolName) {
     provenance.toolName = parsedToolName

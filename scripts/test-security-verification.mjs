@@ -261,6 +261,7 @@ async function main() {
       'llm:',
       '  ollama:',
       '    provider: ollama',
+      '    enabled: true',
       `    baseUrl: "http://127.0.0.1:${llmPort}"`,
       `    model: ${harnessModel}`,
       'defaultProvider: ollama',

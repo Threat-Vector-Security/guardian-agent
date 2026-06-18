@@ -8,6 +8,7 @@ import type { ChatMessage, LLMProvider } from './llm/types.js';
 import { composeGuardianSystemPrompt } from './prompts/guardian-core.js';
 import { composeCodeSessionSystemPrompt } from './prompts/code-session-core.js';
 import {
+  buildRuntimeEnvironmentPromptSection,
   buildCodeSessionWorkspaceAwarenessQuery,
   compactQuarantinedToolResult,
   getCodeSessionPromptRelativePath,
@@ -468,9 +469,11 @@ interface DegradedDirectIntentResponseInput {
     executionProfile?: SelectedExecutionProfile | null,
     seedSections?: PromptAssemblyAdditionalSection[],
   ): PromptAssemblyAdditionalSection[] | undefined {
+    const runtimeEnvironmentSection = buildRuntimeEnvironmentPromptSection(this.readConfig?.());
     const sections: PromptAssemblyAdditionalSection[] = [
       ...(seedSections ?? []),
       ...(skillPromptMaterial?.additionalSections ?? []),
+      runtimeEnvironmentSection,
     ];
     const routedIntentSection = buildRoutedIntentAdditionalSection(intentDecision);
     if (routedIntentSection && !sections.some((section) => section.section === routedIntentSection.section)) {
@@ -1830,17 +1833,17 @@ interface DegradedDirectIntentResponseInput {
       ? []
       : (this.tools?.getRuntimeNotices() ?? [])
           .slice(0, Math.max(0, selectedExecutionProfile?.maxRuntimeNotices ?? Number.MAX_SAFE_INTEGER));
-    const promptAdditionalSections = useMinimalDirectAssistantContext
-      ? []
-      : this.buildPromptAdditionalSections(
-          skillPromptMaterial,
-          earlyGateway?.decision,
-          selectedExecutionProfile,
-          (() => {
+    const promptAdditionalSections = this.buildPromptAdditionalSections(
+      useMinimalDirectAssistantContext ? undefined : skillPromptMaterial,
+      useMinimalDirectAssistantContext ? undefined : earlyGateway?.decision,
+      selectedExecutionProfile,
+      useMinimalDirectAssistantContext
+        ? undefined
+        : (() => {
             const section = buildReferencedCodeSessionsSectionForPrompt(activeSkills, earlyGateway);
             return section ? [section] : undefined;
           })(),
-        );
+    );
     const baseSystemPrompt = enrichedSystemPrompt;
     enrichedSystemPrompt = this.buildAssembledSystemPrompt({
       baseSystemPrompt,
@@ -2043,6 +2046,7 @@ interface DegradedDirectIntentResponseInput {
           selectedExecutionProfile,
           promptKnowledge: {
             ...promptKnowledge,
+            additionalSections: promptAdditionalSections,
             toolContext: directToolContext,
             runtimeNotices: directRuntimeNotices,
           },

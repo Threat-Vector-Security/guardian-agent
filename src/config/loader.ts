@@ -34,6 +34,7 @@ import {
   isAssistantSecurityAutoContainmentSeverity,
   isAssistantSecurityMonitoringProfile,
   isDeploymentProfile,
+  inferRuntimeDeploymentProfile,
   isSecurityOperatingMode,
   isSecurityTriageLlmProvider,
 } from '../runtime/security-controls.js';
@@ -132,6 +133,40 @@ function hasExplicitPreferredProviderOverride(
     && typeof preferredProviders === 'object'
     && !Array.isArray(preferredProviders)
     && Object.prototype.hasOwnProperty.call(preferredProviders, key);
+}
+
+function hasExplicitDeploymentProfile(config: Partial<GuardianAgentConfig>): boolean {
+  const security = config.assistant?.security;
+  return !!security
+    && typeof security === 'object'
+    && !Array.isArray(security)
+    && Object.prototype.hasOwnProperty.call(security, 'deploymentProfile');
+}
+
+function applyRuntimeDeploymentProfileDefault(
+  config: GuardianAgentConfig,
+  source: Partial<GuardianAgentConfig>,
+): GuardianAgentConfig {
+  if (hasExplicitDeploymentProfile(source)) {
+    return config;
+  }
+
+  const inferredProfile = inferRuntimeDeploymentProfile();
+  if (inferredProfile === config.assistant.security?.deploymentProfile) {
+    return config;
+  }
+
+  return {
+    ...config,
+    assistant: {
+      ...config.assistant,
+      security: {
+        ...DEFAULT_CONFIG.assistant.security!,
+        ...config.assistant.security,
+        deploymentProfile: inferredProfile,
+      },
+    },
+  };
 }
 
 function alignImplicitLocalPreferredProvider(
@@ -611,7 +646,7 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   }
 
   if (assistant.security?.deploymentProfile && !isDeploymentProfile(assistant.security.deploymentProfile)) {
-    errors.push("assistant.security.deploymentProfile must be one of: personal, home, organization");
+    errors.push("assistant.security.deploymentProfile must be one of: personal, home, organization, cloud");
   }
   if (assistant.security?.operatingMode && !isSecurityOperatingMode(assistant.security.operatingMode)) {
     errors.push("assistant.security.operatingMode must be one of: monitor, guarded, lockdown, ir_assist");
@@ -1738,6 +1773,8 @@ export function loadConfigFromFile(filePath: string, options?: ConfigLoadOptions
     merged.assistant.tools.search.sources = [];
   }
 
+  merged = applyRuntimeDeploymentProfileDefault(merged, interpolated);
+
   // Resolve unified operator controls (sandbox_mode, approval_policy, writable_roots)
   merged = resolveUnifiedOperatorControls(merged);
 
@@ -1844,7 +1881,10 @@ export function loadConfig(filePath?: string, options?: ConfigLoadOptions): Guar
 
   if (!existsSync(path)) {
     // No config file — return defaults
-    const fallback = structuredClone(DEFAULT_CONFIG);
+    const fallback = applyRuntimeDeploymentProfileDefault(
+      structuredClone(DEFAULT_CONFIG),
+      {},
+    );
     applyDerivedDefaultProvider(fallback);
     enforceSecurityBaseline(fallback, 'config_file');
     return fallback;

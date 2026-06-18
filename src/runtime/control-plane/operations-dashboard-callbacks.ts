@@ -23,9 +23,9 @@ import {
 } from '../security-alerts.js';
 import type { SecurityAlertSeverity, SecurityAlertSource } from '../security-alerts.js';
 import { isSecurityAlertStatus } from '../security-alert-lifecycle.js';
-import {
-  DEFAULT_DEPLOYMENT_PROFILE,
-  DEFAULT_SECURITY_OPERATING_MODE,
+import type {
+  DeploymentProfile,
+  SecurityOperatingMode,
 } from '../security-controls.js';
 import { assessSecurityPosture } from '../security-posture.js';
 import type { WindowsDefenderProvider, WindowsDefenderProviderStatus } from '../windows-defender-provider.js';
@@ -96,8 +96,8 @@ interface OperationsDashboardCallbackOptions {
   runGatewayMonitoring: (source: string) => Promise<GatewayMonitorReport>;
   runWindowsDefenderRefresh: (source: string) => Promise<WindowsDefenderProviderStatus>;
   getSecurityContainmentInputs: () => {
-    profile: 'personal' | 'home' | 'organization';
-    currentMode: 'monitor' | 'guarded' | 'lockdown' | 'ir_assist';
+    profile: DeploymentProfile;
+    currentMode: SecurityOperatingMode;
     alerts: ReturnType<typeof collectUnifiedSecurityAlerts>;
     posture: ReturnType<typeof assessSecurityPosture>;
   };
@@ -441,12 +441,13 @@ export function createOperationsDashboardCallbacks(
 
       onSecurityPosture: (args) => {
         const configuredSecurity = options.configRef.current.assistant.security;
+        const base = options.getSecurityContainmentInputs();
         const profile = args?.profile
           ?? configuredSecurity?.deploymentProfile
-          ?? DEFAULT_DEPLOYMENT_PROFILE;
+          ?? base.profile;
         const currentMode = args?.currentMode
           ?? configuredSecurity?.operatingMode
-          ?? DEFAULT_SECURITY_OPERATING_MODE;
+          ?? base.currentMode;
         const alerts = collectSecurityAlerts({
           includeAcknowledged: !!args?.includeAcknowledged,
           includeInactive: false,

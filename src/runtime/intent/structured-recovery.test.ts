@@ -1294,6 +1294,41 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.plannedSteps?.map((step) => step.kind)).toEqual(['answer']);
   });
 
+  it('repairs current security posture reads into a posture tool plan', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'low',
+      operation: 'read',
+      summary: 'Answer the user directly.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'direct_assistant',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+    }, {
+      sourceContent: 'Show the current Guardian security posture in a concise, operator-friendly paragraph. Do not change settings.',
+    });
+
+    expect(decision.route).toBe('security_task');
+    expect(decision.operation).toBe('inspect');
+    expect(decision.entities.toolName).toBe('security_posture_status');
+    expect(decision.requiresRepoGrounding).toBe(false);
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.plannedSteps?.[0]).toEqual(expect.objectContaining({
+      kind: 'tool_call',
+      expectedToolCategories: ['security_posture_status'],
+    }));
+    expect(decision.plannedSteps?.[1]).toEqual(expect.objectContaining({
+      kind: 'answer',
+      dependsOn: ['step_1'],
+    }));
+  });
+
   it('moves exact-file requirements onto gateway-owned decision state', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'coding_task',
@@ -2250,6 +2285,73 @@ describe('normalizeIntentGatewayDecision', () => {
 
     expect(decision.operation).toBe('run');
     expect(decision.provenance?.operation).not.toBe('derived.workload');
+  });
+
+  it('repairs cloud profile evidence plans from unknown to tool-backed general assistant', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'unknown',
+      confidence: 'low',
+      operation: 'unknown',
+      summary: 'List configured cloud hosting profiles.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'List configured cloud and hosting profiles.',
+          expectedToolCategories: ['cloud_profile_list'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Summarize the configured profiles without changing them.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Tell me which cloud hosting profiles are configured, but do not change anything.',
+    });
+
+    expect(decision.route).toBe('general_assistant');
+    expect(decision.operation).toBe('inspect');
+    expect(decision.executionClass).toBe('tool_orchestration');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
+  it('keeps explicit shell tool evidence as tool-backed general assistant work', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'unknown',
+      confidence: 'low',
+      operation: 'run',
+      toolName: 'shell_safe',
+      summary: 'Run a safe shell command.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      plannedSteps: [
+        {
+          kind: 'tool_call',
+          summary: 'Run the safe shell command.',
+          expectedToolCategories: ['shell_safe'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Report the command output.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Run a safe shell command to print the working directory; do not mutate files.',
+    });
+
+    expect(decision.route).toBe('general_assistant');
+    expect(decision.operation).toBe('run');
+    expect(decision.entities.toolName).toBe('shell_safe');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
   });
 
   it('routes automation evidence plus answer plans through tool-backed synthesis even when the classifier says direct', () => {

@@ -1,4 +1,4 @@
-export type DeploymentProfile = 'personal' | 'home' | 'organization';
+export type DeploymentProfile = 'personal' | 'home' | 'organization' | 'cloud';
 export type SecurityOperatingMode = 'monitor' | 'guarded' | 'lockdown' | 'ir_assist';
 export type SecurityTriageLlmProvider = 'local' | 'external' | 'auto';
 export type AssistantSecurityMonitoringProfile = 'quick' | 'runtime-hardening' | 'workspace-boundaries';
@@ -24,7 +24,7 @@ export const DEFAULT_ASSISTANT_SECURITY_AUTO_CONTAINMENT_CATEGORIES: readonly As
   'mcp',
 ];
 
-export const DEPLOYMENT_PROFILES: readonly DeploymentProfile[] = ['personal', 'home', 'organization'];
+export const DEPLOYMENT_PROFILES: readonly DeploymentProfile[] = ['personal', 'home', 'organization', 'cloud'];
 export const SECURITY_OPERATING_MODES: readonly SecurityOperatingMode[] = ['monitor', 'guarded', 'lockdown', 'ir_assist'];
 export const SECURITY_TRIAGE_LLM_PROVIDERS: readonly SecurityTriageLlmProvider[] = ['auto', 'local', 'external'];
 export const ASSISTANT_SECURITY_MONITORING_PROFILES: readonly AssistantSecurityMonitoringProfile[] = ['quick', 'runtime-hardening', 'workspace-boundaries'];
@@ -40,6 +40,12 @@ export const ASSISTANT_SECURITY_AUTO_CONTAINMENT_CATEGORIES: readonly AssistantS
 
 export function isDeploymentProfile(value: string): value is DeploymentProfile {
   return DEPLOYMENT_PROFILES.includes(value as DeploymentProfile);
+}
+
+export function inferRuntimeDeploymentProfile(env: NodeJS.ProcessEnv = process.env): DeploymentProfile {
+  return env.FLY_APP_NAME || env.FLY_MACHINE_ID || env.K_SERVICE || env.VERCEL || env.AWS_EXECUTION_ENV || env.WEBSITE_SITE_NAME || env.RENDER_SERVICE_ID
+    ? 'cloud'
+    : DEFAULT_DEPLOYMENT_PROFILE;
 }
 
 export function isSecurityOperatingMode(value: string): value is SecurityOperatingMode {

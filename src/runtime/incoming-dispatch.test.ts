@@ -1024,7 +1024,7 @@ describe('createIncomingDispatchPreparer', () => {
       agentId: 'chat',
       userId: 'owner',
       channel: expectedChannel,
-    }, expect.any(Object));
+    }, undefined);
   });
 
   it('classifies ordinary channel-default turns before dispatching to the configured agent', async () => {
