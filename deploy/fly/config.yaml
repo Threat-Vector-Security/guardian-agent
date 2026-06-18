@@ -22,6 +22,9 @@ channels:
       rotateOnStartup: false
 
 assistant:
+  secondBrain:
+    profile:
+      timezone: Australia/Brisbane
   security:
     deploymentProfile: cloud
     operatingMode: monitor

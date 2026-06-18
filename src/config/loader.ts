@@ -51,6 +51,15 @@ function isTimeOfDayInput(value: string | undefined): boolean {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value.trim());
 }
 
+function isValidTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Default config file path. */
 export const DEFAULT_CONFIG_PATH = join(getGuardianBaseDir(), 'config.yaml');
 
@@ -605,8 +614,13 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (typeof assistant.secondBrain.onboarding?.dismissed !== 'boolean') {
     errors.push('assistant.secondBrain.onboarding.dismissed must be a boolean');
   }
-  if (assistant.secondBrain.profile?.timezone !== undefined && !assistant.secondBrain.profile.timezone.trim()) {
-    errors.push('assistant.secondBrain.profile.timezone must be a non-empty string when set');
+  if (assistant.secondBrain.profile?.timezone !== undefined) {
+    const timezone = assistant.secondBrain.profile.timezone.trim();
+    if (!timezone) {
+      errors.push('assistant.secondBrain.profile.timezone must be a non-empty string when set');
+    } else if (!isValidTimeZone(timezone)) {
+      errors.push('assistant.secondBrain.profile.timezone must be a valid IANA timezone such as Australia/Brisbane');
+    }
   }
   if (assistant.secondBrain.profile?.workdayStart !== undefined && !isTimeOfDayInput(assistant.secondBrain.profile.workdayStart)) {
     errors.push('assistant.secondBrain.profile.workdayStart must be in HH:MM 24-hour format');

@@ -5229,6 +5229,7 @@ function createIntegrationOverview(config, authStatus) {
 function getSecondBrainSettingsView(config = sharedConfig) {
   const secondBrain = config?.assistant?.secondBrain || {};
   const responseStyle = config?.assistant?.responseStyle || {};
+  const browserTimeZone = getBrowserTimeZone();
   const defaultChannels = Array.isArray(secondBrain.delivery?.defaultChannels)
     ? [...new Set(secondBrain.delivery.defaultChannels.filter((channel) => channel === 'web' || channel === 'cli' || channel === 'telegram'))]
     : [];
@@ -5241,11 +5242,24 @@ function getSecondBrainSettingsView(config = sharedConfig) {
     delivery: {
       defaultChannels: defaultChannels.length ? defaultChannels : ['web'],
     },
+    profile: {
+      timezone: typeof secondBrain.profile?.timezone === 'string' && secondBrain.profile.timezone.trim()
+        ? secondBrain.profile.timezone.trim()
+        : browserTimeZone,
+    },
     responseStyle: {
       enabled: responseStyle.enabled !== false,
       level: responseStyle.level || 'balanced',
     },
   };
+}
+
+function getBrowserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
 }
 
 function resolveSecondBrainOnboardingMode(secondBrainView) {
@@ -5257,6 +5271,7 @@ function resolveSecondBrainOnboardingMode(secondBrainView) {
 function buildRecommendedSecondBrainPatch(config = sharedConfig, options = {}) {
   const telegramEnabled = config?.channels?.telegram?.enabled === true;
   const markCompleted = options.markCompleted !== false;
+  const timezone = getBrowserTimeZone();
   return {
     assistant: {
       responseStyle: {
@@ -5269,6 +5284,7 @@ function buildRecommendedSecondBrainPatch(config = sharedConfig, options = {}) {
           completed: markCompleted,
           dismissed: false,
         },
+        ...(timezone ? { profile: { timezone } } : {}),
         delivery: {
           defaultChannels: telegramEnabled ? ['telegram', 'web'] : ['web'],
         },
@@ -5280,6 +5296,7 @@ function buildRecommendedSecondBrainPatch(config = sharedConfig, options = {}) {
 const SECOND_BRAIN_CONFIG_TOOLTIPS = {
   '#cfg-response-style-enabled': 'Turns stable response-style steering on or off for Guardian replies. This changes presentation only and does not change provider routing, model choice, or tool access.',
   '#cfg-response-style-level': 'Chooses how compact Guardian should sound when response-style steering is enabled. Strong keeps replies tighter; light keeps more supporting detail.',
+  '#cfg-second-brain-timezone': 'IANA timezone used for Second Brain routine schedules and brief dates. Set this for hosted deployments so morning routines run in your local day instead of the server timezone.',
   '#cfg-second-brain-onboarding': 'Controls whether the guided setup card appears on Second Brain > Today. Use completed when you are done with setup, or hide it temporarily if you do not want to see it right now.',
   '#cfg-second-brain-delivery-web': 'Includes the web UI as a default delivery destination for newly created Second Brain routines.',
   '#cfg-second-brain-delivery-telegram': 'Includes Telegram as a default delivery destination for newly created Second Brain routines. This only has effect when Telegram is configured and enabled.',
@@ -5342,9 +5359,13 @@ function createSecondBrainPanel(config, panel) {
       <div class="cfg-divider"></div>
       <div class="table-header" style="padding:0 0 0.45rem;border:none;background:none;">
         <h3 style="font-size:0.82rem;letter-spacing:0.03em;">Second Brain Home</h3>
-        <span class="cfg-header-note">Controls the guided setup card on Today</span>
+        <span class="cfg-header-note">Controls local time and the guided setup card</span>
       </div>
       <div class="cfg-form-grid">
+        <div class="cfg-field">
+          ${renderConfigLabelWithTooltip('Local Timezone', 'cfg-second-brain-timezone')}
+          <input id="cfg-second-brain-timezone" type="text" value="${escAttr(secondBrain.profile.timezone || '')}" placeholder="Australia/Brisbane">
+        </div>
         <div class="cfg-field">
           ${renderConfigLabelWithTooltip('Home Setup Card', 'cfg-second-brain-onboarding')}
           <select id="cfg-second-brain-onboarding">
@@ -5429,6 +5450,7 @@ function createSecondBrainPanel(config, panel) {
 
   section.querySelector('#cfg-second-brain-save')?.addEventListener('click', async () => {
     const onboardingSelection = section.querySelector('#cfg-second-brain-onboarding').value;
+    const timezone = section.querySelector('#cfg-second-brain-timezone').value.trim();
     const defaultChannels = [
       section.querySelector('#cfg-second-brain-delivery-web').checked ? 'web' : null,
       section.querySelector('#cfg-second-brain-delivery-telegram').checked ? 'telegram' : null,
@@ -5450,6 +5472,7 @@ function createSecondBrainPanel(config, panel) {
           },
           secondBrain: {
             enabled: true,
+            profile: { timezone },
             onboarding: {
               completed: onboardingSelection === 'done',
               dismissed: onboardingSelection === 'hidden',

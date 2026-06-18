@@ -464,6 +464,14 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
         if (unavailableProviderNames.size > 0) {
           pruneUnavailableProviderReferences(nextConfig, unavailableProviderNames);
         }
+        const secondBrainProfileUpdates = updates.assistant?.secondBrain?.profile;
+        if (secondBrainProfileUpdates && options.isRecord(secondBrainProfileUpdates)) {
+          for (const field of ['timezone', 'workdayStart', 'workdayEnd', 'proactivityLevel'] as const) {
+            if (options.hasOwn(secondBrainProfileUpdates, field) && !options.trimOrUndefined(secondBrainProfileUpdates[field])) {
+              delete nextConfig.assistant.secondBrain.profile[field];
+            }
+          }
+        }
         applyDerivedDefaultProvider(nextConfig);
         const baselineViolations = options.previewSecurityBaselineViolations(nextConfig, 'web_api');
         if (baselineViolations.length > 0) {

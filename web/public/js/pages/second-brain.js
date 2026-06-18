@@ -201,6 +201,7 @@ function getSecondBrainFocusWindow(now = Date.now()) {
 function getSecondBrainSettingsView(config) {
   const secondBrain = config?.assistant?.secondBrain || {};
   const responseStyle = config?.assistant?.responseStyle || {};
+  const browserTimeZone = getBrowserTimeZone();
   const defaultChannels = Array.isArray(secondBrain.delivery?.defaultChannels)
     ? [...new Set(secondBrain.delivery.defaultChannels.filter((channel) => channel === 'web' || channel === 'cli' || channel === 'telegram'))]
     : [];
@@ -212,6 +213,11 @@ function getSecondBrainSettingsView(config) {
     },
     delivery: {
       defaultChannels: defaultChannels.length ? defaultChannels : ['web'],
+    },
+    profile: {
+      timezone: typeof secondBrain.profile?.timezone === 'string' && secondBrain.profile.timezone.trim()
+        ? secondBrain.profile.timezone.trim()
+        : browserTimeZone,
     },
     responseStyle: {
       enabled: responseStyle.enabled !== false,
@@ -234,6 +240,7 @@ function buildRecommendedSecondBrainPatch(config) {
           completed: true,
           dismissed: false,
         },
+        ...(getBrowserTimeZone() ? { profile: { timezone: getBrowserTimeZone() } } : {}),
         delivery: {
           defaultChannels: telegramEnabled ? ['telegram', 'web'] : ['web'],
         },
@@ -247,8 +254,17 @@ function formatSecondBrainPreferencesSummary(secondBrain) {
   return {
     setupCard: formatSecondBrainSetupCardState(secondBrain),
     responseStyle: formatSecondBrainResponseStyle(secondBrain),
+    timezone: secondBrain.profile.timezone || 'Server timezone',
     delivery,
   };
+}
+
+function getBrowserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
 }
 
 function formatSecondBrainChannelList(channels) {
@@ -322,6 +338,7 @@ function renderSecondBrainSetupCard(data) {
         <p>Set your reply style and default delivery channels once, then change them later in <strong>Configuration &gt; Second Brain</strong>. This stays as preferences only. It does not create a second memory authority beside Guardian memory.</p>
         <div class="sb-readout-grid">
           ${renderReadoutCard('Recommended reply style', 'Balanced')}
+          ${renderReadoutCard('Recommended timezone', getBrowserTimeZone() || 'Server timezone')}
           ${renderReadoutCard('Recommended delivery', formatSecondBrainChannelList(buildRecommendedSecondBrainPatch(data?.config).assistant.secondBrain.delivery.defaultChannels))}
         </div>
         <div class="sb-brief-actions">
@@ -345,6 +362,7 @@ function renderSecondBrainSetupCard(data) {
       <div class="sb-readout-grid">
         ${renderReadoutCard('Setup card', summary.setupCard)}
         ${renderReadoutCard('Reply style', summary.responseStyle)}
+        ${renderReadoutCard('Timezone', summary.timezone)}
         ${renderReadoutCard('Delivery', summary.delivery)}
       </div>
       <div class="sb-brief-actions">

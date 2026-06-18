@@ -1064,7 +1064,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       try {
         const result = await dashboard.onConfigUpdate(parsed as Record<string, unknown>);
         sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
-        context.maybeEmitUIInvalidation(result, ['config', 'providers', 'tools', 'automations', 'network'], 'config.updated', url.pathname);
+        context.maybeEmitUIInvalidation(result, ['config', 'providers', 'tools', 'automations', 'network', 'second-brain'], 'config.updated', url.pathname);
       } catch (err) {
         context.logInternalError('Config update failed', err);
         sendJSON(res, 500, { error: 'Update failed' });

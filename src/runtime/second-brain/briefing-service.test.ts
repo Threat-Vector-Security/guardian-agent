@@ -53,6 +53,21 @@ describe('BriefingService', () => {
     expect(service.listBriefs({ kind: 'morning' })).toHaveLength(1);
   });
 
+  it('uses the configured timezone for morning brief title and date key', async () => {
+    const sqlitePath = join(tmpdir(), `guardianagent-second-brain-briefing-${randomUUID()}.sqlite`);
+    const now = () => Date.parse('2026-06-17T17:05:00Z');
+    const store = new SecondBrainStore({ sqlitePath, now });
+    const service = new SecondBrainService(store, { now });
+    const briefing = new BriefingService(service, { now, timeZone: 'Australia/Brisbane' });
+
+    const brief = await briefing.generateMorningBrief();
+
+    expect(brief.id).toBe('brief:morning:2026-06-18');
+    expect(brief.title).toBe('Morning Brief for June 18, 2026');
+    expect(brief.content).toContain('Generated Jun 18');
+    store.close();
+  });
+
   it('builds a pre-meeting brief from matching tasks, notes, and people', async () => {
     const { service, briefing } = createFixture();
 

@@ -426,6 +426,29 @@ describe('direct config update', () => {
     });
   });
 
+  it('clears second-brain timezone when a blank value is submitted', async () => {
+    const config = createConfig();
+    config.assistant.secondBrain.profile.timezone = 'Australia/Brisbane';
+    const { configRef, rawState, handler } = createHandlerHarness(config);
+
+    const result = await handler({
+      assistant: {
+        secondBrain: {
+          profile: {
+            timezone: '',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({ success: true, message: 'Saved' });
+    expect(configRef.current.assistant.secondBrain.profile.timezone).toBeUndefined();
+    const rawConfig = rawState.current as Record<string, unknown>;
+    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+    const rawSecondBrain = rawAssistant.secondBrain as Record<string, unknown>;
+    expect((rawSecondBrain.profile as Record<string, unknown>).timezone).toBeUndefined();
+  });
+
   it('persists response-style settings into live and raw config state', async () => {
     const { configRef, rawState, handler } = createHandlerHarness(createConfig());
 

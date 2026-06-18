@@ -3521,7 +3521,8 @@ async function main(): Promise<void> {
     onSecurityEvent: onSQLiteSecurityEvent,
   });
   const secondBrainService = new SecondBrainService(secondBrainStore);
-  const secondBrainBriefingService = new BriefingService(secondBrainService);
+  const getSecondBrainTimeZone = () => configRef.current.assistant.secondBrain.profile.timezone;
+  const secondBrainBriefingService = new BriefingService(secondBrainService, { timeZone: getSecondBrainTimeZone });
   let secondBrainSyncService: SyncService | undefined;
   secondBrainBriefingService.start();
   const runTimeline = new RunTimelineStore();
@@ -5609,6 +5610,7 @@ async function main(): Promise<void> {
     secondBrainService,
     secondBrainSyncService,
     secondBrainBriefingService,
+    { timeZone: getSecondBrainTimeZone },
   );
   toolExecutorOptions.secondBrainHorizonScanner = secondBrainHorizonScanner;
   secondBrainHorizonScanner.start();

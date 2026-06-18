@@ -219,6 +219,10 @@ function resolveBrowserExecutable() {
 
 async function loginToWeb(page, baseUrl, authToken) {
   await page.goto(`${baseUrl}/#/`, { waitUntil: 'networkidle' });
+  await page.evaluate(() => {
+    localStorage.setItem('guardianagent_shell_layer', 'classic');
+    localStorage.setItem('guardianagent_workstation_mode', 'false');
+  });
   await page.fill('#auth-token-input', authToken);
   await page.click('#auth-submit');
   await page.waitForSelector('.sb-tabs');

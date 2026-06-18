@@ -970,6 +970,24 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toContain('assistant.secondBrain.profile.workdayStart must be in HH:MM 24-hour format');
   });
 
+  it('should reject invalid second-brain timezone inputs', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        secondBrain: {
+          ...DEFAULT_CONFIG.assistant.secondBrain,
+          profile: {
+            ...DEFAULT_CONFIG.assistant.secondBrain.profile,
+            timezone: 'Brisbane-ish',
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toContain('assistant.secondBrain.profile.timezone must be a valid IANA timezone such as Australia/Brisbane');
+  });
+
   it('should validate cloud Vercel credential refs', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,

@@ -2009,6 +2009,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         dismissed: false,
       },
       profile: {
+        timezone: 'Australia/Brisbane',
         workdayStart: '08:30',
         workdayEnd: '17:30',
         proactivityLevel: 'balanced',

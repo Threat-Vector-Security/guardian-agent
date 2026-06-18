@@ -10,9 +10,11 @@ import type {
   SecondBrainPersonRecord,
   SecondBrainTaskRecord,
 } from './types.js';
+import { formatZonedDate, formatZonedDateTime, normalizeTimeZone, zonedDateKey } from './timezone.js';
 
 interface BriefingServiceOptions {
   now?: () => number;
+  timeZone?: string | (() => string | undefined);
 }
 
 const STOP_WORDS = new Set([
@@ -39,21 +41,12 @@ function summarizeText(value: string | undefined, maxChars: number): string {
     : normalized;
 }
 
-function formatDateTime(value: number): string {
-  return new Date(value).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+function formatDateTime(value: number, timeZone?: string): string {
+  return formatZonedDateTime(value, timeZone);
 }
 
-function formatDate(value: number): string {
-  return new Date(value).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
+function formatDate(value: number, timeZone?: string): string {
+  return formatZonedDate(value, timeZone);
 }
 
 function buildBriefId(
@@ -61,8 +54,9 @@ function buildBriefId(
   now: number,
   eventId?: string,
   routineId?: string,
+  timeZone?: string,
 ): string {
-  const dateKey = new Date(now).toISOString().slice(0, 10);
+  const dateKey = zonedDateKey(now, timeZone);
   const scopedRoutineId = routineId?.trim();
   if (kind === 'morning') {
     return scopedRoutineId && scopedRoutineId !== 'morning-brief'
@@ -93,15 +87,16 @@ function titleForBrief(
   event?: SecondBrainEventRecord,
   now?: number,
   focusQuery?: string,
+  timeZone?: string,
 ): string {
   const focusSuffix = focusQuery?.trim() ? `: ${focusQuery.trim()}` : '';
   switch (kind) {
     case 'morning':
-      return `Morning Brief${focusSuffix} for ${formatDate(now ?? Date.now())}`;
+      return `Morning Brief${focusSuffix} for ${formatDate(now ?? Date.now(), timeZone)}`;
     case 'weekly_review':
-      return `Weekly Review${focusSuffix} for ${formatDate(now ?? Date.now())}`;
+      return `Weekly Review${focusSuffix} for ${formatDate(now ?? Date.now(), timeZone)}`;
     case 'scheduled_review':
-      return `Scheduled Review${focusSuffix} for ${formatDate(now ?? Date.now())}`;
+      return `Scheduled Review${focusSuffix} for ${formatDate(now ?? Date.now(), timeZone)}`;
     case 'pre_meeting':
       return `Pre-Meeting Brief${focusSuffix}: ${event?.title ?? 'Unknown event'}`;
     case 'follow_up':
@@ -122,8 +117,8 @@ function includesKeyword(haystack: string, keywords: string[]): boolean {
   return keywords.some((keyword) => normalized.includes(keyword));
 }
 
-function renderTaskLine(task: SecondBrainTaskRecord): string {
-  const due = task.dueAt ? ` due ${formatDateTime(task.dueAt)}` : '';
+function renderTaskLine(task: SecondBrainTaskRecord, timeZone?: string): string {
+  const due = task.dueAt ? ` due ${formatDateTime(task.dueAt, timeZone)}` : '';
   const details = task.details ? ` ${summarizeText(task.details, 90)}` : '';
   return `- [${task.priority}] ${task.title}${due}${details ? ` :: ${details}` : ''}`;
 }
@@ -139,10 +134,10 @@ function renderPersonLine(person: SecondBrainPersonRecord): string {
     : `- ${person.name}`;
 }
 
-function renderEventLine(event: SecondBrainEventRecord): string {
+function renderEventLine(event: SecondBrainEventRecord, timeZone?: string): string {
   const timeRange = event.endsAt
-    ? `${formatDateTime(event.startsAt)} to ${formatDateTime(event.endsAt)}`
-    : formatDateTime(event.startsAt);
+    ? `${formatDateTime(event.startsAt, timeZone)} to ${formatDateTime(event.endsAt, timeZone)}`
+    : formatDateTime(event.startsAt, timeZone);
   const details = event.location
     ? `${event.title} at ${timeRange} · ${event.location}`
     : `${event.title} at ${timeRange}`;
@@ -187,12 +182,21 @@ function taskEnteredDeadlineWindowAt(task: SecondBrainTaskRecord, dueWithinMs: n
 
 export class BriefingService {
   private readonly now: () => number;
+  private readonly getTimeZone: () => string | undefined;
 
   constructor(
     private readonly secondBrainService: SecondBrainService,
     options: BriefingServiceOptions = {},
   ) {
     this.now = options.now ?? Date.now;
+    const configuredTimeZone = options.timeZone;
+    this.getTimeZone = typeof configuredTimeZone === 'function'
+      ? () => normalizeTimeZone(configuredTimeZone())
+      : () => normalizeTimeZone(configuredTimeZone);
+  }
+
+  private get timeZone(): string | undefined {
+    return this.getTimeZone();
   }
 
   start(): void {}
@@ -258,10 +262,10 @@ export class BriefingService {
 
     const sections = [
       'Overview',
-      `- Generated ${formatDateTime(now)}`,
+      `- Generated ${formatDateTime(now, this.timeZone)}`,
       ...(focusQuery ? [`- Focus: ${focusQuery}`] : []),
       upcomingEvents.length > 0
-        ? `- Next event: ${upcomingEvents[0]!.title} at ${formatDateTime(upcomingEvents[0]!.startsAt)}`
+        ? `- Next event: ${upcomingEvents[0]!.title} at ${formatDateTime(upcomingEvents[0]!.startsAt, this.timeZone)}`
         : '- No upcoming events on the shared calendar.',
       filteredTasks.length > 0
         ? `- Priority task: ${filteredTasks[0]!.title}`
@@ -269,12 +273,12 @@ export class BriefingService {
       '',
       'Upcoming Events',
       ...(upcomingEvents.length > 0
-        ? upcomingEvents.map(renderEventLine)
+        ? upcomingEvents.map((event) => renderEventLine(event, this.timeZone))
         : ['- No synced events in the current horizon.']),
       '',
       'Open Tasks',
       ...(filteredTasks.length > 0
-        ? filteredTasks.map(renderTaskLine)
+        ? filteredTasks.map((task) => renderTaskLine(task, this.timeZone))
         : ['- No open tasks.']),
       '',
       'Recent Notes',
@@ -289,9 +293,9 @@ export class BriefingService {
     ];
 
     const brief = this.persistBrief({
-      id: buildBriefId('morning', now, undefined, options.routineId),
+      id: buildBriefId('morning', now, undefined, options.routineId, this.timeZone),
       kind: 'morning',
-      title: titleForBrief('morning', undefined, now, focusQuery),
+      title: titleForBrief('morning', undefined, now, focusQuery, this.timeZone),
       content: sections.join('\n'),
       generatedAt: now,
       routineId: options.routineId ?? 'morning-brief',
@@ -350,7 +354,7 @@ export class BriefingService {
 
     const sections = [
       'Weekly Review',
-      `- Generated ${formatDateTime(now)}`,
+      `- Generated ${formatDateTime(now, this.timeZone)}`,
       ...(focusQuery ? [`- Focus: ${focusQuery}`] : []),
       upcomingEvents.length > 0
         ? `- Next 7 days: ${upcomingEvents.length} upcoming event${upcomingEvents.length === 1 ? '' : 's'} on the shared calendar.`
@@ -361,12 +365,12 @@ export class BriefingService {
       '',
       'Upcoming Events',
       ...(upcomingEvents.length > 0
-        ? upcomingEvents.map(renderEventLine)
+        ? upcomingEvents.map((event) => renderEventLine(event, this.timeZone))
         : ['- No events on deck for the next 7 days.']),
       '',
       'Open Tasks',
       ...(openTasks.length > 0
-        ? openTasks.map(renderTaskLine)
+        ? openTasks.map((task) => renderTaskLine(task, this.timeZone))
         : ['- No open tasks.']),
       '',
       'Recent Notes',
@@ -391,9 +395,9 @@ export class BriefingService {
     ];
 
     const brief = this.persistBrief({
-      id: buildBriefId('weekly_review', now, undefined, options.routineId),
+      id: buildBriefId('weekly_review', now, undefined, options.routineId, this.timeZone),
       kind: 'weekly_review',
-      title: titleForBrief('weekly_review', undefined, now, focusQuery),
+      title: titleForBrief('weekly_review', undefined, now, focusQuery, this.timeZone),
       content: sections.join('\n'),
       generatedAt: now,
       routineId: options.routineId ?? 'weekly-review',
@@ -466,7 +470,7 @@ export class BriefingService {
 
     const sections = [
       'Scheduled Review',
-      `- Generated ${formatDateTime(now)}`,
+      `- Generated ${formatDateTime(now, this.timeZone)}`,
       ...(focusQuery ? [`- Focus: ${focusQuery}`] : []),
       `- Review window: next ${horizonDays} day${horizonDays === 1 ? '' : 's'}`,
       upcomingEvents.length > 0
@@ -478,12 +482,12 @@ export class BriefingService {
       '',
       'Upcoming Events',
       ...(upcomingEvents.length > 0
-        ? upcomingEvents.map(renderEventLine)
+        ? upcomingEvents.map((event) => renderEventLine(event, this.timeZone))
         : ['- No upcoming events in the review window.']),
       '',
       'Open Tasks',
       ...(openTasks.length > 0
-        ? openTasks.map(renderTaskLine)
+        ? openTasks.map((task) => renderTaskLine(task, this.timeZone))
         : ['- No open tasks.']),
       '',
       'Notes',
@@ -503,9 +507,9 @@ export class BriefingService {
     ];
 
     const brief = this.persistBrief({
-      id: buildBriefId('scheduled_review', now, undefined, options.routineId),
+      id: buildBriefId('scheduled_review', now, undefined, options.routineId, this.timeZone),
       kind: 'scheduled_review',
-      title: titleForBrief('scheduled_review', undefined, now, focusQuery),
+      title: titleForBrief('scheduled_review', undefined, now, focusQuery, this.timeZone),
       content: sections.join('\n'),
       generatedAt: now,
       ...(options.routineId ? { routineId: options.routineId } : {}),
@@ -557,7 +561,7 @@ export class BriefingService {
 
     const sections = [
       'Meeting Snapshot',
-      renderEventLine(event),
+      renderEventLine(event, this.timeZone),
       ...(focusQuery ? ['', `Focus`, `- ${focusQuery}`] : []),
       '',
       'Relevant Contacts',
@@ -567,7 +571,7 @@ export class BriefingService {
       '',
       'Relevant Tasks',
       ...(relatedTasks.length > 0
-        ? relatedTasks.map(renderTaskLine)
+        ? relatedTasks.map((task) => renderTaskLine(task, this.timeZone))
         : ['- No matching open tasks.']),
       '',
       'Relevant Notes',
@@ -581,9 +585,9 @@ export class BriefingService {
     ];
 
     const brief = this.persistBrief({
-      id: buildBriefId('pre_meeting', now, event.id, options.routineId),
+      id: buildBriefId('pre_meeting', now, event.id, options.routineId, this.timeZone),
       kind: 'pre_meeting',
-      title: titleForBrief('pre_meeting', event, undefined, focusQuery),
+      title: titleForBrief('pre_meeting', event, undefined, focusQuery, this.timeZone),
       content: sections.join('\n'),
       generatedAt: now,
       eventId: event.id,
@@ -637,12 +641,12 @@ export class BriefingService {
       'Draft',
       `Hi team,`,
       '',
-      `Thanks again for the time on ${formatDateTime(event.startsAt)}. Here is the current follow-up packet from the shared assistant context:`,
+      `Thanks again for the time on ${formatDateTime(event.startsAt, this.timeZone)}. Here is the current follow-up packet from the shared assistant context:`,
       ...(focusQuery ? ['', `Focus`, `- ${focusQuery}`] : []),
       '',
       'Outstanding Tasks',
       ...(relatedTasks.length > 0
-        ? relatedTasks.map(renderTaskLine)
+        ? relatedTasks.map((task) => renderTaskLine(task, this.timeZone))
         : ['- No open follow-up tasks were captured.']),
       '',
       'Recent Notes',
@@ -657,9 +661,9 @@ export class BriefingService {
 
     const now = this.now();
     const brief = this.persistBrief({
-      id: buildBriefId('follow_up', now, event.id, options.routineId),
+      id: buildBriefId('follow_up', now, event.id, options.routineId, this.timeZone),
       kind: 'follow_up',
-      title: titleForBrief('follow_up', event, undefined, focusQuery),
+      title: titleForBrief('follow_up', event, undefined, focusQuery, this.timeZone),
       content: sections.join('\n'),
       generatedAt: now,
       eventId: event.id,
@@ -746,14 +750,14 @@ export class BriefingService {
     const sections = [
       'Topic Watch',
       `- Topic: ${topicQuery}`,
-      `- Generated ${formatDateTime(now)}`,
+      `- Generated ${formatDateTime(now, this.timeZone)}`,
       onlySince != null
-        ? `- New matching context since ${formatDateTime(onlySince)}`
+        ? `- New matching context since ${formatDateTime(onlySince, this.timeZone)}`
         : '- Matching context from your current Second Brain records.',
       `- Matches found: ${totalMatches}`,
       '',
       'Tasks',
-      ...(relatedTasks.length > 0 ? relatedTasks.map(renderTaskLine) : ['- No matching tasks.']),
+      ...(relatedTasks.length > 0 ? relatedTasks.map((task) => renderTaskLine(task, this.timeZone)) : ['- No matching tasks.']),
       '',
       'Notes',
       ...(relatedNotes.length > 0 ? relatedNotes.map(renderNoteLine) : ['- No matching notes.']),
@@ -765,7 +769,7 @@ export class BriefingService {
       ...(relatedLinks.length > 0 ? relatedLinks.map(renderLinkLine) : ['- No matching library items.']),
       '',
       'Events',
-      ...(relatedEvents.length > 0 ? relatedEvents.map(renderEventLine) : ['- No matching events.']),
+      ...(relatedEvents.length > 0 ? relatedEvents.map((event) => renderEventLine(event, this.timeZone)) : ['- No matching events.']),
       '',
       'Briefs',
       ...(relatedBriefs.length > 0
@@ -841,15 +845,15 @@ export class BriefingService {
 
     const sections = [
       'Deadline Watch',
-      `- Generated ${formatDateTime(now)}`,
+      `- Generated ${formatDateTime(now, this.timeZone)}`,
       `- Watching tasks due within ${formatHoursWindow(dueWithinHours)}`,
       `- Include overdue tasks: ${includeOverdue ? 'Yes' : 'No'}`,
       '',
       'Overdue Tasks',
-      ...(overdueTasks.length > 0 ? overdueTasks.map(renderTaskLine) : ['- No newly overdue tasks.']),
+      ...(overdueTasks.length > 0 ? overdueTasks.map((task) => renderTaskLine(task, this.timeZone)) : ['- No newly overdue tasks.']),
       '',
       'Due Soon',
-      ...(dueSoonTasks.length > 0 ? dueSoonTasks.map(renderTaskLine) : ['- No tasks newly entering the due-soon window.']),
+      ...(dueSoonTasks.length > 0 ? dueSoonTasks.map((task) => renderTaskLine(task, this.timeZone)) : ['- No tasks newly entering the due-soon window.']),
     ];
 
     const brief = this.persistBrief({

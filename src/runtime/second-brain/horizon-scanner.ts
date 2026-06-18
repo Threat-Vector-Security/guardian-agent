@@ -3,10 +3,12 @@ import type { SecondBrainService } from './second-brain-service.js';
 import type { BriefingService } from './briefing-service.js';
 import type { SyncService, SecondBrainSyncSummary } from './sync-service.js';
 import type { SecondBrainDeliveryChannel, SecondBrainRoutineRecord, SecondBrainRoutineSchedule, SecondBrainRoutineWeekday } from './types.js';
+import { latestZonedScheduledOccurrenceAtOrBefore, normalizeTimeZone } from './timezone.js';
 
 interface HorizonScannerOptions {
   now?: () => number;
   onOutcome?: (outcome: HorizonRoutineOutcome) => Promise<void> | void;
+  timeZone?: string | (() => string | undefined);
 }
 
 export interface HorizonScanSummary {
@@ -198,6 +200,7 @@ function occursInSameMinute(left: number, right: number): boolean {
 
 export class HorizonScanner {
   private readonly now: () => number;
+  private readonly getTimeZone: () => string | undefined;
   private onOutcome: ((outcome: HorizonRoutineOutcome) => Promise<void> | void) | null;
 
   constructor(
@@ -208,7 +211,15 @@ export class HorizonScanner {
     options: HorizonScannerOptions = {},
   ) {
     this.now = options.now ?? Date.now;
+    const configuredTimeZone = options.timeZone;
+    this.getTimeZone = typeof configuredTimeZone === 'function'
+      ? () => normalizeTimeZone(configuredTimeZone())
+      : () => normalizeTimeZone(configuredTimeZone);
     this.onOutcome = options.onOutcome ?? null;
+  }
+
+  private get timeZone(): string | undefined {
+    return this.getTimeZone();
   }
 
   setOutcomeDelivery(onOutcome: ((outcome: HorizonRoutineOutcome) => Promise<void> | void) | null): void {
@@ -535,7 +546,9 @@ export class HorizonScanner {
     if (routine.trigger.mode !== 'cron' || !routine.trigger.cron) return false;
     const schedule = routine.trigger.schedule ?? parseRoutineScheduleFromCron(routine.trigger.cron);
     if (!schedule) return false;
-    const scheduledAt = latestScheduledOccurrenceAtOrBefore(now, schedule, routine.trigger.anchorAt ?? routine.createdAt);
+    const scheduledAt = this.timeZone
+      ? latestZonedScheduledOccurrenceAtOrBefore(now, schedule, routine.trigger.anchorAt ?? routine.createdAt, this.timeZone)
+      : latestScheduledOccurrenceAtOrBefore(now, schedule, routine.trigger.anchorAt ?? routine.createdAt);
     if (scheduledAt == null) return false;
     const baseline = routine.lastRunAt
       ?? (this.secondBrainService.isSeededBuiltInRoutine(routine.id) ? 0 : routine.createdAt);

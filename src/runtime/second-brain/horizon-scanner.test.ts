@@ -501,4 +501,62 @@ describe('HorizonScanner', () => {
     expect(third.triggeredRoutines).toContain(created.id);
     store.close();
   });
+
+  it('evaluates routine schedules in the configured timezone', async () => {
+    const sqlitePath = join(tmpdir(), `guardianagent-second-brain-horizon-${randomUUID()}.sqlite`);
+    const nowState = { value: Date.parse('2026-06-17T21:05:00Z') };
+    const now = () => nowState.value;
+    const store = new SecondBrainStore({ sqlitePath, now });
+    const service = new SecondBrainService(store, { now });
+    const briefing = new BriefingService(service, { now, timeZone: 'Australia/Brisbane' });
+    const scheduledTaskService = {
+      list() {
+        return [];
+      },
+      create() {
+        return { success: true, message: 'created' };
+      },
+      update() {
+        return { success: true, message: 'updated' };
+      },
+    };
+    const syncService = {
+      async syncAll(reason: string) {
+        return {
+          startedAt: now(),
+          finishedAt: now(),
+          reason,
+          providers: [],
+        };
+      },
+    };
+    const created = service.createRoutine({
+      templateId: 'topic-watch',
+      config: { topicQuery: 'Brisbane clock' },
+      timing: { kind: 'scheduled', schedule: { cadence: 'daily', time: '07:00' } },
+    });
+    const record = service.getRoutineRecordById(created.id)!;
+    store.routines.upsertRoutine({
+      ...record,
+      lastRunAt: Date.parse('2026-06-17T08:00:00Z'),
+      updatedAt: Date.parse('2026-06-17T08:00:00Z'),
+    });
+    service.upsertNote({
+      title: 'Brisbane clock note',
+      content: 'This should run after 7 AM in Brisbane, before 7 AM UTC.',
+    });
+
+    const scanner = new HorizonScanner(
+      scheduledTaskService as any,
+      service,
+      syncService as any,
+      briefing,
+      { now, timeZone: 'Australia/Brisbane' },
+    );
+
+    const summary = await scanner.runScan('test');
+
+    expect(summary.triggeredRoutines).toContain(created.id);
+    store.close();
+  });
 });
