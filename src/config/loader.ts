@@ -927,6 +927,35 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (assistant.tools.webSearch?.openRouterApiKey?.trim()) {
     errors.push('assistant.tools.webSearch.openRouterApiKey is not allowed in config. Use assistant.tools.webSearch.openRouterCredentialRef with assistant.credentials.refs instead.');
   }
+  const validateOptionalOAuthRedirectUri = (value: string | undefined, path: string): void => {
+    if (value === undefined) return;
+    if (!value.trim()) {
+      errors.push(`${path} must be a non-empty URL when provided`);
+      return;
+    }
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        errors.push(`${path} must use http or https`);
+      }
+    } catch {
+      errors.push(`${path} must be a valid URL`);
+    }
+  };
+  const google = assistant.tools.google;
+  if (google) {
+    if (google.oauthCallbackPort !== undefined && (google.oauthCallbackPort < 1 || google.oauthCallbackPort > 65535)) {
+      errors.push('assistant.tools.google.oauthCallbackPort must be between 1 and 65535');
+    }
+    validateOptionalOAuthRedirectUri(google.oauthRedirectUri, 'assistant.tools.google.oauthRedirectUri');
+  }
+  const microsoft = assistant.tools.microsoft;
+  if (microsoft) {
+    if (microsoft.oauthCallbackPort !== undefined && (microsoft.oauthCallbackPort < 1 || microsoft.oauthCallbackPort > 65535)) {
+      errors.push('assistant.tools.microsoft.oauthCallbackPort must be between 1 and 65535');
+    }
+    validateOptionalOAuthRedirectUri(microsoft.oauthRedirectUri, 'assistant.tools.microsoft.oauthRedirectUri');
+  }
   const github = assistant.tools.github;
   if (github) {
     if (!['cli', 'oauth', 'app'].includes(github.mode)) {

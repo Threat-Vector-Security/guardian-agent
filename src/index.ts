@@ -3979,6 +3979,7 @@ async function main(): Promise<void> {
       googleAuth = new GoogleAuth({
         credentialsPath: credPath,
         callbackPort: googleConfig?.oauthCallbackPort ?? 18432,
+        redirectUri: googleConfig?.oauthRedirectUri,
         scopes,
       });
 
@@ -4038,6 +4039,7 @@ async function main(): Promise<void> {
         clientId: microsoftConfig.clientId,
         tenantId: microsoftConfig.tenantId || 'common',
         callbackPort: microsoftConfig?.oauthCallbackPort ?? 18433,
+        redirectUri: microsoftConfig?.oauthRedirectUri,
         scopes,
       });
 

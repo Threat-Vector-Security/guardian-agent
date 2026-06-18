@@ -16,7 +16,7 @@ This spec mirrors the established Google Workspace integration pattern for consi
 
 | Concern | Google Pattern | Microsoft Pattern (proposed) |
 |---------|---------------|------------------------------|
-| Auth | OAuth 2.0 PKCE, localhost callback | OAuth 2.0 PKCE, localhost callback (hand-rolled, same as Google) |
+| Auth | OAuth 2.0 PKCE, localhost callback by default or configured web callback | OAuth 2.0 PKCE, localhost callback by default or configured web callback (hand-rolled, same as Google) |
 | Token storage | AES-256-GCM encrypted file | Same encrypted file (separate key) |
 | API calls | Direct REST via `fetch()` | Direct REST via `fetch()` (no heavy SDK) |
 | Tools | `gws` (generic) + `gmail_send`/`gmail_draft` (convenience) | `m365` (generic) + `outlook_send`/`outlook_draft` (convenience) |
@@ -68,7 +68,7 @@ Follows the exact same flow as `GoogleAuth`:
 
 1. **App Registration** — User creates an app in [Microsoft Entra admin center](https://entra.microsoft.com):
    - Platform: "Mobile and desktop applications"
-   - Redirect URI: `http://localhost:{port}` (configurable, default `18433`)
+   - Redirect URI: `http://localhost:{port}` (configurable, default `18433`) or the configured Guardian web callback URI when using remote auth
    - Enable "Allow public client flows"
    - Record: Application (client) ID + Tenant ID
    - No client secret needed (public client + PKCE)
@@ -87,7 +87,7 @@ Follows the exact same flow as `GoogleAuth`:
        &code_challenge_method=S256
        &state={random}
      ```
-   - Start ephemeral localhost HTTP server on configured port (same pattern as `GoogleAuth`)
+   - Start ephemeral localhost HTTP server on configured port (same pattern as `GoogleAuth`) unless `oauthRedirectUri` is configured, in which case Guardian waits for the main web/API callback route
    - Open browser via `start` (Windows) → user signs in and consents → redirect back with auth code
    - Validate state parameter matches
    - Exchange auth code for tokens via direct POST to token endpoint:
@@ -334,6 +334,7 @@ interface MicrosoftConfig {
   enabled: boolean;                    // Default: false
   services: string[];                  // Phase 1 default: ['mail', 'calendar', 'onedrive', 'contacts']
   oauthCallbackPort: number;           // Default: 18433 (different from Google's 18432)
+  oauthRedirectUri?: string;           // Optional remote/dashboard callback URI
   clientId: string;                    // Application (client) ID from Entra
   tenantId: string;                    // Default: 'common'
   timeoutMs?: number;                  // Default: 30_000
@@ -352,6 +353,7 @@ assistant:
       enabled: true
       services: [mail, calendar, onedrive, contacts]
       oauthCallbackPort: 18433
+      oauthRedirectUri: "https://guardian.example.com/api/microsoft/auth/callback"
       clientId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
       tenantId: "common"
       timeoutMs: 30000

@@ -281,7 +281,7 @@ Google Workspace integration uses a native backend:
 **Google Workspace:**
 
 - `src/google/` module calls Google APIs directly via `googleapis` SDK
-- OAuth 2.0 PKCE with localhost callback, tokens encrypted at `~/.guardianagent/secrets.enc.json`
+- OAuth 2.0 PKCE with localhost callback by default, optional configured web callback for remote hosts, tokens encrypted at `~/.guardianagent/secrets.enc.json`
 - 3-step setup: create Cloud Console credentials → upload JSON → click Connect
 - No external CLI dependency, no subprocess overhead
 - Config: `assistant.tools.google` (enabled, services, oauthCallbackPort, credentialsPath)

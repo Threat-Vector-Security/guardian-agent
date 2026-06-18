@@ -162,6 +162,11 @@ function readSurfaceIdFromSearchParams(url: URL): string | undefined {
   return trimOptionalString(url.searchParams.get('surfaceId'));
 }
 
+function isProviderOAuthCallbackPath(pathname: string): boolean {
+  return pathname === '/api/google/auth/callback'
+    || pathname === '/api/microsoft/auth/callback';
+}
+
 function normalizeWebAuthMode(value: unknown): WebAuthMode {
   return value === 'disabled' ? 'disabled' : 'bearer_required';
 }
@@ -911,6 +916,21 @@ export class WebChannel implements ChannelAdapter {
     // ─── API + SSE routes (require auth) ───────────────────────
 
     if (url.pathname.startsWith('/api/') || url.pathname === '/sse') {
+      if (req.method === 'GET' && isProviderOAuthCallbackPath(url.pathname)) {
+        if (await handleWebProviderAdminRoutes({
+          req,
+          res,
+          url,
+          maxBodyBytes: this.maxBodyBytes,
+          dashboard: this.dashboard,
+          requirePrivilegedTicket: (request, response, requestUrl, action, presented) =>
+            this.requirePrivilegedTicket(request, response, requestUrl, action, presented),
+          maybeEmitUIInvalidation: (result, topics, reason, path) => this.maybeEmitUIInvalidation(result, topics, reason, path),
+        })) {
+          return;
+        }
+      }
+
       // SSE uses cookie session auth (or bearer header for non-browser clients).
       if (url.pathname === '/sse') {
         if (!this.checkAuthForSSE(req, url, res)) return;

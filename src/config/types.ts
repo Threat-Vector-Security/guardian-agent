@@ -1306,6 +1306,8 @@ export interface GoogleConfig {
   services: string[];
   /** Localhost port for OAuth callback server. Default: 18432. */
   oauthCallbackPort: number;
+  /** Optional full OAuth redirect URI for remote/dashboard callback flows. */
+  oauthRedirectUri?: string;
   /** Path to client_secret.json (can also be uploaded via web UI). */
   credentialsPath: string;
   /** Request timeout in ms. */
@@ -1323,6 +1325,8 @@ export interface MicrosoftConfig {
   services: string[];
   /** Localhost port for OAuth callback server. Default: 18433. */
   oauthCallbackPort: number;
+  /** Optional full OAuth redirect URI for remote/dashboard callback flows. */
+  oauthRedirectUri?: string;
   /** Application (client) ID from Microsoft Entra app registration. */
   clientId: string;
   /** Tenant ID. Default: 'common' (multi-tenant + personal accounts). */

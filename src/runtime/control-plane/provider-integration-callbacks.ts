@@ -29,11 +29,13 @@ type ProviderIntegrationCallbacks = Pick<
   | 'onGwsStatus'
   | 'onGoogleStatus'
   | 'onGoogleAuthStart'
+  | 'onGoogleAuthCallback'
   | 'onGoogleCredentials'
   | 'onGoogleAuthCancel'
   | 'onGoogleDisconnect'
   | 'onMicrosoftStatus'
   | 'onMicrosoftAuthStart'
+  | 'onMicrosoftAuthCallback'
   | 'onMicrosoftConfig'
   | 'onMicrosoftAuthCancel'
   | 'onMicrosoftDisconnect'
@@ -186,6 +188,24 @@ export function createProviderIntegrationCallbacks(
       }
     },
 
+    onGoogleAuthCallback: async (input) => {
+      const auth = options.googleAuthRef.current;
+      if (!auth) return { success: false, message: 'Google auth not initialized. Restart the application.' };
+      if (input.error) {
+        auth.cancelPendingAuth(`Google OAuth error: ${input.error}`);
+        return { success: false, message: `Google authorization failed: ${input.error}` };
+      }
+      if (!input.code || !input.state) {
+        return { success: false, message: 'Google authorization callback was missing code or state.' };
+      }
+      try {
+        await auth.handleCallback(input.code, input.state);
+        return { success: true, message: 'Google account linked successfully. You can close this window.' };
+      } catch (err) {
+        return { success: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    },
+
     onGoogleCredentials: async (credentials: string) => {
       const googleCfg = options.configRef.current.assistant.tools.google;
       const credPath = googleCfg?.credentialsPath?.replace(/^~/, homedir()) || `${getGuardianBaseDir()}/google-credentials.json`;
@@ -268,6 +288,24 @@ export function createProviderIntegrationCallbacks(
       }
     },
 
+    onMicrosoftAuthCallback: async (input) => {
+      const auth = options.microsoftAuthRef.current;
+      if (!auth) return { success: false, message: 'Microsoft auth not initialized. Enter a Client ID and restart, or save config first.' };
+      if (input.error) {
+        auth.cancelPendingAuth(`Microsoft OAuth error: ${input.error}`);
+        return { success: false, message: `Microsoft authorization failed: ${input.error}` };
+      }
+      if (!input.code || !input.state) {
+        return { success: false, message: 'Microsoft authorization callback was missing code or state.' };
+      }
+      try {
+        await auth.handleCallback(input.code, input.state);
+        return { success: true, message: 'Microsoft account linked successfully. You can close this window.' };
+      } catch (err) {
+        return { success: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    },
+
     onMicrosoftConfig: async (config) => {
       try {
         const rawConfig = options.loadRawConfig();
@@ -295,6 +333,7 @@ export function createProviderIntegrationCallbacks(
               clientId: config.clientId,
               tenantId: config.tenantId || 'common',
               callbackPort: msConfig?.oauthCallbackPort ?? 18433,
+              redirectUri: msConfig?.oauthRedirectUri,
               scopes,
             });
             await auth.loadStoredTokens();

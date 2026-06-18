@@ -47,6 +47,25 @@ async function runProviderRoute(pathname: string, method: string, dashboard: Par
   };
 }
 
+async function runProviderTextRoute(pathname: string, method: string, dashboard: Partial<DashboardCallbacks>) {
+  const req = makeRequest(method);
+  const res = makeResponse();
+  const handled = await handleWebProviderAdminRoutes({
+    req,
+    res,
+    url: new URL(`http://localhost${pathname}`),
+    maxBodyBytes: 1024,
+    dashboard: dashboard as DashboardCallbacks,
+    requirePrivilegedTicket: () => true,
+    maybeEmitUIInvalidation: () => undefined,
+  });
+  return {
+    handled,
+    statusCode: res.statusCode,
+    body: res.body ?? '',
+  };
+}
+
 describe('handleWebProviderAdminRoutes Google auth compatibility', () => {
   it('maps legacy gws status to native Google OAuth status when available', async () => {
     const result = await runProviderRoute('/api/gws/status', 'GET', {
@@ -80,5 +99,35 @@ describe('handleWebProviderAdminRoutes Google auth compatibility', () => {
     expect(result.body.success).toBe(false);
     expect(String(result.body.message)).toContain('native Google OAuth');
     expect(String(result.body.nextAction)).toContain('Connect Google');
+  });
+
+  it('completes Google OAuth callbacks through the web route', async () => {
+    const seen: Array<{ code?: string; state?: string; error?: string }> = [];
+    const result = await runProviderTextRoute('/api/google/auth/callback?code=c1&state=s1', 'GET', {
+      onGoogleAuthCallback: async (input) => {
+        seen.push(input);
+        return { success: true, message: 'ok' };
+      },
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toContain('Google Connected');
+    expect(seen).toEqual([{ code: 'c1', state: 's1', error: undefined }]);
+  });
+
+  it('completes Microsoft OAuth callbacks through the web route', async () => {
+    const seen: Array<{ code?: string; state?: string; error?: string }> = [];
+    const result = await runProviderTextRoute('/api/microsoft/auth/callback?code=c1&state=s1', 'GET', {
+      onMicrosoftAuthCallback: async (input) => {
+        seen.push(input);
+        return { success: true, message: 'ok' };
+      },
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toContain('Microsoft Connected');
+    expect(seen).toEqual([{ code: 'c1', state: 's1', error: undefined }]);
   });
 });

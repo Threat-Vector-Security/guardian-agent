@@ -126,6 +126,66 @@ describe('validateConfig', () => {
     expect(errors).toEqual([]);
   });
 
+  it('should accept remote OAuth redirect URIs for Google and Microsoft integrations', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          google: {
+            enabled: true,
+            services: ['gmail'],
+            oauthCallbackPort: 18432,
+            oauthRedirectUri: 'https://guardian.example.com/api/google/auth/callback',
+            credentialsPath: '~/.guardianagent/google-credentials.json',
+          },
+          microsoft: {
+            enabled: true,
+            services: ['mail'],
+            oauthCallbackPort: 18433,
+            oauthRedirectUri: 'https://guardian.example.com/api/microsoft/auth/callback',
+            clientId: 'client-id',
+            tenantId: 'common',
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
+  it('should reject malformed remote OAuth redirect URIs', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          google: {
+            enabled: true,
+            services: ['gmail'],
+            oauthCallbackPort: 18432,
+            oauthRedirectUri: 'not-a-url',
+            credentialsPath: '~/.guardianagent/google-credentials.json',
+          },
+          microsoft: {
+            enabled: true,
+            services: ['mail'],
+            oauthCallbackPort: 18433,
+            oauthRedirectUri: 'file:///tmp/callback',
+            clientId: 'client-id',
+            tenantId: 'common',
+          },
+        },
+      },
+    };
+
+    const errors = validateConfig(config);
+    expect(errors).toContain('assistant.tools.google.oauthRedirectUri must be a valid URL');
+    expect(errors).toContain('assistant.tools.microsoft.oauthRedirectUri must use http or https');
+  });
+
   it('should default knowledge base readOnly to false', () => {
     expect(DEFAULT_CONFIG.assistant.memory.knowledgeBase?.readOnly).toBe(false);
   });

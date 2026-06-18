@@ -150,6 +150,7 @@ export interface GoogleConfig {
   enabled: boolean;
   services: string[];
   oauthCallbackPort: number;
+  oauthRedirectUri?: string;
   credentialsPath: string;
 }
 ```
@@ -158,11 +159,12 @@ Added to `AssistantToolsConfig` as `google?: GoogleConfig`.
 
 ### OAuth Flow (`src/google/google-auth.ts`)
 
-1. `startAuth(scopes)` — generates PKCE code verifier/challenge, builds auth URL, starts ephemeral localhost HTTP server for callback
-2. Callback server receives authorization code, exchanges it for tokens via `google-auth-library`
-3. Tokens stored encrypted in `~/.guardianagent/secrets.enc.json`
-4. `getAccessToken()` transparently refreshes expired tokens
-5. `disconnect()` revokes tokens and clears storage
+1. `startAuth(scopes)` — generates PKCE code verifier/challenge and builds auth URL
+2. By default, starts an ephemeral localhost HTTP server for callback. If `oauthRedirectUri` is configured, Guardian waits for the main web/API callback route instead.
+3. Callback handler receives authorization code and exchanges it for tokens
+4. Tokens stored encrypted in `~/.guardianagent/secrets.enc.json`
+5. `getAccessToken()` transparently refreshes expired tokens
+6. `disconnect()` revokes tokens and clears storage
 
 ### Scope Mapping
 

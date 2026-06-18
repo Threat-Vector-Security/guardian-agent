@@ -906,7 +906,8 @@ llm:
 GuardianAgent is hardened against the class of attacks where a malicious website attempts to drive a locally running agent over loopback HTTP/WebSocket interfaces.
 
 - No WebSocket control plane — authenticated HTTP APIs plus authenticated SSE only
-- Localhost/loopback is **not** treated as trusted for API access; `/api/*` and `/sse` always require authentication
+- Localhost/loopback is **not** treated as trusted for API access; `/api/*` and `/sse` require authentication except the exact Google/Microsoft OAuth callback endpoints below
+- `/api/google/auth/callback` and `/api/microsoft/auth/callback` are unauthenticated only so identity providers can complete OAuth redirects; token exchange still requires a pending PKCE flow with matching `state`
 - When no web token is configured, a secure random token is generated for the active run
 - Wildcard CORS (`'*'`) is rejected by configuration validation
 - Browser session cookies are `HttpOnly` and `SameSite=Strict`
@@ -936,7 +937,7 @@ Integration with Gmail, Calendar, Drive, Docs, and Sheets. Two backends:
 
 **Native mode (default):** Uses `googleapis` SDK directly — no external CLI dependency.
 
-- OAuth 2.0 PKCE with localhost callback, handled entirely within GuardianAgent
+- OAuth 2.0 PKCE with localhost callback by default, or an explicitly configured Guardian web callback for remote/always-on hosts
 - Tokens encrypted at rest in `~/.guardianagent/secrets.enc.json` (AES-256-GCM, machine-specific key)
 - Callback server binds `127.0.0.1` only and closes immediately after receiving the authorization code
 - Each service maps to the narrowest OAuth scope (e.g. `gmail.modify` not `gmail.full`)

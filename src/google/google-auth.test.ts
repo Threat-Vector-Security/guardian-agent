@@ -88,4 +88,76 @@ describe('GoogleAuth', () => {
     expect(startServerSpy).toHaveBeenCalledOnce();
     expect(result.authUrl).toContain('accounts.google.com');
   });
+
+  it('uses a configured web redirect URI without starting the standalone callback server', async () => {
+    const { GoogleAuth } = await import('./google-auth.js');
+    const auth = new GoogleAuth({
+      credentialsPath: '/tmp/test-credentials.json',
+      callbackPort: 19999,
+      redirectUri: 'https://guardian.example.com/api/google/auth/callback',
+      scopes: ['scope-a'],
+    });
+    vi.spyOn(auth as any, 'loadClientCredentials').mockResolvedValue({
+      client_id: 'client-id',
+      client_secret: 'client-secret',
+    });
+    const startServerSpy = vi.spyOn(auth as any, 'startCallbackServer').mockResolvedValue(undefined);
+
+    const result = await auth.startAuth();
+    const authUrl = new URL(result.authUrl);
+
+    expect(startServerSpy).not.toHaveBeenCalled();
+    expect(auth.hasPendingAuth()).toBe(true);
+    expect(authUrl.searchParams.get('redirect_uri')).toBe('https://guardian.example.com/api/google/auth/callback');
+    auth.cancelPendingAuth('test cleanup');
+  });
+
+  it('exchanges the authorization code when the web callback is handled', async () => {
+    const { GoogleAuth } = await import('./google-auth.js');
+    const auth = new GoogleAuth({
+      credentialsPath: '/tmp/test-credentials.json',
+      callbackPort: 19999,
+      redirectUri: 'https://guardian.example.com/api/google/auth/callback',
+      scopes: ['scope-a'],
+    });
+    const exchangeSpy = vi.spyOn(auth as any, 'exchangeCode').mockResolvedValue(undefined);
+    (auth as any).pending = {
+      codeVerifier: 'verifier',
+      state: 'state',
+      resolve: vi.fn(),
+      reject: vi.fn(),
+      timeoutHandle: setTimeout(() => {}, 10_000),
+    };
+
+    await auth.handleCallback('code', 'state');
+
+    expect(exchangeSpy).toHaveBeenCalledWith('code', 'verifier');
+    expect(auth.hasPendingAuth()).toBe(false);
+  });
+
+  it('does not exchange twice when waitForCallback is also awaiting the flow', async () => {
+    const { GoogleAuth } = await import('./google-auth.js');
+    const auth = new GoogleAuth({
+      credentialsPath: '/tmp/test-credentials.json',
+      callbackPort: 19999,
+      redirectUri: 'https://guardian.example.com/api/google/auth/callback',
+      scopes: ['scope-a'],
+    });
+    const exchangeSpy = vi.spyOn(auth as any, 'exchangeCode').mockResolvedValue(undefined);
+    (auth as any).pending = {
+      codeVerifier: 'verifier',
+      state: 'state',
+      resolve: vi.fn(),
+      reject: vi.fn(),
+      timeoutHandle: setTimeout(() => {}, 10_000),
+    };
+
+    const waiting = auth.waitForCallback();
+    await Promise.resolve();
+    await auth.handleCallback('code', 'state');
+    await waiting;
+
+    expect(exchangeSpy).toHaveBeenCalledOnce();
+    expect(auth.hasPendingAuth()).toBe(false);
+  });
 });

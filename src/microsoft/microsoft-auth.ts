@@ -34,6 +34,8 @@ export interface MicrosoftAuthConfig {
   tenantId?: string;
   /** Port for the localhost OAuth callback server. */
   callbackPort: number;
+  /** Optional redirect URI for Guardian's main web/API server. Defaults to the standalone localhost callback server. */
+  redirectUri?: string;
   /** Scopes to request (excluding offline_access, which is always appended). */
   scopes: string[];
 }
@@ -41,7 +43,7 @@ export interface MicrosoftAuthConfig {
 interface PendingAuth {
   codeVerifier: string;
   state: string;
-  server: Server;
+  server?: Server;
   resolve: (code: string) => void;
   reject: (err: Error) => void;
   timeoutHandle?: ReturnType<typeof setTimeout>;
@@ -51,6 +53,7 @@ export class MicrosoftAuth {
   private readonly clientId: string;
   private readonly tenantId: string;
   private readonly callbackPort: number;
+  private readonly redirectUri: string;
   private readonly scopes: string[];
   private tokens?: MicrosoftTokens;
   private pending?: PendingAuth;
@@ -59,6 +62,7 @@ export class MicrosoftAuth {
     this.clientId = config.clientId;
     this.tenantId = config.tenantId || 'common';
     this.callbackPort = config.callbackPort;
+    this.redirectUri = config.redirectUri?.trim() || defaultRedirectUri(config.callbackPort);
     this.scopes = config.scopes;
   }
 
@@ -73,7 +77,6 @@ export class MicrosoftAuth {
     const codeVerifier = randomBytes(32).toString('base64url');
     const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
     const state = randomBytes(16).toString('hex');
-    const redirectUri = `http://localhost:${this.callbackPort}/callback`;
 
     // Always include offline_access for refresh tokens, and User.Read for /me endpoint.
     const allScopes = new Set([...this.scopes, 'offline_access', 'User.Read']);
@@ -81,7 +84,7 @@ export class MicrosoftAuth {
     const params = new URLSearchParams({
       client_id: this.clientId,
       response_type: 'code',
-      redirect_uri: redirectUri,
+      redirect_uri: this.redirectUri,
       scope: [...allScopes].join(' '),
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
@@ -91,8 +94,11 @@ export class MicrosoftAuth {
 
     const authUrl = `${MICROSOFT_LOGIN_BASE}/${this.tenantId}/oauth2/v2.0/authorize?${params}`;
 
-    // Start ephemeral localhost server to receive callback.
-    await this.startCallbackServer(state, codeVerifier);
+    if (this.usesStandaloneCallbackServer()) {
+      await this.startCallbackServer(state, codeVerifier);
+    } else {
+      this.startWebCallbackWait(state, codeVerifier);
+    }
 
     log.info('OAuth flow started, waiting for user consent');
     return { authUrl, state };
@@ -107,18 +113,28 @@ export class MicrosoftAuth {
       throw new Error('No pending OAuth flow. Call startAuth() first.');
     }
 
-    const code = await Promise.race([
-      new Promise<string>((resolve, reject) => {
-        this.pending!.resolve = resolve;
-        this.pending!.reject = reject;
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('OAuth flow timed out.')), AUTH_TIMEOUT_MS),
-      ),
-    ]);
+    const pending = this.pending;
+    let waitTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const code = await Promise.race([
+        new Promise<string>((resolve, reject) => {
+          pending.resolve = resolve;
+          pending.reject = reject;
+        }),
+        new Promise<never>((_, reject) => {
+          waitTimeoutHandle = setTimeout(() => reject(new Error('OAuth flow timed out.')), AUTH_TIMEOUT_MS);
+        }),
+      ]);
 
-    await this.exchangeCode(code, this.pending.codeVerifier);
-    this.stopCallbackServer();
+      if (this.pending === pending) {
+        await this.exchangeCode(code, pending.codeVerifier);
+        this.stopCallbackServer();
+      }
+    } finally {
+      if (waitTimeoutHandle) {
+        clearTimeout(waitTimeoutHandle);
+      }
+    }
   }
 
   /**
@@ -129,7 +145,17 @@ export class MicrosoftAuth {
       throw new Error('Invalid OAuth state parameter.');
     }
 
-    this.pending.resolve(code);
+    const pending = this.pending;
+    try {
+      await this.exchangeCode(code, pending.codeVerifier);
+      pending.resolve(code);
+      log.info('OAuth callback received and tokens exchanged successfully');
+    } catch (err) {
+      pending.reject(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    } finally {
+      this.stopCallbackServer();
+    }
   }
 
   /** Get a valid access token, refreshing if needed. */
@@ -233,8 +259,7 @@ export class MicrosoftAuth {
           res.writeHead(200, { 'Content-Type': 'text/html' }).end(
             `<h2>Authorization failed</h2><p>${errorDesc || error}</p><p>You can close this window.</p>`,
           );
-          this.pending?.reject(new Error(`Microsoft OAuth error: ${errorDesc || error}`));
-          this.stopCallbackServer();
+          this.cancelPendingAuth(`Microsoft OAuth error: ${errorDesc || error}`);
           return;
         }
 
@@ -247,23 +272,17 @@ export class MicrosoftAuth {
 
         // Exchange the authorization code for tokens immediately.
         try {
-          await this.exchangeCode(code, codeVerifier);
+          await this.handleCallback(code, receivedState);
           res.writeHead(200, { 'Content-Type': 'text/html' }).end(
             '<h2>Connected!</h2><p>Microsoft account linked successfully. You can close this window.</p>',
           );
-          log.info('OAuth callback received and tokens exchanged successfully');
-          this.pending?.resolve(code);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error({ err: msg }, 'Token exchange failed in OAuth callback');
           res.writeHead(200, { 'Content-Type': 'text/html' }).end(
             `<h2>Connection failed</h2><p>${msg}</p><p>Please try again.</p>`,
           );
-          this.pending?.reject(err instanceof Error ? err : new Error(msg));
         }
-
-        // Close the callback server after handling.
-        this.stopCallbackServer();
       });
 
       server.listen(this.callbackPort, '127.0.0.1', () => {
@@ -286,6 +305,18 @@ export class MicrosoftAuth {
     });
   }
 
+  private startWebCallbackWait(state: string, codeVerifier: string): void {
+    this.pending = {
+      codeVerifier,
+      state,
+      resolve: () => {},
+      reject: () => {},
+      timeoutHandle: setTimeout(() => {
+        this.cancelPendingAuth('OAuth flow timed out.');
+      }, AUTH_TIMEOUT_MS),
+    };
+  }
+
   private stopCallbackServer(): void {
     if (!this.pending) return;
     const pending = this.pending;
@@ -293,17 +324,15 @@ export class MicrosoftAuth {
     if (pending.timeoutHandle) {
       clearTimeout(pending.timeoutHandle);
     }
-    pending.server.close();
+    pending.server?.close();
   }
 
   private async exchangeCode(code: string, codeVerifier: string): Promise<void> {
-    const redirectUri = `http://localhost:${this.callbackPort}/callback`;
-
     const body = new URLSearchParams({
       client_id: this.clientId,
       grant_type: 'authorization_code',
       code,
-      redirect_uri: redirectUri,
+      redirect_uri: this.redirectUri,
       code_verifier: codeVerifier,
       scope: [...new Set([...this.scopes, 'offline_access', 'User.Read'])].join(' '),
     });
@@ -404,6 +433,18 @@ export class MicrosoftAuth {
       // File may not exist.
     }
   }
+
+  private usesStandaloneCallbackServer(): boolean {
+    try {
+      const url = new URL(this.redirectUri);
+      const port = url.port ? Number(url.port) : (url.protocol === 'https:' ? 443 : 80);
+      return url.pathname === '/callback'
+        && port === this.callbackPort
+        && ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname);
+    } catch {
+      return true;
+    }
+  }
 }
 
 // ─── Encryption helpers ──────────────────────────────────
@@ -412,6 +453,10 @@ export class MicrosoftAuth {
 function deriveKey(): Buffer {
   const material = `guardianagent:${hostname()}:${userInfo().username}:microsoft-tokens`;
   return createHash('sha256').update(material).digest();
+}
+
+function defaultRedirectUri(callbackPort: number): string {
+  return `http://localhost:${callbackPort}/callback`;
 }
 
 function encrypt(plaintext: string): string {

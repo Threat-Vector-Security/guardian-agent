@@ -18,10 +18,63 @@ interface WebProviderAdminRoutesContext {
   maybeEmitUIInvalidation: (result: unknown, topics: string[], reason: string, path: string) => void;
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sendCallbackPage(res: ServerResponse, status: number, title: string, message: string): void {
+  if (res.headersSent) return;
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(`<!doctype html><html><head><title>${escapeHtml(title)}</title></head><body><h2>${escapeHtml(title)}</h2><p>${escapeHtml(message)}</p></body></html>`);
+}
+
 export async function handleWebProviderAdminRoutes(
   context: WebProviderAdminRoutesContext,
 ): Promise<boolean> {
   const { req, res, url, dashboard } = context;
+
+  if (req.method === 'GET' && url.pathname === '/api/google/auth/callback') {
+    if (!dashboard.onGoogleAuthCallback) {
+      sendCallbackPage(res, 404, 'Google Authorization Failed', 'Native Google integration is not available.');
+      return true;
+    }
+    const result = await dashboard.onGoogleAuthCallback({
+      code: url.searchParams.get('code') ?? undefined,
+      state: url.searchParams.get('state') ?? undefined,
+      error: url.searchParams.get('error_description') ?? url.searchParams.get('error') ?? undefined,
+    });
+    sendCallbackPage(
+      res,
+      result.success ? 200 : 400,
+      result.success ? 'Google Connected' : 'Google Authorization Failed',
+      result.message,
+    );
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/microsoft/auth/callback') {
+    if (!dashboard.onMicrosoftAuthCallback) {
+      sendCallbackPage(res, 404, 'Microsoft Authorization Failed', 'Native Microsoft 365 integration is not available.');
+      return true;
+    }
+    const result = await dashboard.onMicrosoftAuthCallback({
+      code: url.searchParams.get('code') ?? undefined,
+      state: url.searchParams.get('state') ?? undefined,
+      error: url.searchParams.get('error_description') ?? url.searchParams.get('error') ?? undefined,
+    });
+    sendCallbackPage(
+      res,
+      result.success ? 200 : 400,
+      result.success ? 'Microsoft Connected' : 'Microsoft Authorization Failed',
+      result.message,
+    );
+    return true;
+  }
 
   if (req.method === 'GET' && url.pathname === '/api/gws/status') {
     if (dashboard.onGoogleStatus) {

@@ -4295,6 +4295,28 @@ describe('WebChannel', () => {
       expect(body.mode).toBe('disabled');
       expect(body.tokenConfigured).toBe(false);
     });
+
+    it('should allow provider OAuth callbacks without bearer auth', async () => {
+      const seen: Array<{ code?: string; state?: string; error?: string }> = [];
+      web = new WebChannel({
+        port: 19084,
+        authToken: TEST_TOKEN,
+        dashboard: {
+          onGoogleAuthCallback: async (input) => {
+            seen.push(input);
+            return { success: true, message: 'linked' };
+          },
+        },
+      });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:19084/api/google/auth/callback?code=c1&state=s1');
+      const text = await res.text();
+
+      expect(res.status).toBe(200);
+      expect(text).toContain('Google Connected');
+      expect(seen).toEqual([{ code: 'c1', state: 's1', error: undefined }]);
+    });
   });
 
   describe('Fix #4: CORS origin allowlist', () => {

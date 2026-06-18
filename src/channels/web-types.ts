@@ -2006,6 +2006,8 @@ export interface DashboardCallbacks {
     state?: string;
     message?: string;
   }>;
+  /** Complete native Google OAuth callback from the configured redirect URI. */
+  onGoogleAuthCallback?: (input: { code?: string; state?: string; error?: string }) => Promise<{ success: boolean; message: string }>;
   /** Upload client_secret.json credentials. */
   onGoogleCredentials?: (credentials: string) => Promise<{ success: boolean; message: string }>;
   /** Cancel an in-progress native Google OAuth flow. */
@@ -2029,6 +2031,8 @@ export interface DashboardCallbacks {
     state?: string;
     message?: string;
   }>;
+  /** Complete native Microsoft OAuth callback from the configured redirect URI. */
+  onMicrosoftAuthCallback?: (input: { code?: string; state?: string; error?: string }) => Promise<{ success: boolean; message: string }>;
   /** Save Microsoft client ID / tenant ID config. */
   onMicrosoftConfig?: (config: { clientId: string; tenantId?: string }) => Promise<{ success: boolean; message: string }>;
   /** Cancel an in-progress native Microsoft OAuth flow. */
