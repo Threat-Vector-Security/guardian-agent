@@ -186,6 +186,24 @@ export function resolveCloudCredentialConfig(
         `assistant.tools.cloud.cloudflareProfiles.${profile.id}`,
       ),
     })),
+    supabaseProfiles: (config.supabaseProfiles ?? []).map((profile) => ({
+      ...profile,
+      accessToken: resolveCredentialValue(
+        profile.accessToken,
+        profile.credentialRef,
+        provider,
+        `assistant.tools.cloud.supabaseProfiles.${profile.id}`,
+      ),
+    })),
+    flyProfiles: (config.flyProfiles ?? []).map((profile) => ({
+      ...profile,
+      apiToken: resolveCredentialValue(
+        profile.apiToken,
+        profile.credentialRef,
+        provider,
+        `assistant.tools.cloud.flyProfiles.${profile.id}`,
+      ),
+    })),
     awsProfiles: (config.awsProfiles ?? []).map((profile) => ({
       ...profile,
       accessKeyId: resolveCredentialValue(

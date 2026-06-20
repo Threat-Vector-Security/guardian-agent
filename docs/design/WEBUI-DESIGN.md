@@ -644,6 +644,8 @@ Must provide guided forms for:
 - cPanel / WHM
 - Vercel
 - Cloudflare
+- Supabase
+- Fly.io
 - AWS
 - GCP
 - Azure
@@ -670,6 +672,7 @@ The preferred provider-editing pattern is:
 - selecting a saved profile opens an edit surface on the right
 - `Add` switches the right side into an explicit create flow
 - section help on both the provider-family panel and the active editor must describe that actual state
+- provider-family sections are collapsed by default and expand in place so the Connections tab remains easy to scan as families are added
 
 ### `Activity`
 

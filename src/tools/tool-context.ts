@@ -5,7 +5,7 @@ export interface ToolContextRequestSignals {
 }
 
 export interface ToolContextCloudProfileSummary {
-  family: 'cpanel' | 'vercel' | 'daytona' | 'cloudflare' | 'aws' | 'gcp' | 'azure';
+  family: 'cpanel' | 'vercel' | 'daytona' | 'cloudflare' | 'supabase' | 'fly' | 'aws' | 'gcp' | 'azure';
   id: string;
   label: string;
   line: string;
@@ -91,6 +91,10 @@ function familyKeywords(family: ToolContextCloudProfileSummary['family']): strin
       return ['daytona', 'sandbox'];
     case 'cloudflare':
       return ['cloudflare', 'cf'];
+    case 'supabase':
+      return ['supabase', 'supa base'];
+    case 'fly':
+      return ['fly', 'fly.io', 'fly.dev'];
     case 'aws':
       return ['aws'];
     case 'gcp':
@@ -142,7 +146,7 @@ function buildCloudContextLines(input: ToolContextInput, signalText: string): st
 
   const lines = [
     'Cloud tools: enabled',
-    'Use cloud_profile_list to inventory configured cloud profile ids before provider-specific status checks; cloud tool families available via find_tools: cpanel_*, whm_*, vercel_*, cf_*, aws_*, gcp_*, azure_*',
+    'Use cloud_profile_list to inventory configured cloud profile ids before provider-specific cloud operations; cloud tool families available via find_tools: cpanel_*, whm_*, vercel_*, cf_*, supabase_*, fly_*, aws_*, gcp_*, azure_*',
     'Use configured cloud profile ids exactly as listed below when calling cloud tools. If a matching profile is listed, do not ask the user to repeat host or credential details.',
     ...input.cloudSummaryLines,
   ];

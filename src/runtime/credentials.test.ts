@@ -349,6 +349,68 @@ describe('resolveRuntimeCredentialView', () => {
     expect(resolved.resolvedCloud?.cloudflareProfiles?.[0]?.apiToken).toBe('cloudflare-runtime-token');
   });
 
+  it('resolves Supabase profile access tokens from credential refs', () => {
+    vi.stubEnv('SUPABASE_ACCESS_TOKEN', 'supabase-runtime-token');
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.supabase.primary': { source: 'env', env: 'SUPABASE_ACCESS_TOKEN' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            supabaseProfiles: [{
+              id: 'supabase-main',
+              name: 'Supabase Main',
+              credentialRef: 'cloud.supabase.primary',
+              organizationId: 'org_123',
+              projectRef: 'project_123',
+            }],
+          },
+        },
+      },
+    };
+
+    const resolved = resolveRuntimeCredentialView(config);
+    expect(resolved.resolvedCloud?.supabaseProfiles?.[0]?.accessToken).toBe('supabase-runtime-token');
+  });
+
+  it('resolves Fly profile API tokens from credential refs', () => {
+    vi.stubEnv('FLY_API_TOKEN', 'fly-runtime-token');
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.fly.primary': { source: 'env', env: 'FLY_API_TOKEN' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            flyProfiles: [{
+              id: 'fly-main',
+              name: 'Fly Main',
+              credentialRef: 'cloud.fly.primary',
+              orgSlug: 'personal',
+              defaultAppName: 'guardian',
+            }],
+          },
+        },
+      },
+    };
+
+    const resolved = resolveRuntimeCredentialView(config);
+    expect(resolved.resolvedCloud?.flyProfiles?.[0]?.apiToken).toBe('fly-runtime-token');
+  });
+
   it('resolves AWS profile credentials from credential refs', () => {
     vi.stubEnv('AWS_ACCESS_KEY_ID', 'AKIATESTRUNTIMEKEY123');
     vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'runtime-secret-key-value');

@@ -79,6 +79,16 @@ export function createCloudConnectionTesters(): CloudConnectionTesters {
       const client = new CloudflareClient(profile as unknown as ConstructorParameters<typeof CloudflareClient>[0]);
       await client.verifyToken();
     },
+    supabase: async (profile) => {
+      const { SupabaseClient } = await import('../../tools/cloud/supabase-client.js');
+      const client = new SupabaseClient(profile as unknown as ConstructorParameters<typeof SupabaseClient>[0]);
+      await client.listProjects();
+    },
+    fly: async (profile) => {
+      const { FlyClient } = await import('../../tools/cloud/fly-client.js');
+      const client = new FlyClient(profile as unknown as ConstructorParameters<typeof FlyClient>[0]);
+      await client.listApps();
+    },
     aws: async (profile) => {
       const { AwsClient } = await import('../../tools/cloud/aws-client.js');
       const client = new AwsClient(profile as unknown as ConstructorParameters<typeof AwsClient>[0]);

@@ -2478,6 +2478,18 @@ describe('ToolExecutor', () => {
           name: 'Web Production',
           apiToken: 'vercel-secret',
         }],
+        supabaseProfiles: [{
+          id: 'supabase-prod',
+          name: 'Supabase Production',
+          accessToken: 'supabase-secret',
+          projectRef: 'project_123',
+        }],
+        flyProfiles: [{
+          id: 'fly-prod',
+          name: 'Fly Production',
+          apiToken: 'fly-secret',
+          defaultAppName: 'guardian',
+        }],
       },
     });
 
@@ -2495,7 +2507,7 @@ describe('ToolExecutor', () => {
     expect(context).toContain('Deferred cloud tools (');
     expect(context).toContain('whm_status');
     expect(context).toContain('Cloud tools: enabled');
-    expect(context).toContain('Use cloud_profile_list to inventory configured cloud profile ids before provider-specific status checks');
+    expect(context).toContain('Use cloud_profile_list to inventory configured cloud profile ids before provider-specific cloud operations');
     expect(context).toContain('Use configured cloud profile ids exactly as listed below when calling cloud tools.');
     expect(context).toContain('- social: provider=whm');
     expect(context).toContain('endpoint=https://host.social.example:2087');
@@ -2505,6 +2517,10 @@ describe('ToolExecutor', () => {
     expect(context).toContain('defaultCpanelUser=socialuser');
     expect(context).toContain('- web-prod: provider=vercel');
     expect(context).toContain('suggestedReadOnlyTest=vercel_status');
+    expect(context).toContain('- supabase-prod: provider=supabase');
+    expect(context).toContain('suggestedReadOnlyTest=supabase_status');
+    expect(context).toContain('- fly-prod: provider=fly');
+    expect(context).toContain('suggestedReadOnlyTest=fly_status');
   });
 
   it('lists configured cloud profiles through a read-only inventory tool', async () => {
@@ -2515,7 +2531,7 @@ describe('ToolExecutor', () => {
       policyMode: 'approve_by_policy',
       allowedPaths: [root],
       allowedCommands: ['echo'],
-      allowedDomains: ['localhost', 'api.vercel.com', 'host.social.example'],
+      allowedDomains: ['localhost', 'api.vercel.com', 'api.supabase.com', 'api.machines.dev', 'host.social.example'],
       cloudConfig: {
         enabled: true,
         cpanelProfiles: [{
@@ -2532,6 +2548,18 @@ describe('ToolExecutor', () => {
           name: 'Web Production',
           apiToken: 'vercel-secret',
         }],
+        supabaseProfiles: [{
+          id: 'supabase-prod',
+          name: 'Supabase Production',
+          accessToken: 'supabase-secret',
+          projectRef: 'project_123',
+        }],
+        flyProfiles: [{
+          id: 'fly-prod',
+          name: 'Fly Production',
+          apiToken: 'fly-secret',
+          defaultAppName: 'guardian',
+        }],
       },
     });
 
@@ -2546,10 +2574,12 @@ describe('ToolExecutor', () => {
     expect(result.status).toBe('succeeded');
     expect(result.output).toMatchObject({
       enabled: true,
-      profileCount: 2,
+      profileCount: 4,
       counts: {
         cpanel: 1,
         vercel: 1,
+        supabase: 1,
+        fly: 1,
       },
     });
     expect((result.output as any).profiles).toEqual(expect.arrayContaining([
@@ -2562,6 +2592,16 @@ describe('ToolExecutor', () => {
         family: 'vercel',
         id: 'web-prod',
         summary: expect.stringContaining('suggestedReadOnlyTest=vercel_status'),
+      }),
+      expect.objectContaining({
+        family: 'supabase',
+        id: 'supabase-prod',
+        summary: expect.stringContaining('suggestedReadOnlyTest=supabase_status'),
+      }),
+      expect.objectContaining({
+        family: 'fly',
+        id: 'fly-prod',
+        summary: expect.stringContaining('suggestedReadOnlyTest=fly_status'),
       }),
     ]));
   });
@@ -4199,6 +4239,85 @@ describe('ToolExecutor', () => {
       data: { id: 'record_1', type: 'A', name: 'app.example.com', content: '1.2.3.4' },
     });
     expect(requests.some((entry) => entry.url === '/zones/zone_1/dns_records' && entry.method === 'POST')).toBe(true);
+  });
+
+  it('runs approved generic Supabase and Fly API requests', async () => {
+    const requests: Array<{ method: string; url: string | undefined; body: string; authorization: string | undefined }> = [];
+    const server = createServer((req, res) => {
+      let raw = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        requests.push({
+          method: req.method ?? 'GET',
+          url: req.url,
+          body: raw,
+          authorization: req.headers.authorization,
+        });
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ ok: true, path: req.url, method: req.method }));
+      });
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        supabaseProfiles: [{
+          id: 'supabase-main',
+          name: 'Supabase Main',
+          apiBaseUrl: `http://127.0.0.1:${address.port}`,
+          accessToken: 'supabase-secret',
+        }],
+        flyProfiles: [{
+          id: 'fly-main',
+          name: 'Fly Main',
+          apiBaseUrl: `http://127.0.0.1:${address.port}`,
+          apiToken: 'fly-secret',
+        }],
+      },
+    });
+
+    const supabasePending = await executor.runTool({
+      toolName: 'supabase_api',
+      args: { profile: 'supabase-main', method: 'PATCH', path: '/v1/projects/project_123', body: { name: 'Updated' } },
+      origin: 'cli',
+    });
+    expect(supabasePending.status).toBe('pending_approval');
+    const supabaseApproved = await executor.decideApproval(supabasePending.approvalId!, 'approved', 'tester');
+    expect(supabaseApproved.success).toBe(true);
+
+    const flyPending = await executor.runTool({
+      toolName: 'fly_api',
+      args: { profile: 'fly-main', method: 'POST', path: '/v1/apps', query: { org_slug: 'personal' }, body: { app_name: 'guardian' } },
+      origin: 'cli',
+    });
+    expect(flyPending.status).toBe('pending_approval');
+    const flyApproved = await executor.decideApproval(flyPending.approvalId!, 'approved', 'tester');
+    expect(flyApproved.success).toBe(true);
+
+    expect(requests).toEqual([
+      expect.objectContaining({
+        method: 'PATCH',
+        url: '/v1/projects/project_123',
+        body: JSON.stringify({ name: 'Updated' }),
+        authorization: 'Bearer supabase-secret',
+      }),
+      expect.objectContaining({
+        method: 'POST',
+        url: '/v1/apps?org_slug=personal',
+        body: JSON.stringify({ app_name: 'guardian' }),
+        authorization: 'Bearer fly-secret',
+      }),
+    ]);
   });
 
   it('requires approval for Cloudflare cache purges', async () => {

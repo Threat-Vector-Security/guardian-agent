@@ -7,7 +7,9 @@ import type {
   AssistantCloudCloudflareProfileConfig,
   AssistantCloudCpanelProfileConfig,
   AssistantCloudDaytonaProfileConfig,
+  AssistantCloudFlyProfileConfig,
   AssistantCloudGcpProfileConfig,
+  AssistantCloudSupabaseProfileConfig,
   AssistantCloudVercelProfileConfig,
   GuardianAgentConfig,
 } from '../../config/types.js';
@@ -72,6 +74,8 @@ interface ProviderIntegrationCallbackOptions {
     vercel: (profile: AssistantCloudVercelProfileConfig) => Promise<void>;
     daytona: (profile: AssistantCloudDaytonaProfileConfig) => Promise<void>;
     cloudflare: (profile: AssistantCloudCloudflareProfileConfig) => Promise<void>;
+    supabase: (profile: AssistantCloudSupabaseProfileConfig) => Promise<void>;
+    fly: (profile: AssistantCloudFlyProfileConfig) => Promise<void>;
     aws: (profile: AssistantCloudAwsProfileConfig) => Promise<void>;
     gcp: (profile: AssistantCloudGcpProfileConfig) => Promise<void>;
     azure: (profile: AssistantCloudAzureProfileConfig) => Promise<void>;
@@ -83,6 +87,8 @@ const CLOUD_PROVIDER_KEYS = [
   'vercelProfiles',
   'daytonaProfiles',
   'cloudflareProfiles',
+  'supabaseProfiles',
+  'flyProfiles',
   'awsProfiles',
   'gcpProfiles',
   'azureProfiles',
@@ -100,6 +106,12 @@ const CLOUD_PROVIDER_KEY_ALIASES: Record<string, CloudProviderKey> = {
   daytonaProfiles: 'daytonaProfiles',
   cloudflare: 'cloudflareProfiles',
   cloudflareProfiles: 'cloudflareProfiles',
+  supabase: 'supabaseProfiles',
+  supabaseProfiles: 'supabaseProfiles',
+  fly: 'flyProfiles',
+  flydev: 'flyProfiles',
+  flyio: 'flyProfiles',
+  flyProfiles: 'flyProfiles',
   aws: 'awsProfiles',
   awsProfiles: 'awsProfiles',
   gcp: 'gcpProfiles',
@@ -405,7 +417,7 @@ export function createProviderIntegrationCallbacks(
       if (!normalizedProviderKey) {
         return {
           success: false,
-          message: `Unknown cloud provider: '${providerKey}'. Expected one of: cpanel, vercel, daytona, cloudflare, aws, gcp, azure.`,
+          message: `Unknown cloud provider: '${providerKey}'. Expected one of: cpanel, vercel, daytona, cloudflare, supabase, fly, aws, gcp, azure.`,
         };
       }
 
@@ -438,6 +450,20 @@ export function createProviderIntegrationCallbacks(
             if (!profile.apiToken) return { success: false, message: `No credential resolved for Cloudflare profile '${profileId}'.` };
             await options.testCloudConnections.cloudflare(profile);
             return { success: true, message: `Cloudflare profile '${profile.name}': connected.` };
+          }
+          case 'supabaseProfiles': {
+            const profile = cloud.supabaseProfiles?.find((entry) => entry.id === profileId);
+            if (!profile) return { success: false, message: `Supabase profile '${profileId}' not found.` };
+            if (!profile.accessToken) return { success: false, message: `No credential resolved for Supabase profile '${profileId}'.` };
+            await options.testCloudConnections.supabase(profile);
+            return { success: true, message: `Supabase profile '${profile.name}': connected.` };
+          }
+          case 'flyProfiles': {
+            const profile = cloud.flyProfiles?.find((entry) => entry.id === profileId);
+            if (!profile) return { success: false, message: `Fly.io profile '${profileId}' not found.` };
+            if (!profile.apiToken) return { success: false, message: `No credential resolved for Fly.io profile '${profileId}'.` };
+            await options.testCloudConnections.fly(profile);
+            return { success: true, message: `Fly.io profile '${profile.name}': connected.` };
           }
           case 'awsProfiles': {
             const profile = cloud.awsProfiles?.find((entry) => entry.id === profileId);

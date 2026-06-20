@@ -1,6 +1,6 @@
 # Cloud Operations
 
-Use the built-in cloud and hosting tools for read-first inspection across Vercel, Cloudflare, AWS, GCP, Azure, cPanel, and WHM.
+Use the built-in cloud and hosting tools for inspection and approved operations across Vercel, Cloudflare, Supabase, Fly.io, AWS, GCP, Azure, cPanel, and WHM.
 
 ## Core Rules
 
@@ -8,15 +8,17 @@ Use the built-in cloud and hosting tools for read-first inspection across Vercel
 - Prefer the narrowest read-only status or inventory tool first.
 - Separate confirmed tool output from your inference.
 - If the exact provider tool is not visible, call `find_tools` with the provider name before saying a capability is missing.
-- The current built-in cloud surface is primarily status, inventory, DNS, SSL, log, and posture inspection. Do not promise unsupported write operations.
+- For Supabase and Fly.io, use `supabase_api` / `fly_api` for Management/Machines API operations and `supabase_cli` / `fly_cli` when the provider CLI is the right surface. Mutating operations go through normal Guardian approval.
 
 ## Provider Workflow
 
 1. Start with the provider health or account summary.
-   - `vercel_status`, `cf_status`, `aws_status`, `gcp_status`, `azure_status`, `cpanel_account`, `whm_status`
+   - `vercel_status`, `cf_status`, `supabase_status`, `fly_status`, `aws_status`, `gcp_status`, `azure_status`, `cpanel_account`, `whm_status`
 2. Move to the narrow provider-specific tool that matches the request.
    - Vercel: projects, deployments, domains, env, logs
    - Cloudflare: DNS, SSL, cache
+   - Supabase: `supabase_api` or `supabase_cli`
+   - Fly.io: `fly_api` or `fly_cli`
    - AWS: EC2, security groups, S3, Route53, Lambda, CloudWatch, RDS, IAM, costs
    - GCP: Compute, Cloud Run, Storage, DNS, logs
    - Azure: VMs, App Service, Storage, DNS, Monitor
@@ -36,4 +38,4 @@ Use the built-in cloud and hosting tools for read-first inspection across Vercel
 
 - Do not jump straight to logs when a status or inventory tool can answer the question faster.
 - Do not treat a missing configured profile as proof that the provider is unsupported; check `<tool-context>` and `find_tools` first.
-- Do not promise write or deploy operations that the current built-in surface does not expose.
+- Do not hand-write provider-specific workflows if the provider CLI already owns the operation; run the CLI with explicit args instead.

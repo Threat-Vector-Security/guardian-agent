@@ -1016,6 +1016,43 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toEqual([]);
   });
 
+  it('should validate cloud Supabase and Fly credential refs', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.supabase.primary': { source: 'env', env: 'SUPABASE_ACCESS_TOKEN' },
+            'cloud.fly.primary': { source: 'env', env: 'FLY_API_TOKEN' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            supabaseProfiles: [{
+              id: 'supabase-main',
+              name: 'Supabase Main',
+              credentialRef: 'cloud.supabase.primary',
+              organizationId: 'org_123',
+              projectRef: 'project_123',
+            }],
+            flyProfiles: [{
+              id: 'fly-main',
+              name: 'Fly Main',
+              credentialRef: 'cloud.fly.primary',
+              orgSlug: 'personal',
+              defaultAppName: 'guardian',
+            }],
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
   it('should validate Vercel sandbox requirements and limits', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
@@ -1098,6 +1135,22 @@ describe('validateConfig', () => {
               enabled: true,
               snapshot: ' snapshot-main ',
             }],
+            supabaseProfiles: [{
+              id: 'supabase-main',
+              name: 'Supabase Main',
+              credentialRef: 'cloud.supabase.primary',
+              apiBaseUrl: 'https://api.supabase.com/',
+              organizationId: ' org_123 ',
+              projectRef: ' project_123 ',
+            }],
+            flyProfiles: [{
+              id: 'fly-main',
+              name: 'Fly Main',
+              credentialRef: 'cloud.fly.primary',
+              apiBaseUrl: 'https://api.machines.dev/',
+              orgSlug: ' personal ',
+              defaultAppName: ' guardian ',
+            }],
             awsProfiles: [{
               id: 'aws-main',
               name: 'AWS Main',
@@ -1129,6 +1182,8 @@ describe('validateConfig', () => {
             'cloud.cpanel.primary': { source: 'env', env: 'CPANEL_TOKEN' },
             'cloud.vercel.primary': { source: 'env', env: 'VERCEL_TOKEN' },
             'cloud.daytona.primary': { source: 'env', env: 'DAYTONA_API_KEY' },
+            'cloud.supabase.primary': { source: 'env', env: 'SUPABASE_ACCESS_TOKEN' },
+            'cloud.fly.primary': { source: 'env', env: 'FLY_API_TOKEN' },
             'cloud.aws.access': { source: 'env', env: 'AWS_ACCESS_KEY_ID' },
             'cloud.aws.secret': { source: 'env', env: 'AWS_SECRET_ACCESS_KEY' },
             'cloud.gcp.service': { source: 'env', env: 'GCP_SERVICE_ACCOUNT_JSON' },
@@ -1159,6 +1214,12 @@ describe('validateConfig', () => {
     expect(loaded.assistant.tools.cloud?.vercelProfiles?.[0]?.sandbox?.baseSnapshotId).toBe('snap_vercel_base');
     expect(loaded.assistant.tools.cloud?.vercelProfiles?.[0]?.sandbox?.allowedDomains).toEqual(['registry.npmjs.org', 'api.anthropic.com']);
     expect(loaded.assistant.tools.cloud?.daytonaProfiles?.[0]?.snapshot).toBe('snapshot-main');
+    expect(loaded.assistant.tools.cloud?.supabaseProfiles?.[0]?.apiBaseUrl).toBe('https://api.supabase.com');
+    expect(loaded.assistant.tools.cloud?.supabaseProfiles?.[0]?.organizationId).toBe('org_123');
+    expect(loaded.assistant.tools.cloud?.supabaseProfiles?.[0]?.projectRef).toBe('project_123');
+    expect(loaded.assistant.tools.cloud?.flyProfiles?.[0]?.apiBaseUrl).toBe('https://api.machines.dev');
+    expect(loaded.assistant.tools.cloud?.flyProfiles?.[0]?.orgSlug).toBe('personal');
+    expect(loaded.assistant.tools.cloud?.flyProfiles?.[0]?.defaultAppName).toBe('guardian');
     expect(loaded.assistant.tools.cloud?.awsProfiles?.[0]?.endpoints?.s3).toBe('http://localhost:4566');
     expect(loaded.assistant.tools.cloud?.gcpProfiles?.[0]?.endpoints?.storage).toBe('https://storage.googleapis.com');
     expect(loaded.assistant.tools.cloud?.azureProfiles?.[0]?.blobBaseUrl).toBe('https://account.blob.core.windows.net');

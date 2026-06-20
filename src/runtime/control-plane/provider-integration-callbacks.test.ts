@@ -25,6 +25,8 @@ function createOptions(overrides: Partial<Parameters<typeof createProviderIntegr
       vercel: vi.fn(async () => {}),
       daytona: vi.fn(async () => {}),
       cloudflare: vi.fn(async () => {}),
+      supabase: vi.fn(async () => {}),
+      fly: vi.fn(async () => {}),
       aws: vi.fn(async () => {}),
       gcp: vi.fn(async () => {}),
       azure: vi.fn(async () => {}),
@@ -169,6 +171,8 @@ describe('createProviderIntegrationCallbacks', () => {
       vercel: vi.fn(async () => {}),
       daytona: vi.fn(async () => {}),
       cloudflare: vi.fn(async () => {}),
+      supabase: vi.fn(async () => {}),
+      fly: vi.fn(async () => {}),
       aws: vi.fn(async () => {}),
       gcp: vi.fn(async () => {}),
       azure: vi.fn(async () => {}),
@@ -204,6 +208,8 @@ describe('createProviderIntegrationCallbacks', () => {
       vercel: vi.fn(async () => {}),
       daytona: vi.fn(async () => {}),
       cloudflare: vi.fn(async () => {}),
+      supabase: vi.fn(async () => {}),
+      fly: vi.fn(async () => {}),
       aws: vi.fn(async () => {}),
       gcp: vi.fn(async () => {}),
       azure: vi.fn(async () => {}),
@@ -239,6 +245,8 @@ describe('createProviderIntegrationCallbacks', () => {
       vercel: vi.fn(async () => {}),
       daytona: vi.fn(async () => {}),
       cloudflare: vi.fn(async () => {}),
+      supabase: vi.fn(async () => {}),
+      fly: vi.fn(async () => {}),
       aws: vi.fn(async () => {}),
       gcp: vi.fn(async () => {}),
       azure: vi.fn(async () => {}),
@@ -277,6 +285,8 @@ describe('createProviderIntegrationCallbacks', () => {
       vercel: vi.fn(async () => {}),
       daytona: vi.fn(async () => {}),
       cloudflare: vi.fn(async () => {}),
+      supabase: vi.fn(async () => {}),
+      fly: vi.fn(async () => {}),
       aws: vi.fn(async () => {}),
       gcp: vi.fn(async () => {}),
       azure: vi.fn(async () => {}),
@@ -315,6 +325,8 @@ describe('createProviderIntegrationCallbacks', () => {
       vercel: vi.fn(async () => {}),
       daytona: vi.fn(async () => {}),
       cloudflare: vi.fn(async () => {}),
+      supabase: vi.fn(async () => {}),
+      fly: vi.fn(async () => {}),
       aws: vi.fn(async () => {}),
       gcp: vi.fn(async () => {}),
       azure: vi.fn(async () => {}),
@@ -329,6 +341,80 @@ describe('createProviderIntegrationCallbacks', () => {
 
     expect(testCloudConnections.vercel).toHaveBeenCalledOnce();
     expect(result).toEqual({ success: true, message: "Vercel profile 'Vercel Production': connected." });
+  });
+
+  it('tests a configured Supabase profile through the injected cloud tester', async () => {
+    const config = createConfig();
+    config.assistant.tools.cloud = {
+      enabled: true,
+      supabaseProfiles: [
+        {
+          id: 'supabase-prod',
+          name: 'Supabase Production',
+          accessToken: 'secret-token',
+          organizationId: 'org_123',
+          projectRef: 'proj_123',
+        },
+      ],
+    };
+    const testCloudConnections = {
+      cpanel: vi.fn(async () => {}),
+      vercel: vi.fn(async () => {}),
+      daytona: vi.fn(async () => {}),
+      cloudflare: vi.fn(async () => {}),
+      supabase: vi.fn(async () => {}),
+      fly: vi.fn(async () => {}),
+      aws: vi.fn(async () => {}),
+      gcp: vi.fn(async () => {}),
+      azure: vi.fn(async () => {}),
+    };
+
+    const callbacks = createProviderIntegrationCallbacks(createOptions({
+      configRef: { current: config },
+      testCloudConnections,
+    }));
+
+    const result = await callbacks.onCloudTest?.('supabaseProfiles', 'supabase-prod');
+
+    expect(testCloudConnections.supabase).toHaveBeenCalledOnce();
+    expect(result).toEqual({ success: true, message: "Supabase profile 'Supabase Production': connected." });
+  });
+
+  it('tests a configured Fly profile through the injected cloud tester', async () => {
+    const config = createConfig();
+    config.assistant.tools.cloud = {
+      enabled: true,
+      flyProfiles: [
+        {
+          id: 'fly-prod',
+          name: 'Fly Production',
+          apiToken: 'secret-token',
+          orgSlug: 'personal',
+          defaultAppName: 'guardian-prod',
+        },
+      ],
+    };
+    const testCloudConnections = {
+      cpanel: vi.fn(async () => {}),
+      vercel: vi.fn(async () => {}),
+      daytona: vi.fn(async () => {}),
+      cloudflare: vi.fn(async () => {}),
+      supabase: vi.fn(async () => {}),
+      fly: vi.fn(async () => {}),
+      aws: vi.fn(async () => {}),
+      gcp: vi.fn(async () => {}),
+      azure: vi.fn(async () => {}),
+    };
+
+    const callbacks = createProviderIntegrationCallbacks(createOptions({
+      configRef: { current: config },
+      testCloudConnections,
+    }));
+
+    const result = await callbacks.onCloudTest?.('flyProfiles', 'fly-prod');
+
+    expect(testCloudConnections.fly).toHaveBeenCalledOnce();
+    expect(result).toEqual({ success: true, message: "Fly.io profile 'Fly Production': connected." });
   });
 
   it('returns a configuration error when cloud tools are not enabled', async () => {

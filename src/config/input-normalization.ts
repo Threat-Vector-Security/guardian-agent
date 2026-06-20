@@ -188,6 +188,18 @@ export function normalizeConfigInputs(config: GuardianAgentConfig): GuardianAgen
               ...profile,
               apiBaseUrl: normalizeOptionalHttpUrlInput(profile.apiBaseUrl),
             })),
+            supabaseProfiles: (config.assistant.tools.cloud.supabaseProfiles ?? []).map((profile) => ({
+              ...profile,
+              apiBaseUrl: normalizeOptionalHttpUrlInput(profile.apiBaseUrl),
+              organizationId: trimOptionalString(profile.organizationId),
+              projectRef: trimOptionalString(profile.projectRef),
+            })),
+            flyProfiles: (config.assistant.tools.cloud.flyProfiles ?? []).map((profile) => ({
+              ...profile,
+              apiBaseUrl: normalizeOptionalHttpUrlInput(profile.apiBaseUrl),
+              orgSlug: trimOptionalString(profile.orgSlug),
+              defaultAppName: trimOptionalString(profile.defaultAppName),
+            })),
             awsProfiles: (config.assistant.tools.cloud.awsProfiles ?? []).map((profile) => ({
               ...profile,
               endpoints: normalizeHttpUrlRecord(profile.endpoints),

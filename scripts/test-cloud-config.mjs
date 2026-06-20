@@ -251,6 +251,16 @@ async function createMockCloudServer() {
       response = jsonResponse({ success: true, result: { id: 'acc_123', name: 'Main Account' } });
     } else if (url.pathname === '/zones') {
       response = jsonResponse({ success: true, result: [{ id: 'zone_1', name: 'example.com' }] });
+    } else if (url.pathname === '/v1/projects') {
+      response = jsonResponse([{ id: 'guardian-supabase', name: 'Guardian Supabase', organization_id: 'org_123' }]);
+    } else if (url.pathname === '/v1/projects/guardian-supabase') {
+      response = jsonResponse({ id: 'guardian-supabase', name: 'Guardian Supabase', status: 'ACTIVE_HEALTHY' });
+    } else if (url.pathname === '/v1/apps') {
+      response = jsonResponse({ apps: [{ name: 'guardian-fly', organization: { slug: url.searchParams.get('org_slug') || 'personal' } }] });
+    } else if (url.pathname === '/v1/apps/guardian-fly') {
+      response = jsonResponse({ name: 'guardian-fly', status: 'deployed' });
+    } else if (url.pathname === '/v1/apps/guardian-fly/machines') {
+      response = jsonResponse([{ id: 'machine-1', state: 'started', region: 'syd' }]);
     } else if (url.pathname === '/v1/projects/guardian-prod') {
       response = jsonResponse({ projectId: 'guardian-prod', lifecycleState: 'ACTIVE' });
     } else if (url.pathname === '/v1/projects/guardian-prod/services') {
@@ -494,6 +504,20 @@ function buildHarnessConfig(configPath) {
       '          apiToken: cf-secret',
       '          accountId: acc_123',
       '          defaultZoneId: zone_1',
+      '      supabaseProfiles:',
+      '        - id: supabase-main',
+      '          name: Supabase Main',
+      `          apiBaseUrl: "http://${cloudHost}:${cloudPort}"`,
+      '          accessToken: supabase-secret',
+      '          organizationId: org_123',
+      '          projectRef: guardian-supabase',
+      '      flyProfiles:',
+      '        - id: fly-main',
+      '          name: Fly Main',
+      `          apiBaseUrl: "http://${cloudHost}:${cloudPort}"`,
+      '          apiToken: fly-secret',
+      '          orgSlug: personal',
+      '          defaultAppName: guardian-fly',
       '      awsProfiles:',
       '        - id: aws-main',
       '          name: AWS Main',
@@ -580,11 +604,11 @@ async function main() {
       const config = response.body;
       const cloud = config?.assistant?.tools?.cloud;
       assert(cloud?.enabled === true, 'Expected assistant.tools.cloud.enabled to be true');
-      assert(cloud?.profileCounts?.total === 7, `Expected 7 configured cloud profiles, got ${cloud?.profileCounts?.total}`);
+      assert(cloud?.profileCounts?.total === 9, `Expected 9 configured cloud profiles, got ${cloud?.profileCounts?.total}`);
       assert(Array.isArray(cloud?.cpanelProfiles), 'Expected cpanelProfiles array');
       assert(cloud.cpanelProfiles.some((profile) => profile.id === 'social' && profile.type === 'whm'), 'Expected social WHM profile in redacted config');
       const serialized = JSON.stringify(config);
-      for (const secret of ['whm-secret', 'cpanel-secret', 'vercel-secret', 'cf-secret', 'gcp-secret', 'azure-secret', dummyApiKey]) {
+      for (const secret of ['whm-secret', 'cpanel-secret', 'vercel-secret', 'cf-secret', 'supabase-secret', 'fly-secret', 'gcp-secret', 'azure-secret', dummyApiKey]) {
         assert(!serialized.includes(secret), `Config response leaked secret value '${secret}'`);
       }
     });
@@ -605,6 +629,12 @@ async function main() {
         ['cpanel hosting', 'cpanel_account'],
         ['vercel deployment', 'vercel_status'],
         ['cloudflare dns', 'cf_status'],
+        ['supabase projects', 'supabase_status'],
+        ['supabase management api mutate project', 'supabase_api'],
+        ['supabase cli deploy function', 'supabase_cli'],
+        ['fly machines app', 'fly_status'],
+        ['fly cli deploy app', 'fly_cli'],
+        ['fly machines api create app', 'fly_api'],
         ['aws account identity', 'aws_status'],
         ['gcp project services', 'gcp_status'],
         ['azure subscription resource groups', 'azure_status'],
@@ -655,6 +685,8 @@ async function main() {
       ['cpanel_account', { profile: 'site-cpanel' }, (output) => output?.profile === 'site-cpanel' && output?.stats?.disk_used_percent === 42],
       ['vercel_status', { profile: 'vercel-main' }, (output) => output?.profile === 'vercel-main' && output?.projectCount === 1 && output?.deploymentCount === 1],
       ['cf_status', { profile: 'cf-main' }, (output) => output?.profile === 'cf-main' && output?.token?.status === 'active'],
+      ['supabase_status', { profile: 'supabase-main' }, (output) => output?.profile === 'supabase-main' && output?.projectCount === 1 && output?.project?.id === 'guardian-supabase'],
+      ['fly_status', { profile: 'fly-main' }, (output) => output?.profile === 'fly-main' && output?.appCount === 1 && output?.app?.name === 'guardian-fly' && Array.isArray(output?.machines)],
       ['aws_status', { profile: 'aws-main' }, (output) => output?.profile === 'aws-main' && output?.identity?.Account === '123456789012'],
       ['gcp_status', { profile: 'gcp-main' }, (output) => output?.profile === 'gcp-main' && output?.project?.projectId === 'guardian-prod'],
       ['azure_status', { profile: 'azure-main' }, (output) => output?.profile === 'azure-main' && output?.subscription?.subscriptionId === 'sub-123'],

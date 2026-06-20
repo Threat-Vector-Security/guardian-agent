@@ -5,7 +5,9 @@ import type { AwsClient, AwsInstanceConfig } from '../cloud/aws-client.js';
 import type { AzureClient, AzureInstanceConfig, AzureServiceName } from '../cloud/azure-client.js';
 import type { CpanelClient, CpanelInstanceConfig, NormalizedApiResponse } from '../cloud/cpanel-client.js';
 import type { CloudflareClient, CloudflareInstanceConfig } from '../cloud/cloudflare-client.js';
+import type { FlyClient, FlyInstanceConfig } from '../cloud/fly-client.js';
 import type { GcpClient, GcpInstanceConfig, GcpServiceName } from '../cloud/gcp-client.js';
+import type { SupabaseClient, SupabaseInstanceConfig } from '../cloud/supabase-client.js';
 import type { VercelClient, VercelInstanceConfig } from '../cloud/vercel-client.js';
 import type { ToolContextCloudProfileSummary } from '../tool-context.js';
 
@@ -41,12 +43,17 @@ interface CloudToolRegistrarContext {
   resolveCpanelAccountContext: (profileId: string, requestedAccount?: string) => Promise<{ client: CpanelClient; account?: string }>;
   createVercelClient: (profileId: string) => Promise<VercelClient>;
   createCloudflareClient: (profileId: string) => Promise<CloudflareClient>;
+  createSupabaseClient: (profileId: string) => Promise<SupabaseClient>;
+  createFlyClient: (profileId: string) => Promise<FlyClient>;
+  runCloudCli: (input: { command: string; args: string[]; cwd?: string; env: Record<string, string>; timeoutMs?: number }, request: ToolExecutionRequest) => Promise<{ stdout: string; stderr: string }>;
   createAwsClient: (profileId: string, service?: AwsServiceName) => Promise<AwsClient>;
   createGcpClient: (profileId: string, service?: GcpServiceName) => Promise<GcpClient>;
   createAzureClient: (profileId: string, service?: AzureServiceName) => Promise<AzureClient>;
   describeCloudEndpoint: (profile: CpanelInstanceConfig) => string;
   describeVercelEndpoint: (profile: VercelInstanceConfig) => string;
   describeCloudflareEndpoint: (profile: CloudflareInstanceConfig) => string;
+  describeSupabaseEndpoint: (profile: SupabaseInstanceConfig) => string;
+  describeFlyEndpoint: (profile: FlyInstanceConfig) => string;
   describeAwsEndpoint: (profile: AwsInstanceConfig, service: AwsServiceName) => string;
   describeGcpEndpoint: (profile: GcpInstanceConfig, service: GcpServiceName) => string;
   describeAzureEndpoint: (profile: AzureInstanceConfig, service: AzureServiceName, accountName?: string) => string;
@@ -67,7 +74,7 @@ type CloudStatusFailureCause =
   | 'provider_error';
 
 interface CloudStatusFailureInput {
-  provider: 'vercel' | 'whm';
+  provider: 'vercel' | 'whm' | 'supabase' | 'fly';
   profile: string;
   profileName: string;
   endpoint: string;
@@ -136,6 +143,36 @@ function nextActionForCloudStatusFailure(cause: CloudStatusFailureCause): string
     case 'provider_error':
       return 'Retry later or inspect the provider control plane/status page before changing local configuration.';
   }
+}
+
+function requireProviderApiPath(value: unknown): string {
+  const path = String(value ?? '').trim();
+  if (!path) throw new Error('path is required');
+  if (!path.startsWith('/') || path.includes('://')) {
+    throw new Error('path must be a provider API path beginning with /');
+  }
+  return path;
+}
+
+function parseProviderMethod(value: unknown): 'GET' | 'POST' | 'PATCH' | 'DELETE' {
+  const method = String(value ?? 'GET').trim().toUpperCase();
+  if (method === 'GET' || method === 'POST' || method === 'PATCH' || method === 'DELETE') return method;
+  throw new Error('method must be GET, POST, PATCH, or DELETE');
+}
+
+function asQueryObject(value: unknown): Record<string, string | number | boolean | undefined> | undefined {
+  if (value == null) return undefined;
+  if (!isRecord(value)) throw new Error('query must be an object');
+  const query: Record<string, string | number | boolean | undefined> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry == null) continue;
+    if (typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean') {
+      query[key] = entry;
+      continue;
+    }
+    throw new Error(`query.${key} must be a string, number, or boolean`);
+  }
+  return query;
 }
 
 export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): void {
@@ -1694,6 +1731,408 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
         };
       } catch (err) {
         return { success: false, error: `Cloudflare DNS request failed: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'supabase_status',
+      description: 'Summarize Supabase Management API project visibility for a configured profile. Read-only.',
+      shortDescription: 'Summarize Supabase projects visible to the profile.',
+      risk: 'read_only',
+      category: 'cloud',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        properties: {
+          profile: { type: 'string', description: 'Configured assistant.tools.cloud.supabaseProfiles id.' },
+          limitProjects: { type: 'number', description: 'Maximum projects to return (default: 20).' },
+        },
+        required: ['profile'],
+      },
+    },
+    async (args, request) => {
+      let client: SupabaseClient;
+      try {
+        client = await context.createSupabaseClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+      const limitProjects = Math.max(1, Math.min(100, asNumber(args.limitProjects, 20)));
+
+      context.guardAction(request, 'http_request', {
+        url: context.describeSupabaseEndpoint(client.config),
+        method: 'GET',
+        tool: 'supabase_status',
+      });
+
+      try {
+        const [projects, project] = await Promise.all([
+          client.listProjects(),
+          client.config.projectRef
+            ? client.getProject().catch((error) => ({ error: error instanceof Error ? error.message : String(error) }))
+            : Promise.resolve(null),
+        ]);
+        const projectList = Array.isArray(projects) ? projects : asArrayField(projects, 'projects');
+        return {
+          success: true,
+          output: {
+            profile: client.config.id,
+            profileName: client.config.name,
+            endpoint: context.describeSupabaseEndpoint(client.config),
+            organizationId: client.config.organizationId ?? null,
+            projectRef: client.config.projectRef ?? null,
+            projectCount: projectList.length,
+            projects: projectList.slice(0, limitProjects),
+            project: isRecord(project) && !('error' in project) ? project : null,
+            projectError: isRecord(project) && 'error' in project ? project.error : undefined,
+          },
+        };
+      } catch (err) {
+        const diagnostic = buildCloudStatusFailure({
+          provider: 'supabase',
+          profile: client.config.id,
+          profileName: client.config.name,
+          endpoint: context.describeSupabaseEndpoint(client.config),
+          err,
+          extra: {
+            organizationId: client.config.organizationId ?? null,
+            projectRef: client.config.projectRef ?? null,
+          },
+        });
+        return {
+          success: false,
+          error: `Supabase status request failed: ${diagnostic.errorSummary}`,
+          output: diagnostic,
+        };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'fly_status',
+      description: 'Summarize Fly.io app and machine visibility for a configured Machines API profile. Read-only.',
+      shortDescription: 'Summarize Fly.io apps and default app machines.',
+      risk: 'read_only',
+      category: 'cloud',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        properties: {
+          profile: { type: 'string', description: 'Configured assistant.tools.cloud.flyProfiles id.' },
+          appName: { type: 'string', description: 'Optional Fly app name override for app and machine checks.' },
+          limitApps: { type: 'number', description: 'Maximum apps to return (default: 20).' },
+        },
+        required: ['profile'],
+      },
+    },
+    async (args, request) => {
+      let client: FlyClient;
+      try {
+        client = await context.createFlyClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+      const appName = asString(args.appName).trim() || client.config.defaultAppName;
+      const limitApps = Math.max(1, Math.min(100, asNumber(args.limitApps, 20)));
+
+      context.guardAction(request, 'http_request', {
+        url: context.describeFlyEndpoint(client.config),
+        method: 'GET',
+        tool: 'fly_status',
+      });
+
+      try {
+        const [apps, app, machines] = await Promise.all([
+          client.listApps(),
+          appName
+            ? client.getApp(appName).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }))
+            : Promise.resolve(null),
+          appName
+            ? client.listMachines(appName).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }))
+            : Promise.resolve(null),
+        ]);
+        const appList = Array.isArray(apps) ? apps : asArrayField(apps, 'apps');
+        const machineList = Array.isArray(machines) ? machines : asArrayField(machines, 'machines');
+        return {
+          success: true,
+          output: {
+            profile: client.config.id,
+            profileName: client.config.name,
+            endpoint: context.describeFlyEndpoint(client.config),
+            orgSlug: client.config.orgSlug ?? null,
+            defaultAppName: client.config.defaultAppName ?? null,
+            appName: appName ?? null,
+            appCount: appList.length,
+            apps: appList.slice(0, limitApps),
+            app: isRecord(app) && !('error' in app) ? app : null,
+            appError: isRecord(app) && 'error' in app ? app.error : undefined,
+            machines: machineList,
+            machineError: isRecord(machines) && 'error' in machines ? machines.error : undefined,
+          },
+        };
+      } catch (err) {
+        const diagnostic = buildCloudStatusFailure({
+          provider: 'fly',
+          profile: client.config.id,
+          profileName: client.config.name,
+          endpoint: context.describeFlyEndpoint(client.config),
+          err,
+          extra: {
+            orgSlug: client.config.orgSlug ?? null,
+            defaultAppName: client.config.defaultAppName ?? null,
+          },
+        });
+        return {
+          success: false,
+          error: `Fly.io status request failed: ${diagnostic.errorSummary}`,
+          output: diagnostic,
+        };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'supabase_api',
+      description: 'Run an authenticated Supabase Management API request with a configured profile. Supports mutating operations and requires normal Guardian approval.',
+      shortDescription: 'Run Supabase Management API requests.',
+      risk: 'mutating',
+      category: 'cloud',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        properties: {
+          profile: { type: 'string', description: 'Configured assistant.tools.cloud.supabaseProfiles id.' },
+          method: { type: 'string', description: 'GET, POST, PATCH, or DELETE.' },
+          path: { type: 'string', description: 'Supabase Management API path beginning with /, for example /v1/projects.' },
+          query: { type: 'object', description: 'Optional query parameters.' },
+          body: { type: 'object', description: 'Optional JSON request body.' },
+          timeoutMs: { type: 'number', description: 'Request timeout in milliseconds (default: 30000).' },
+        },
+        required: ['profile', 'path'],
+      },
+    },
+    async (args, request) => {
+      let client: SupabaseClient;
+      try {
+        client = await context.createSupabaseClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+
+      try {
+        const method = parseProviderMethod(args.method);
+        const path = requireProviderApiPath(args.path);
+        const timeoutMs = Math.max(1_000, Math.min(120_000, asNumber(args.timeoutMs, 30_000)));
+        context.guardAction(request, 'http_request', {
+          url: `${context.describeSupabaseEndpoint(client.config)}${path}`,
+          method,
+          tool: 'supabase_api',
+        });
+        const data = await client.request({
+          method,
+          path,
+          query: asQueryObject(args.query),
+          body: args.body,
+          timeoutMs,
+        });
+        return {
+          success: true,
+          output: {
+            profile: client.config.id,
+            profileName: client.config.name,
+            endpoint: context.describeSupabaseEndpoint(client.config),
+            method,
+            path,
+            data,
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Supabase API request failed: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'supabase_cli',
+      description: 'Run the Supabase CLI with the configured profile token injected as SUPABASE_ACCESS_TOKEN. Args are passed without a shell. Mutating commands require normal Guardian approval.',
+      shortDescription: 'Run Supabase CLI commands.',
+      risk: 'mutating',
+      category: 'cloud',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        properties: {
+          profile: { type: 'string', description: 'Configured assistant.tools.cloud.supabaseProfiles id.' },
+          args: { type: 'array', items: { type: 'string' }, description: 'Arguments after the supabase executable, for example ["projects", "list"]. Use ["--help"] to discover commands.' },
+          cwd: { type: 'string', description: 'Optional allowed working directory for project-local commands.' },
+          timeoutMs: { type: 'number', description: 'Timeout in milliseconds (default: 120000).' },
+        },
+        required: ['profile', 'args'],
+      },
+    },
+    async (args, request) => {
+      let client: SupabaseClient;
+      try {
+        client = await context.createSupabaseClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+      const argv = asStringArray(args.args);
+      if (argv.length === 0) return { success: false, error: 'args must include at least one Supabase CLI argument. Use ["--help"] to discover commands.' };
+      const timeoutMs = Math.max(1_000, Math.min(300_000, asNumber(args.timeoutMs, 120_000)));
+      context.guardAction(request, 'execute_command', {
+        command: `supabase ${argv.join(' ')}`,
+        tool: 'supabase_cli',
+      });
+      try {
+        const result = await context.runCloudCli({
+          command: 'supabase',
+          args: argv,
+          cwd: asString(args.cwd).trim() || undefined,
+          env: { SUPABASE_ACCESS_TOKEN: client.config.accessToken },
+          timeoutMs,
+        }, request);
+        return {
+          success: true,
+          output: {
+            profile: client.config.id,
+            profileName: client.config.name,
+            command: 'supabase',
+            args: argv,
+            stdout: redactSensitiveText(result.stdout),
+            stderr: redactSensitiveText(result.stderr),
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Supabase CLI failed: ${err instanceof Error ? redactSensitiveText(err.message) : redactSensitiveText(String(err))}` };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'fly_api',
+      description: 'Run an authenticated Fly.io Machines API request with a configured profile. Supports mutating operations and requires normal Guardian approval.',
+      shortDescription: 'Run Fly.io Machines API requests.',
+      risk: 'mutating',
+      category: 'cloud',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        properties: {
+          profile: { type: 'string', description: 'Configured assistant.tools.cloud.flyProfiles id.' },
+          method: { type: 'string', description: 'GET, POST, PATCH, or DELETE.' },
+          path: { type: 'string', description: 'Fly Machines API path beginning with /, for example /v1/apps.' },
+          query: { type: 'object', description: 'Optional query parameters.' },
+          body: { type: 'object', description: 'Optional JSON request body.' },
+          timeoutMs: { type: 'number', description: 'Request timeout in milliseconds (default: 30000).' },
+        },
+        required: ['profile', 'path'],
+      },
+    },
+    async (args, request) => {
+      let client: FlyClient;
+      try {
+        client = await context.createFlyClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+
+      try {
+        const method = parseProviderMethod(args.method);
+        const path = requireProviderApiPath(args.path);
+        const timeoutMs = Math.max(1_000, Math.min(120_000, asNumber(args.timeoutMs, 30_000)));
+        context.guardAction(request, 'http_request', {
+          url: `${context.describeFlyEndpoint(client.config)}${path}`,
+          method,
+          tool: 'fly_api',
+        });
+        const data = await client.request({
+          method,
+          path,
+          query: asQueryObject(args.query),
+          body: args.body,
+          timeoutMs,
+        });
+        return {
+          success: true,
+          output: {
+            profile: client.config.id,
+            profileName: client.config.name,
+            endpoint: context.describeFlyEndpoint(client.config),
+            method,
+            path,
+            data,
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Fly.io API request failed: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'fly_cli',
+      description: 'Run the Fly.io CLI with the configured profile token injected as FLY_API_TOKEN. Args are passed without a shell. Mutating commands require normal Guardian approval.',
+      shortDescription: 'Run Fly.io CLI commands.',
+      risk: 'mutating',
+      category: 'cloud',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        properties: {
+          profile: { type: 'string', description: 'Configured assistant.tools.cloud.flyProfiles id.' },
+          args: { type: 'array', items: { type: 'string' }, description: 'Arguments after the fly executable, for example ["apps", "list"]. Use ["--help"] to discover commands.' },
+          executable: { type: 'string', description: 'Optional executable name: fly or flyctl. Default: fly.' },
+          cwd: { type: 'string', description: 'Optional allowed working directory for project-local commands.' },
+          timeoutMs: { type: 'number', description: 'Timeout in milliseconds (default: 120000).' },
+        },
+        required: ['profile', 'args'],
+      },
+    },
+    async (args, request) => {
+      let client: FlyClient;
+      try {
+        client = await context.createFlyClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+      const argv = asStringArray(args.args);
+      if (argv.length === 0) return { success: false, error: 'args must include at least one Fly CLI argument. Use ["--help"] to discover commands.' };
+      const executable = asString(args.executable, 'fly').trim() || 'fly';
+      if (executable !== 'fly' && executable !== 'flyctl') return { success: false, error: 'executable must be fly or flyctl' };
+      const timeoutMs = Math.max(1_000, Math.min(300_000, asNumber(args.timeoutMs, 120_000)));
+      context.guardAction(request, 'execute_command', {
+        command: `${executable} ${argv.join(' ')}`,
+        tool: 'fly_cli',
+      });
+      try {
+        const result = await context.runCloudCli({
+          command: executable,
+          args: argv,
+          cwd: asString(args.cwd).trim() || undefined,
+          env: { FLY_API_TOKEN: client.config.apiToken },
+          timeoutMs,
+        }, request);
+        return {
+          success: true,
+          output: {
+            profile: client.config.id,
+            profileName: client.config.name,
+            command: executable,
+            args: argv,
+            stdout: redactSensitiveText(result.stdout),
+            stderr: redactSensitiveText(result.stderr),
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Fly.io CLI failed: ${err instanceof Error ? redactSensitiveText(err.message) : redactSensitiveText(String(err))}` };
       }
     },
   );

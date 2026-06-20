@@ -419,6 +419,26 @@ export interface RedactedCloudCloudflareProfile {
   defaultZoneId?: string;
 }
 
+export interface RedactedCloudSupabaseProfile {
+  id: string;
+  name: string;
+  apiBaseUrl?: string;
+  credentialRef?: string;
+  accessTokenConfigured: boolean;
+  organizationId?: string;
+  projectRef?: string;
+}
+
+export interface RedactedCloudFlyProfile {
+  id: string;
+  name: string;
+  apiBaseUrl?: string;
+  credentialRef?: string;
+  apiTokenConfigured: boolean;
+  orgSlug?: string;
+  defaultAppName?: string;
+}
+
 export interface RedactedCloudAwsProfile {
   id: string;
   name: string;
@@ -490,6 +510,8 @@ export interface RedactedCloudConfig {
   vercelProfiles: RedactedCloudVercelProfile[];
   daytonaProfiles: RedactedCloudDaytonaProfile[];
   cloudflareProfiles: RedactedCloudCloudflareProfile[];
+  supabaseProfiles: RedactedCloudSupabaseProfile[];
+  flyProfiles: RedactedCloudFlyProfile[];
   awsProfiles: RedactedCloudAwsProfile[];
   gcpProfiles: RedactedCloudGcpProfile[];
   azureProfiles: RedactedCloudAzureProfile[];
@@ -498,6 +520,8 @@ export interface RedactedCloudConfig {
     vercel: number;
     daytona: number;
     cloudflare: number;
+    supabase: number;
+    fly: number;
     aws: number;
     gcp: number;
     azure: number;
@@ -2412,6 +2436,24 @@ export interface ConfigUpdate {
           credentialRef?: string;
           accountId?: string;
           defaultZoneId?: string;
+        }>;
+        supabaseProfiles?: Array<{
+          id: string;
+          name: string;
+          apiBaseUrl?: string;
+          accessToken?: string;
+          credentialRef?: string;
+          organizationId?: string;
+          projectRef?: string;
+        }>;
+        flyProfiles?: Array<{
+          id: string;
+          name: string;
+          apiBaseUrl?: string;
+          apiToken?: string;
+          credentialRef?: string;
+          orgSlug?: string;
+          defaultAppName?: string;
         }>;
         awsProfiles?: Array<{
           id: string;

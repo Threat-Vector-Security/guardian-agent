@@ -11,6 +11,7 @@ import { applyInputTooltips } from '../tooltip.js';
 let currentContainer = null;
 const cloudUiState = {
   selectedProfiles: {},
+  expandedProviders: {},
 };
 
 function normalizeDefaultRemoteTargetSelection(value) {
@@ -286,6 +287,32 @@ const CLOUD_PROVIDER_DEFS = [
       { key: 'accountId', label: 'Account ID', type: 'text', placeholder: 'account-id' },
       { key: 'defaultZoneId', label: 'Default Zone ID', type: 'text', placeholder: 'zone-id' },
       { key: 'apiBaseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.cloudflare.com/client/v4', help: 'Full root URL for the API, including path segments like /client/v4 when needed.' },
+    ],
+  },
+  {
+    key: 'supabaseProfiles',
+    label: 'Supabase',
+    fields: [
+      { key: 'id', label: 'Profile ID', type: 'text', placeholder: 'supabase-prod' },
+      { key: 'name', label: 'Name', type: 'text', placeholder: 'Production Supabase' },
+      { key: 'credentialRef', label: 'Credential Ref', type: 'text', placeholder: 'cloud.supabase.prod' },
+      { key: 'accessToken', label: 'Access Token', type: 'password', configuredKey: 'accessTokenConfigured', placeholder: 'Leave blank to keep existing token' },
+      { key: 'organizationId', label: 'Organization ID', type: 'text', placeholder: 'org-id', help: 'Optional context label for operators. Supabase status checks still use the Management API token permissions.' },
+      { key: 'projectRef', label: 'Project Ref', type: 'text', placeholder: 'abcdefghijklmnopqrst', help: 'Optional default project ref for project-scoped status details.' },
+      { key: 'apiBaseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.supabase.com', help: 'Leave blank for the standard Supabase Management API URL.' },
+    ],
+  },
+  {
+    key: 'flyProfiles',
+    label: 'Fly.io',
+    fields: [
+      { key: 'id', label: 'Profile ID', type: 'text', placeholder: 'fly-prod' },
+      { key: 'name', label: 'Name', type: 'text', placeholder: 'Production Fly.io' },
+      { key: 'credentialRef', label: 'Credential Ref', type: 'text', placeholder: 'cloud.fly.prod' },
+      { key: 'apiToken', label: 'API Token', type: 'password', configuredKey: 'apiTokenConfigured', placeholder: 'Leave blank to keep existing token' },
+      { key: 'orgSlug', label: 'Organization Slug', type: 'text', placeholder: 'personal', help: 'Optional org slug used when listing apps.' },
+      { key: 'defaultAppName', label: 'Default App Name', type: 'text', placeholder: 'my-fly-app', help: 'Optional app name used for app and machine status details.' },
+      { key: 'apiBaseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.machines.dev', help: 'Leave blank for the standard Fly Machines API URL.' },
     ],
   },
   {
@@ -746,6 +773,7 @@ function createCloudConnectionSection(def, cloud) {
   const section = document.createElement('div');
   section.className = 'table-container';
   const profiles = Array.isArray(cloud[def.key]) ? cloud[def.key] : [];
+  let isExpanded = cloudUiState.expandedProviders[def.key] === true;
   let selectedProfileId = profiles.some((profile) => profile.id === cloudUiState.selectedProfiles[def.key])
     ? cloudUiState.selectedProfiles[def.key]
     : (profiles[0]?.id || null);
@@ -754,8 +782,9 @@ function createCloudConnectionSection(def, cloud) {
     <div class="table-header">
       <h3>${esc(def.label)}</h3>
       <span class="cfg-header-note">${profiles.length} profile${profiles.length === 1 ? '' : 's'}</span>
+      <button class="btn btn-secondary" type="button" data-cloud-toggle-provider aria-expanded="${isExpanded ? 'true' : 'false'}">${isExpanded ? 'Collapse' : 'Expand'}</button>
     </div>
-    <div class="cfg-center-body">
+    <div class="cfg-center-body" data-cloud-provider-body ${isExpanded ? '' : 'hidden'}>
       <div class="cloud-profile-browser">
         <div class="cloud-profile-sidebar">
           <div class="cloud-profile-sidebar-header">
@@ -775,6 +804,16 @@ function createCloudConnectionSection(def, cloud) {
   const listEl = section.querySelector('[data-cloud-profile-list]');
   const editorEl = section.querySelector('[data-cloud-profile-editor]');
   const addBtn = section.querySelector('[data-cloud-add-profile]');
+  const toggleBtn = section.querySelector('[data-cloud-toggle-provider]');
+  const bodyEl = section.querySelector('[data-cloud-provider-body]');
+
+  toggleBtn?.addEventListener('click', () => {
+    isExpanded = !isExpanded;
+    cloudUiState.expandedProviders[def.key] = isExpanded;
+    if (bodyEl) bodyEl.hidden = !isExpanded;
+    toggleBtn.textContent = isExpanded ? 'Collapse' : 'Expand';
+    toggleBtn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+  });
 
   function renderProfileList() {
     listEl.innerHTML = profiles.length === 0
@@ -821,7 +860,11 @@ function createCloudConnectionSection(def, cloud) {
       ? 'For the normal Vercel sandbox setup, enter an Access Token, Team ID (`team_xxx`), enable Vercel Sandbox, and the sandbox Project ID (`prj_xxx`). Leave Team Slug blank unless you are intentionally using the advanced Vercel REST scope mode.'
       : def.key === 'daytonaProfiles'
         ? 'Daytona setup is simpler: enter an API Key, enable Daytona Sandbox, and optionally choose a target. Leave Allowed CIDRs blank unless you explicitly want to restrict sandbox egress by CIDR range.'
-        : null;
+        : def.key === 'supabaseProfiles'
+      ? 'Use a Supabase Management API access token. A Project Ref is optional, but adding one gives API and CLI operations useful project context.'
+      : def.key === 'flyProfiles'
+        ? 'Use a scoped Fly.io token where possible. An Organization Slug and Default App Name give API and CLI operations useful app context.'
+            : null;
     const testHelpText = isCreateMode
       ? `Save the ${def.label} profile first to use Test Connection.`
       : 'Test Connection uses the currently saved profile. Save first if you changed any values in this form.';
@@ -1146,7 +1189,7 @@ function pruneEmptyCloudProfileObjects(value) {
 }
 
 function createGenericHelpFactory(area) {
-  const providerTitles = new Set(['cPanel / WHM', 'Vercel', 'Daytona', 'Cloudflare', 'AWS', 'GCP', 'Azure']);
+  const providerTitles = new Set(['cPanel / WHM', 'Vercel', 'Daytona', 'Cloudflare', 'Supabase', 'Fly.io', 'AWS', 'GCP', 'Azure']);
 
   return (title) => {
     if (providerTitles.has(title)) {
@@ -1182,6 +1225,7 @@ function buildDefaultProfile(def) {
   if (def.key === 'cpanelProfiles') return { ...base, type: 'whm', port: 2087, ssl: true, allowSelfSigned: false };
   if (def.key === 'vercelProfiles') return { ...base, sandbox: { enabled: true, allowNetwork: true, defaultTimeoutMs: 300000, defaultVcpus: 2 } };
   if (def.key === 'daytonaProfiles') return { ...base, enabled: true, allowNetwork: true, language: 'typescript', defaultTimeoutMs: 300000, defaultVcpus: 2 };
+  if (def.key === 'flyProfiles') return { ...base, orgSlug: 'personal' };
   if (def.key === 'awsProfiles') return { ...base, region: 'us-east-1' };
   if (def.key === 'gcpProfiles') return { ...base, location: 'us-central1' };
   return base;
@@ -1200,6 +1244,8 @@ function summarizeCloudProfileBadges(def, profile) {
   if (profile.allowSelfSigned) badges.push('self-signed TLS');
   if (profile.sandbox?.enabled) badges.push(profile.sandbox?.ready ? 'sandbox ready' : 'sandbox enabled');
   if (def.key === 'daytonaProfiles' && profile.enabled) badges.push(profile.ready ? 'sandbox ready' : 'sandbox enabled');
+  if (def.key === 'supabaseProfiles' && profile.projectRef) badges.push('project ref');
+  if (def.key === 'flyProfiles' && profile.defaultAppName) badges.push('app');
   if (profile.apiBaseUrl || (profile.endpoints && Object.keys(profile.endpoints).length > 0) || profile.blobBaseUrl) badges.push('custom endpoint');
   if (profile.apiUrl) badges.push('custom endpoint');
 
@@ -1207,23 +1253,42 @@ function summarizeCloudProfileBadges(def, profile) {
 }
 
 function getCloudConfig(config) {
-  return config?.assistant?.tools?.cloud || {
+  const defaults = {
     enabled: false,
     defaultRemoteExecutionTargetId: undefined,
     cpanelProfiles: [],
     vercelProfiles: [],
     daytonaProfiles: [],
     cloudflareProfiles: [],
+    supabaseProfiles: [],
+    flyProfiles: [],
     awsProfiles: [],
     gcpProfiles: [],
     azureProfiles: [],
-    profileCounts: { cpanel: 0, vercel: 0, daytona: 0, cloudflare: 0, aws: 0, gcp: 0, azure: 0, total: 0 },
+    profileCounts: { cpanel: 0, vercel: 0, daytona: 0, cloudflare: 0, supabase: 0, fly: 0, aws: 0, gcp: 0, azure: 0, total: 0 },
     security: {
       inlineSecretProfileCount: 0,
       credentialRefCount: 0,
       selfSignedProfileCount: 0,
       customEndpointProfileCount: 0,
     },
+  };
+  const cloud = config?.assistant?.tools?.cloud;
+  if (!cloud) return defaults;
+  return {
+    ...defaults,
+    ...cloud,
+    cpanelProfiles: cloud.cpanelProfiles || [],
+    vercelProfiles: cloud.vercelProfiles || [],
+    daytonaProfiles: cloud.daytonaProfiles || [],
+    cloudflareProfiles: cloud.cloudflareProfiles || [],
+    supabaseProfiles: cloud.supabaseProfiles || [],
+    flyProfiles: cloud.flyProfiles || [],
+    awsProfiles: cloud.awsProfiles || [],
+    gcpProfiles: cloud.gcpProfiles || [],
+    azureProfiles: cloud.azureProfiles || [],
+    profileCounts: { ...defaults.profileCounts, ...(cloud.profileCounts || {}) },
+    security: { ...defaults.security, ...(cloud.security || {}) },
   };
 }
 
@@ -1266,6 +1331,26 @@ function buildProviderRows(cloud) {
       refs: cloud.cloudflareProfiles.filter((profile) => !!profile.credentialRef).length,
       customEndpoints: cloud.cloudflareProfiles.filter((profile) => !!profile.apiBaseUrl).length,
       notes: '-',
+    },
+    {
+      provider: 'Supabase',
+      count: cloud.supabaseProfiles.length,
+      inline: cloud.supabaseProfiles.filter((profile) => profile.accessTokenConfigured).length,
+      refs: cloud.supabaseProfiles.filter((profile) => !!profile.credentialRef).length,
+      customEndpoints: cloud.supabaseProfiles.filter((profile) => !!profile.apiBaseUrl).length,
+      notes: cloud.supabaseProfiles.filter((profile) => profile.projectRef).length
+        ? `${cloud.supabaseProfiles.filter((profile) => profile.projectRef).length} project refs`
+        : '-',
+    },
+    {
+      provider: 'Fly.io',
+      count: cloud.flyProfiles.length,
+      inline: cloud.flyProfiles.filter((profile) => profile.apiTokenConfigured).length,
+      refs: cloud.flyProfiles.filter((profile) => !!profile.credentialRef).length,
+      customEndpoints: cloud.flyProfiles.filter((profile) => !!profile.apiBaseUrl).length,
+      notes: cloud.flyProfiles.filter((profile) => profile.defaultAppName).length
+        ? `${cloud.flyProfiles.filter((profile) => profile.defaultAppName).length} default apps`
+        : '-',
     },
     {
       provider: 'AWS',
@@ -1321,7 +1406,7 @@ function auditSeverityClass(severity) {
 }
 
 function isCloudToolName(toolName) {
-  return /^(cpanel_|whm_|vercel_|cf_|aws_|gcp_|azure_)/.test(String(toolName || ''));
+  return /^(cpanel_|whm_|vercel_|cf_|supabase_|fly_|aws_|gcp_|azure_)/.test(String(toolName || ''));
 }
 
 function isCloudAuditEvent(event) {
@@ -1329,6 +1414,8 @@ function isCloudAuditEvent(event) {
   if (isCloudToolName(toolName)) return true;
   const source = String(event?.details?.source || '');
   return source.includes('tool:cf_')
+    || source.includes('tool:supabase_')
+    || source.includes('tool:fly_')
     || source.includes('tool:aws_')
     || source.includes('tool:gcp_')
     || source.includes('tool:azure_')

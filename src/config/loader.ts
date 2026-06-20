@@ -1252,6 +1252,60 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         `assistant.tools.cloud.cloudflareProfiles.${profile.id || '(unnamed)'}.credentialRef`,
       );
     }
+    const seenSupabaseProfileIds = new Set<string>();
+    for (const profile of cloud.supabaseProfiles ?? []) {
+      if (!profile.id?.trim()) {
+        errors.push('assistant.tools.cloud.supabaseProfiles.id is required');
+      } else if (seenSupabaseProfileIds.has(profile.id)) {
+        errors.push(`assistant.tools.cloud.supabaseProfiles id '${profile.id}' is duplicated`);
+      } else {
+        seenSupabaseProfileIds.add(profile.id);
+      }
+      if (!profile.name?.trim()) {
+        errors.push(`assistant.tools.cloud.supabaseProfiles.${profile.id || '(unnamed)'}.name is required`);
+      }
+      if (!profile.accessToken?.trim() && !profile.credentialRef?.trim()) {
+        errors.push(`assistant.tools.cloud.supabaseProfiles.${profile.id || '(unnamed)'}.accessToken or credentialRef is required`);
+      }
+      if (profile.apiBaseUrl?.trim()) {
+        try {
+          normalizeHttpUrlInput(profile.apiBaseUrl);
+        } catch (error) {
+          errors.push(`assistant.tools.cloud.supabaseProfiles.${profile.id || '(unnamed)'}.apiBaseUrl ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      assertCredentialRef(
+        profile.credentialRef,
+        `assistant.tools.cloud.supabaseProfiles.${profile.id || '(unnamed)'}.credentialRef`,
+      );
+    }
+    const seenFlyProfileIds = new Set<string>();
+    for (const profile of cloud.flyProfiles ?? []) {
+      if (!profile.id?.trim()) {
+        errors.push('assistant.tools.cloud.flyProfiles.id is required');
+      } else if (seenFlyProfileIds.has(profile.id)) {
+        errors.push(`assistant.tools.cloud.flyProfiles id '${profile.id}' is duplicated`);
+      } else {
+        seenFlyProfileIds.add(profile.id);
+      }
+      if (!profile.name?.trim()) {
+        errors.push(`assistant.tools.cloud.flyProfiles.${profile.id || '(unnamed)'}.name is required`);
+      }
+      if (!profile.apiToken?.trim() && !profile.credentialRef?.trim()) {
+        errors.push(`assistant.tools.cloud.flyProfiles.${profile.id || '(unnamed)'}.apiToken or credentialRef is required`);
+      }
+      if (profile.apiBaseUrl?.trim()) {
+        try {
+          normalizeHttpUrlInput(profile.apiBaseUrl);
+        } catch (error) {
+          errors.push(`assistant.tools.cloud.flyProfiles.${profile.id || '(unnamed)'}.apiBaseUrl ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      assertCredentialRef(
+        profile.credentialRef,
+        `assistant.tools.cloud.flyProfiles.${profile.id || '(unnamed)'}.credentialRef`,
+      );
+    }
     const seenAwsProfileIds = new Set<string>();
     for (const profile of cloud.awsProfiles ?? []) {
       if (!profile.id?.trim()) {

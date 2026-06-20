@@ -899,6 +899,30 @@ export function getReferenceGuide(): ReferenceGuide {
             ],
           },
           {
+            id: 'cloud-provider-connections',
+            title: 'Cloud Provider Connections',
+            summary: 'Save cloud connection profiles for status, inventory, and approved provider operations across supported providers.',
+            sections: [
+              {
+                title: 'Connection Setup',
+                items: [
+                  'Open Cloud > Connections to add or edit provider profiles. Provider sections are collapsed by default; expand only the provider you want to work on.',
+                  'Supported cloud connection families include cPanel / WHM, Vercel, Daytona, Cloudflare, Supabase, Fly.io, AWS, GCP, and Azure.',
+                  'Supabase profiles use a Management API access token. Fly.io profiles use a scoped Fly.io API token; add an Organization Slug or Default App Name when you want richer status details.',
+                  'Use Credential Ref fields when you keep secrets in Guardian credential storage instead of pasting inline tokens.',
+                ],
+              },
+              {
+                title: 'Validation',
+                items: [
+                  'Save the profile first, then use Test Connection inside that expanded provider section.',
+                  'For chat-driven checks or operations, ask Guardian to list cloud profiles, run the provider status check, call the provider API, or run the provider CLI; the cloud tools use saved profile IDs and do not need you to repeat credentials.',
+                  'Supabase and Fly.io API/CLI operations can mutate provider state and use the normal Guardian approval flow.',
+                ],
+              },
+            ],
+          },
+          {
             id: 'vercel-remote-sandbox',
             title: 'Vercel Remote Sandbox',
             summary: 'Configure an isolated Vercel sandbox target so Guardian can run bounded coding jobs away from the host.',

@@ -1489,6 +1489,42 @@ export interface AssistantCloudCloudflareProfileConfig {
   defaultZoneId?: string;
 }
 
+/** A Supabase Management API profile for project inventory. */
+export interface AssistantCloudSupabaseProfileConfig {
+  /** Unique profile id referenced by Supabase tools. */
+  id: string;
+  /** Human-readable label for operator-facing output. */
+  name: string;
+  /** Base URL override. Defaults to https://api.supabase.com. */
+  apiBaseUrl?: string;
+  /** Inline Management API access token (supports ${ENV_VAR}). Prefer credentialRef instead. */
+  accessToken?: string;
+  /** Credential reference for the Management API access token. */
+  credentialRef?: string;
+  /** Optional organization id for operator context. */
+  organizationId?: string;
+  /** Optional default project ref for project-scoped checks. */
+  projectRef?: string;
+}
+
+/** A Fly.io Machines API profile for app and machine inventory. */
+export interface AssistantCloudFlyProfileConfig {
+  /** Unique profile id referenced by Fly.io tools. */
+  id: string;
+  /** Human-readable label for operator-facing output. */
+  name: string;
+  /** Machines API base URL override. Defaults to https://api.machines.dev. */
+  apiBaseUrl?: string;
+  /** Inline Fly.io API token (supports ${ENV_VAR}). Prefer credentialRef instead. */
+  apiToken?: string;
+  /** Credential reference for the Fly.io API token. */
+  credentialRef?: string;
+  /** Optional organization slug used when listing apps. */
+  orgSlug?: string;
+  /** Optional default app name used for app and machine checks. */
+  defaultAppName?: string;
+}
+
 /** An AWS account profile for cloud operations. */
 export interface AssistantCloudAwsProfileConfig {
   /** Unique profile id referenced by AWS tools. */
@@ -1602,6 +1638,10 @@ export interface AssistantCloudConfig {
   daytonaProfiles?: AssistantCloudDaytonaProfileConfig[];
   /** Available Cloudflare profiles. */
   cloudflareProfiles?: AssistantCloudCloudflareProfileConfig[];
+  /** Available Supabase profiles. */
+  supabaseProfiles?: AssistantCloudSupabaseProfileConfig[];
+  /** Available Fly.io profiles. */
+  flyProfiles?: AssistantCloudFlyProfileConfig[];
   /** Available AWS profiles. */
   awsProfiles?: AssistantCloudAwsProfileConfig[];
   /** Available GCP profiles. */
@@ -2343,6 +2383,8 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         vercelProfiles: [],
         daytonaProfiles: [],
         cloudflareProfiles: [],
+        supabaseProfiles: [],
+        flyProfiles: [],
         awsProfiles: [],
         gcpProfiles: [],
         azureProfiles: [],

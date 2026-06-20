@@ -1296,6 +1296,38 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
     };
   });
 
+  const supabaseProfiles = (cloud.supabaseProfiles ?? []).map((profile) => {
+    const accessTokenConfigured = !!profile.accessToken?.trim();
+    if (accessTokenConfigured) inlineSecretProfileCount += 1;
+    if (profile.credentialRef?.trim()) credentialRefCount += 1;
+    if (profile.apiBaseUrl?.trim()) customEndpointProfileCount += 1;
+    return {
+      id: profile.id,
+      name: profile.name,
+      apiBaseUrl: normalizeOptionalHttpUrlInput(profile.apiBaseUrl),
+      credentialRef: profile.credentialRef,
+      accessTokenConfigured,
+      organizationId: trimOptionalString(profile.organizationId),
+      projectRef: trimOptionalString(profile.projectRef),
+    };
+  });
+
+  const flyProfiles = (cloud.flyProfiles ?? []).map((profile) => {
+    const apiTokenConfigured = !!profile.apiToken?.trim();
+    if (apiTokenConfigured) inlineSecretProfileCount += 1;
+    if (profile.credentialRef?.trim()) credentialRefCount += 1;
+    if (profile.apiBaseUrl?.trim()) customEndpointProfileCount += 1;
+    return {
+      id: profile.id,
+      name: profile.name,
+      apiBaseUrl: normalizeOptionalHttpUrlInput(profile.apiBaseUrl),
+      credentialRef: profile.credentialRef,
+      apiTokenConfigured,
+      orgSlug: trimOptionalString(profile.orgSlug),
+      defaultAppName: trimOptionalString(profile.defaultAppName),
+    };
+  });
+
   const awsProfiles = (cloud.awsProfiles ?? []).map((profile) => {
     const accessKeyIdConfigured = !!profile.accessKeyId?.trim();
     const secretAccessKeyConfigured = !!profile.secretAccessKey?.trim();
@@ -1375,6 +1407,8 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
     vercelProfiles,
     daytonaProfiles,
     cloudflareProfiles,
+    supabaseProfiles,
+    flyProfiles,
     awsProfiles,
     gcpProfiles,
     azureProfiles,
@@ -1383,10 +1417,12 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
       vercel: vercelProfiles.length,
       daytona: daytonaProfiles.length,
       cloudflare: cloudflareProfiles.length,
+      supabase: supabaseProfiles.length,
+      fly: flyProfiles.length,
       aws: awsProfiles.length,
       gcp: gcpProfiles.length,
       azure: azureProfiles.length,
-      total: cpanelProfiles.length + vercelProfiles.length + daytonaProfiles.length + cloudflareProfiles.length + awsProfiles.length + gcpProfiles.length + azureProfiles.length,
+      total: cpanelProfiles.length + vercelProfiles.length + daytonaProfiles.length + cloudflareProfiles.length + supabaseProfiles.length + flyProfiles.length + awsProfiles.length + gcpProfiles.length + azureProfiles.length,
     },
     security: {
       inlineSecretProfileCount,
@@ -1408,6 +1444,8 @@ function mergeCloudConfigForValidation(
     vercelProfiles: [],
     daytonaProfiles: [],
     cloudflareProfiles: [],
+    supabaseProfiles: [],
+    flyProfiles: [],
     awsProfiles: [],
     gcpProfiles: [],
     azureProfiles: [],
@@ -1514,6 +1552,34 @@ function mergeCloudConfigForValidation(
         };
       })
       : current.cloudflareProfiles,
+    supabaseProfiles: Array.isArray(cloudUpdate.supabaseProfiles)
+      ? cloudUpdate.supabaseProfiles.map((profile) => {
+        const existing = current.supabaseProfiles?.find((entry) => entry.id === profile.id);
+        return {
+          ...existing,
+          ...profile,
+          apiBaseUrl: hasOwnProp(profile, 'apiBaseUrl') ? normalizeOptionalHttpUrlInput(profile.apiBaseUrl) : existing?.apiBaseUrl,
+          accessToken: hasOwnProp(profile, 'accessToken') ? trimOptionalString(profile.accessToken) : existing?.accessToken,
+          credentialRef: hasOwnProp(profile, 'credentialRef') ? trimOptionalString(profile.credentialRef) : existing?.credentialRef,
+          organizationId: hasOwnProp(profile, 'organizationId') ? trimOptionalString(profile.organizationId) : existing?.organizationId,
+          projectRef: hasOwnProp(profile, 'projectRef') ? trimOptionalString(profile.projectRef) : existing?.projectRef,
+        };
+      })
+      : current.supabaseProfiles,
+    flyProfiles: Array.isArray(cloudUpdate.flyProfiles)
+      ? cloudUpdate.flyProfiles.map((profile) => {
+        const existing = current.flyProfiles?.find((entry) => entry.id === profile.id);
+        return {
+          ...existing,
+          ...profile,
+          apiBaseUrl: hasOwnProp(profile, 'apiBaseUrl') ? normalizeOptionalHttpUrlInput(profile.apiBaseUrl) : existing?.apiBaseUrl,
+          apiToken: hasOwnProp(profile, 'apiToken') ? trimOptionalString(profile.apiToken) : existing?.apiToken,
+          credentialRef: hasOwnProp(profile, 'credentialRef') ? trimOptionalString(profile.credentialRef) : existing?.credentialRef,
+          orgSlug: hasOwnProp(profile, 'orgSlug') ? trimOptionalString(profile.orgSlug) : existing?.orgSlug,
+          defaultAppName: hasOwnProp(profile, 'defaultAppName') ? trimOptionalString(profile.defaultAppName) : existing?.defaultAppName,
+        };
+      })
+      : current.flyProfiles,
     awsProfiles: Array.isArray(cloudUpdate.awsProfiles)
       ? cloudUpdate.awsProfiles.map((profile) => {
         const existing = current.awsProfiles?.find((entry) => entry.id === profile.id);

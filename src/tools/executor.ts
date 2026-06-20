@@ -143,7 +143,9 @@ import type { AzureClient, AzureInstanceConfig, AzureServiceName } from './cloud
 import type { CpanelClient, CpanelInstanceConfig } from './cloud/cpanel-client.js';
 import { normalizeCpanelConnectionConfig } from './cloud/cpanel-profile.js';
 import type { CloudflareClient, CloudflareInstanceConfig } from './cloud/cloudflare-client.js';
+import type { FlyClient, FlyInstanceConfig } from './cloud/fly-client.js';
 import type { GcpClient, GcpInstanceConfig, GcpServiceName } from './cloud/gcp-client.js';
+import type { SupabaseClient, SupabaseInstanceConfig } from './cloud/supabase-client.js';
 import type { VercelClient, VercelInstanceConfig } from './cloud/vercel-client.js';
 import {
   WorkspaceDependencyLedger,
@@ -464,7 +466,10 @@ function emptyCloudConfig(): AssistantCloudConfig {
     enabled: false,
     cpanelProfiles: [],
     vercelProfiles: [],
+    daytonaProfiles: [],
     cloudflareProfiles: [],
+    supabaseProfiles: [],
+    flyProfiles: [],
     awsProfiles: [],
     gcpProfiles: [],
     azureProfiles: [],
@@ -893,6 +898,8 @@ export class ToolExecutor {
   private cpanelClientModulePromise?: Promise<typeof import('./cloud/cpanel-client.js')>;
   private vercelClientModulePromise?: Promise<typeof import('./cloud/vercel-client.js')>;
   private cloudflareClientModulePromise?: Promise<typeof import('./cloud/cloudflare-client.js')>;
+  private supabaseClientModulePromise?: Promise<typeof import('./cloud/supabase-client.js')>;
+  private flyClientModulePromise?: Promise<typeof import('./cloud/fly-client.js')>;
   private awsClientModulePromise?: Promise<typeof import('./cloud/aws-client.js')>;
   private gcpClientModulePromise?: Promise<typeof import('./cloud/gcp-client.js')>;
   private azureClientModulePromise?: Promise<typeof import('./cloud/azure-client.js')>;
@@ -2229,6 +2236,42 @@ export class ToolExecutor {
           line: `- ${profile.id}: provider=cloudflare label="${profile.name}" endpoint=${endpoint} credential=${profile.apiToken?.trim() ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} suggestedReadOnlyTest=cf_status`,
         };
       }),
+      ...(this.cloudConfig.supabaseProfiles ?? []).map((profile) => {
+        const endpoint = this.describeSupabaseEndpoint({
+          id: profile.id,
+          name: profile.name,
+          apiBaseUrl: profile.apiBaseUrl,
+          accessToken: profile.accessToken ?? '',
+          organizationId: profile.organizationId,
+          projectRef: profile.projectRef,
+        });
+        const host = new URL(endpoint).hostname;
+        return {
+          family: 'supabase' as const,
+          id: profile.id,
+          label: profile.name,
+          keywords: [profile.id, profile.name, profile.organizationId, profile.projectRef, 'supabase_status', 'supabase_api', 'supabase_cli'].filter((value): value is string => Boolean(value)),
+          line: `- ${profile.id}: provider=supabase label="${profile.name}" endpoint=${endpoint} credential=${profile.accessToken?.trim() ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} organization=${profile.organizationId?.trim() || 'all'} projectRef=${profile.projectRef?.trim() || 'none'} suggestedReadOnlyTest=supabase_status operations=supabase_api,supabase_cli`,
+        };
+      }),
+      ...(this.cloudConfig.flyProfiles ?? []).map((profile) => {
+        const endpoint = this.describeFlyEndpoint({
+          id: profile.id,
+          name: profile.name,
+          apiBaseUrl: profile.apiBaseUrl,
+          apiToken: profile.apiToken ?? '',
+          orgSlug: profile.orgSlug,
+          defaultAppName: profile.defaultAppName,
+        });
+        const host = new URL(endpoint).hostname;
+        return {
+          family: 'fly' as const,
+          id: profile.id,
+          label: profile.name,
+          keywords: [profile.id, profile.name, profile.orgSlug, profile.defaultAppName, 'fly_status', 'fly_api', 'fly_cli'].filter((value): value is string => Boolean(value)),
+          line: `- ${profile.id}: provider=fly label="${profile.name}" endpoint=${endpoint} credential=${profile.apiToken?.trim() ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} orgSlug=${profile.orgSlug?.trim() || 'default'} defaultAppName=${profile.defaultAppName?.trim() || 'none'} suggestedReadOnlyTest=fly_status operations=fly_api,fly_cli`,
+        };
+      }),
       ...(this.cloudConfig.awsProfiles ?? []).map((profile) => {
         const endpoint = this.describeAwsEndpoint({
           id: profile.id,
@@ -2301,6 +2344,8 @@ export class ToolExecutor {
       ['vercel', this.cloudConfig.vercelProfiles?.length ?? 0] as [string, number],
       ['daytona', this.cloudConfig.daytonaProfiles?.length ?? 0] as [string, number],
       ['cloudflare', this.cloudConfig.cloudflareProfiles?.length ?? 0] as [string, number],
+      ['supabase', this.cloudConfig.supabaseProfiles?.length ?? 0] as [string, number],
+      ['fly', this.cloudConfig.flyProfiles?.length ?? 0] as [string, number],
       ['aws', this.cloudConfig.awsProfiles?.length ?? 0] as [string, number],
       ['gcp', this.cloudConfig.gcpProfiles?.length ?? 0] as [string, number],
       ['azure', this.cloudConfig.azureProfiles?.length ?? 0] as [string, number],
@@ -6267,12 +6312,17 @@ export class ToolExecutor {
       resolveCpanelAccountContext: (profileId, requestedAccount) => this.resolveCpanelAccountContext(profileId, requestedAccount),
       createVercelClient: (profileId) => this.createVercelClient(profileId),
       createCloudflareClient: (profileId) => this.createCloudflareClient(profileId),
+      createSupabaseClient: (profileId) => this.createSupabaseClient(profileId),
+      createFlyClient: (profileId) => this.createFlyClient(profileId),
+      runCloudCli: (input, request) => this.runCloudCli(input, request),
       createAwsClient: (profileId, service) => this.createAwsClient(profileId, service),
       createGcpClient: (profileId, service) => this.createGcpClient(profileId, service),
       createAzureClient: (profileId, service) => this.createAzureClient(profileId, service),
       describeCloudEndpoint: (profile) => this.describeCloudEndpoint(profile),
       describeVercelEndpoint: (profile) => this.describeVercelEndpoint(profile),
       describeCloudflareEndpoint: (profile) => this.describeCloudflareEndpoint(profile),
+      describeSupabaseEndpoint: (profile) => this.describeSupabaseEndpoint(profile),
+      describeFlyEndpoint: (profile) => this.describeFlyEndpoint(profile),
       describeAwsEndpoint: (profile, service) => this.describeAwsEndpoint(profile, service),
       describeGcpEndpoint: (profile, service) => this.describeGcpEndpoint(profile, service),
       describeAzureEndpoint: (profile, service, accountName) => this.describeAzureEndpoint(profile, service, accountName),
@@ -6625,6 +6675,16 @@ export class ToolExecutor {
     return this.cloudflareClientModulePromise;
   }
 
+  private loadSupabaseClientModule(): Promise<typeof import('./cloud/supabase-client.js')> {
+    this.supabaseClientModulePromise ??= import('./cloud/supabase-client.js');
+    return this.supabaseClientModulePromise;
+  }
+
+  private loadFlyClientModule(): Promise<typeof import('./cloud/fly-client.js')> {
+    this.flyClientModulePromise ??= import('./cloud/fly-client.js');
+    return this.flyClientModulePromise;
+  }
+
   private loadAwsClientModule(): Promise<typeof import('./cloud/aws-client.js')> {
     this.awsClientModulePromise ??= import('./cloud/aws-client.js');
     return this.awsClientModulePromise;
@@ -6731,6 +6791,18 @@ export class ToolExecutor {
     const config = this.getCloudflareProfile(profileId);
     const { CloudflareClient } = await this.loadCloudflareClientModule();
     return new CloudflareClient(config);
+  }
+
+  private async createSupabaseClient(profileId: string): Promise<SupabaseClient> {
+    const config = this.getSupabaseProfile(profileId);
+    const { SupabaseClient } = await this.loadSupabaseClientModule();
+    return new SupabaseClient(config);
+  }
+
+  private async createFlyClient(profileId: string): Promise<FlyClient> {
+    const config = this.getFlyProfile(profileId);
+    const { FlyClient } = await this.loadFlyClientModule();
+    return new FlyClient(config);
   }
 
   private async createAwsClient(profileId: string, service?: AwsServiceName): Promise<AwsClient> {
@@ -6918,6 +6990,78 @@ export class ToolExecutor {
     };
   }
 
+  private getSupabaseProfile(profileId: string): SupabaseInstanceConfig {
+    if (!this.cloudConfig.enabled) {
+      throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
+    }
+    const id = profileId.trim();
+    if (!id) {
+      throw new Error('profile is required');
+    }
+    const profile = (this.cloudConfig.supabaseProfiles ?? []).find((entry) => entry.id === id);
+    if (!profile) {
+      throw new Error(`Unknown Supabase profile '${id}'.`);
+    }
+    if (!profile.accessToken?.trim()) {
+      throw new Error(`Supabase profile '${id}' does not have a resolved access token.`);
+    }
+
+    let baseUrl: URL;
+    try {
+      baseUrl = new URL(normalizeOptionalHttpUrlInput(profile.apiBaseUrl) || 'https://api.supabase.com');
+    } catch {
+      throw new Error(`Supabase profile '${id}' has an invalid apiBaseUrl.`);
+    }
+    if (!this.isHostAllowed(baseUrl.hostname)) {
+      throw new Error(`Host '${baseUrl.hostname}' is not in allowedDomains.`);
+    }
+
+    return {
+      id: profile.id,
+      name: profile.name,
+      apiBaseUrl: normalizeHttpUrlInput(baseUrl.toString()),
+      accessToken: profile.accessToken,
+      organizationId: profile.organizationId,
+      projectRef: profile.projectRef,
+    };
+  }
+
+  private getFlyProfile(profileId: string): FlyInstanceConfig {
+    if (!this.cloudConfig.enabled) {
+      throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
+    }
+    const id = profileId.trim();
+    if (!id) {
+      throw new Error('profile is required');
+    }
+    const profile = (this.cloudConfig.flyProfiles ?? []).find((entry) => entry.id === id);
+    if (!profile) {
+      throw new Error(`Unknown Fly.io profile '${id}'.`);
+    }
+    if (!profile.apiToken?.trim()) {
+      throw new Error(`Fly.io profile '${id}' does not have a resolved API token.`);
+    }
+
+    let baseUrl: URL;
+    try {
+      baseUrl = new URL(normalizeOptionalHttpUrlInput(profile.apiBaseUrl) || 'https://api.machines.dev');
+    } catch {
+      throw new Error(`Fly.io profile '${id}' has an invalid apiBaseUrl.`);
+    }
+    if (!this.isHostAllowed(baseUrl.hostname)) {
+      throw new Error(`Host '${baseUrl.hostname}' is not in allowedDomains.`);
+    }
+
+    return {
+      id: profile.id,
+      name: profile.name,
+      apiBaseUrl: normalizeHttpUrlInput(baseUrl.toString()),
+      apiToken: profile.apiToken,
+      orgSlug: profile.orgSlug,
+      defaultAppName: profile.defaultAppName,
+    };
+  }
+
   private getCloudAwsProfile(profileId: string, service?: AwsServiceName): AwsInstanceConfig {
     if (!this.cloudConfig.enabled) {
       throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
@@ -7070,6 +7214,14 @@ export class ToolExecutor {
     return normalizeHttpUrlInput(profile.apiBaseUrl?.trim() || 'https://api.cloudflare.com/client/v4');
   }
 
+  private describeSupabaseEndpoint(profile: SupabaseInstanceConfig): string {
+    return normalizeHttpUrlInput(profile.apiBaseUrl?.trim() || 'https://api.supabase.com');
+  }
+
+  private describeFlyEndpoint(profile: FlyInstanceConfig): string {
+    return normalizeHttpUrlInput(profile.apiBaseUrl?.trim() || 'https://api.machines.dev');
+  }
+
   private describeAwsEndpoint(profile: AwsInstanceConfig, service: AwsServiceName): string {
     const override = profile.endpoints?.[service];
     if (override?.trim()) {
@@ -7189,6 +7341,22 @@ export class ToolExecutor {
       timeout: opts.timeout,
       maxBuffer: opts.maxBuffer,
       env: opts.env,
+    });
+  }
+
+  private async runCloudCli(
+    input: { command: string; args: string[]; cwd?: string; env: Record<string, string>; timeoutMs?: number },
+    request: Partial<ToolExecutionRequest>,
+  ): Promise<{ stdout: string; stderr: string }> {
+    const cwd = input.cwd?.trim()
+      ? await this.resolveAllowedPath(input.cwd, request)
+      : this.getEffectiveWorkspaceRoot(request);
+    return this.sandboxExecFile(input.command, input.args, 'workspace-write', {
+      cwd,
+      env: input.env,
+      networkAccess: true,
+      timeout: input.timeoutMs,
+      maxBuffer: 2_000_000,
     });
   }
 

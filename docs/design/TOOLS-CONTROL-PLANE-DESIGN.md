@@ -39,6 +39,7 @@ Current boundary:
 - Memory: `memory_search`, `memory_recall`, `memory_save`, `memory_bridge_search`
 - Search: `doc_search`, `doc_search_status`, `doc_search_reindex`
 - Automation: `automation_list`, `automation_output_search`, `automation_output_read`, `automation_save`, `automation_set_enabled`, `automation_run`, `automation_delete` — managed via the web Automations page (`#/automations`) or chat through the automation authoring compiler
+- Cloud: `cloud_profile_list`, cPanel/WHM tools, Vercel tools, Cloudflare tools, Supabase status/API/CLI tools, Fly.io status/API/CLI tools, and AWS/GCP/Azure status and inventory tools
 - Policy: `update_tool_policy`
 
 ## Deferred Tool Loading
