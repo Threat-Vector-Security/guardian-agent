@@ -788,6 +788,20 @@ const REPO_EVIDENCE_CATEGORY_NAMES = new Set([
   'fs_list',
   'code_symbol_search',
 ]);
+const WORKSPACE_MUTATION_TOOL_NAMES = new Set([
+  'fs_write',
+  'fs_mkdir',
+  'fs_delete',
+  'fs_move',
+  'fs_copy',
+  'coding_backend_run',
+  'code_create',
+  'code_edit',
+  'code_git_commit',
+  'code_patch',
+  'code_remote_exec',
+  'package_install',
+]);
 const REPO_NO_MATCH_ANSWER_PATTERN = /\b(?:no\s+(?:content\s+)?matches?\s+(?:were\s+)?found|no\s+results?\s+(?:were\s+)?found|could(?:\s+not|n't)\s+find|did(?:\s+not|n't)\s+find|not\s+found)\b/i;
 const IMPLEMENTATION_LOCATION_REQUEST_PATTERN = /\b(?:where|which|what|exact|identify|locate|show|list|find)\b[\s\S]{0,180}\b(?:implement|implements|implemented|define|defines|defined|called|calls|callers?|emitted|emits?|triggered|fires?|published|registered|wired|handled|handles|render|renders|rendered|own|owns|responsible|file|files|function|functions|symbol|symbols|path|paths)\b/i;
 const FINAL_ANSWER_FILE_REFERENCE_PATTERN = /\b(?:src|docs|web|scripts|config|policies|skills|native|test|tests|lib|public|tmp)(?:[\\/][^\s`'",)\]}]+)+/gi;
@@ -856,7 +870,7 @@ function verifyRepoEvidenceQuality(
 }
 
 function contractLooksLikeImplementationLocationRequest(envelope: DelegatedResultEnvelope): boolean {
-  if (contractIsRuntimeVerifiedWorkspaceMutation(envelope)) {
+  if (contractIsRuntimeVerifiedWorkspaceMutation(envelope) || contractIsWriteBackedWorkspaceMutation(envelope)) {
     return false;
   }
   const summaries = [
@@ -866,6 +880,34 @@ function contractLooksLikeImplementationLocationRequest(envelope: DelegatedResul
     .filter((summary): summary is string => typeof summary === 'string' && summary.trim().length > 0)
     .join(' ');
   return IMPLEMENTATION_LOCATION_REQUEST_PATTERN.test(summaries);
+}
+
+function contractIsWriteBackedWorkspaceMutation(envelope: DelegatedResultEnvelope): boolean {
+  const contract = envelope.taskContract;
+  if (contract.kind === 'repo_mutation' || contract.kind === 'filesystem_mutation') {
+    return true;
+  }
+  const workspaceScoped = contract.route === 'coding_task' || contract.route === 'filesystem_task';
+  if (!workspaceScoped) {
+    return false;
+  }
+  if (
+    isWorkspaceMutationOperation(contract.operation)
+  ) {
+    return true;
+  }
+  if (contract.plan.steps.some((step) => (
+    step.required !== false
+    && (step.kind === 'write' || step.expectedToolCategories?.some((category) => category.trim() === 'repo_mutation' || category.trim() === 'fs_write') === true)
+  ))) {
+    return true;
+  }
+  return envelope.evidenceReceipts.some((receipt) => (
+    receipt.status === 'succeeded'
+    && receipt.sourceType === 'tool_call'
+    && typeof receipt.toolName === 'string'
+    && WORKSPACE_MUTATION_TOOL_NAMES.has(receipt.toolName)
+  ));
 }
 
 function contractIsRuntimeVerifiedWorkspaceMutation(envelope: DelegatedResultEnvelope): boolean {
@@ -1326,7 +1368,7 @@ function isReadOnlyOperation(operation: IntentGatewayDecision['operation'] | und
   return operation === 'inspect' || operation === 'read' || operation === 'search';
 }
 
-function isWorkspaceMutationOperation(operation: IntentGatewayDecision['operation'] | undefined): boolean {
+function isWorkspaceMutationOperation(operation: IntentGatewayDecision['operation'] | string | undefined): boolean {
   return operation === 'create'
     || operation === 'update'
     || operation === 'delete'

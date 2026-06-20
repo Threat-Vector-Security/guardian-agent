@@ -730,6 +730,118 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('does not treat write-backed app creation answers as implementation-location inspections', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Create a basic game framework and necessary files.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Check the workspace before writing files.', expectedToolCategories: ['fs_search'], required: true },
+        { kind: 'write', summary: 'Create the game files.', expectedToolCategories: ['fs_write'], required: true, dependsOn: ['step_1'] },
+        { kind: 'answer', summary: 'Report what files were created.', required: true, dependsOn: ['step_2'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = 'Created a basic browser game framework in index.html and style.css.';
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+        stepReceipts: [
+          {
+            stepId: 'step_1',
+            status: 'satisfied',
+            evidenceReceiptIds: ['receipt-search'],
+            summary: 'Found no existing game files.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            stepId: 'step_2',
+            status: 'satisfied',
+            evidenceReceiptIds: ['receipt-write'],
+            summary: 'Wrote index.html and style.css.',
+            startedAt: 3,
+            endedAt: 4,
+          },
+          {
+            stepId: 'step_3',
+            status: 'satisfied',
+            evidenceReceiptIds: ['answer:1'],
+            summary: finalAnswer,
+            startedAt: 5,
+            endedAt: 6,
+          },
+        ],
+        evidenceReceipts: [
+          {
+            receiptId: 'receipt-search',
+            sourceType: 'tool_call',
+            toolName: 'fs_search',
+            status: 'succeeded',
+            refs: ['index.html', 'style.css'],
+            summary: 'Search hit refs from workspace scan.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            receiptId: 'receipt-write',
+            sourceType: 'tool_call',
+            toolName: 'fs_write',
+            status: 'succeeded',
+            refs: ['index.html', 'style.css'],
+            summary: 'Wrote index.html and style.css.',
+            startedAt: 3,
+            endedAt: 4,
+          },
+        ],
+        claims: [
+          {
+            claimId: 'claim-search-index',
+            kind: 'file_reference',
+            subject: 'index.html',
+            value: 'index.html',
+            evidenceReceiptIds: ['receipt-search'],
+            confidence: 0.8,
+          },
+          {
+            claimId: 'claim-search-style',
+            kind: 'file_reference',
+            subject: 'style.css',
+            value: 'style.css',
+            evidenceReceiptIds: ['receipt-search'],
+            confidence: 0.8,
+          },
+          {
+            claimId: 'answer:1:answer',
+            kind: 'answer',
+            subject: 'final_answer',
+            value: finalAnswer,
+            evidenceReceiptIds: ['answer:1'],
+            confidence: 1,
+          },
+        ],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'satisfied',
+      retryable: false,
+    });
+  });
+
   it('rejects completed envelopes whose final answer promises another search before synthesis', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'general_assistant',
