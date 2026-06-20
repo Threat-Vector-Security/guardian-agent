@@ -254,6 +254,7 @@ body.workstation-mode .workstation-shell {
 .ws-stage {
   position: absolute;
   inset: var(--ws-titlebar-h) 0 var(--ws-dock-h) 0;
+  z-index: 20;
   overflow: hidden;
 }
 

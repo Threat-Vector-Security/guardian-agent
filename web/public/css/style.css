@@ -10653,15 +10653,18 @@ body.focused-mode .chat-rail-resizer {
 }
 
 .focused-route-modal {
+  --focused-window-top: clamp(2.75rem, 7vh, 4.75rem);
+  --focused-window-x: clamp(0.75rem, 3vw, 2.5rem);
+  --focused-window-bottom: 1rem;
   position: fixed;
   inset: 0 0 0 56px;
   z-index: 300;
   display: block;
-  padding: clamp(2.75rem, 7vh, 4.75rem) clamp(0.75rem, 3vw, 2.5rem) 1rem;
+  padding: var(--focused-window-top) var(--focused-window-x) var(--focused-window-bottom);
 }
 
 .focused-route-modal.is-chat-cooperative-route {
-  padding-bottom: clamp(7.5rem, 18vh, 10rem);
+  --focused-window-bottom: clamp(7.5rem, 18vh, 10rem);
   pointer-events: none;
 }
 
@@ -10672,7 +10675,7 @@ body.focused-mode .chat-rail-resizer {
 .focused-route-modal__window {
   position: absolute;
   left: 50%;
-  top: clamp(2.75rem, 7vh, 4.75rem);
+  top: var(--focused-window-top);
   transform: translateX(-50%);
   width: min(1180px, calc(100vw - 104px));
   height: min(760px, calc(100vh - clamp(4.5rem, 10vh, 6rem)));
@@ -10692,10 +10695,12 @@ body.focused-mode .chat-rail-resizer {
 }
 
 .focused-route-modal__window.is-maximized {
-  left: 0 !important;
-  top: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
+  left: var(--focused-window-x) !important;
+  top: var(--focused-window-top) !important;
+  right: var(--focused-window-x) !important;
+  bottom: var(--focused-window-bottom) !important;
+  width: auto !important;
+  height: auto !important;
   min-height: 0 !important;
   border-radius: 0;
   transform: none !important;
@@ -10933,15 +10938,17 @@ body.focused-mode .chat-rail-resizer {
 
   .focused-route-modal {
     left: 48px;
-    padding: 3.4rem 0.55rem 0.6rem;
+    --focused-window-top: 3.4rem;
+    --focused-window-x: 0.55rem;
+    --focused-window-bottom: 0.6rem;
   }
 
   .focused-route-modal.is-chat-cooperative-route {
-    padding-bottom: clamp(6.5rem, 22vh, 8rem);
+    --focused-window-bottom: clamp(6.5rem, 22vh, 8rem);
   }
 
   .focused-route-modal__window {
-    top: 3.4rem;
+    top: var(--focused-window-top);
     width: calc(100vw - 59px);
     height: calc(100vh - 4rem);
     min-height: min(560px, calc(100vh - 4rem));
