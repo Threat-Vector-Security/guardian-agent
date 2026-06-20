@@ -405,6 +405,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'In plain terms: `local` means your local AI path answered, `external` means a hosted AI path answered, and `system` means the reply came from product logic rather than a normal model turn.',
                   'The web `Ask the agent...` field supports multiline drafting. Press `Enter` to send and `Shift+Enter` to add a new line.',
                   'Use `Stop` in the web chat toolbar to cancel the active in-flight request when you need to interrupt a long or stuck turn.',
+                  'While Guardian is working, the web chat follows new output only while you are already near the bottom; scrolling up pauses that follow behavior until you return to the bottom.',
                   'Use `Clear Pending` from `System` > `Pending Approvals` when a stale approval or clarification is stuck and you want to clear the blocked state.',
                   'If you reload the web page mid-turn, Guardian attempts to cancel the recovered in-flight request automatically so the prior turn does not continue silently behind the refreshed UI.',
                   'Use `Reset Chat` to clear the current conversation context. If a request is still running, Reset first issues a stop for that active request and then resets the conversation state.',

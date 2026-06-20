@@ -186,6 +186,40 @@ describe('IntentGateway', () => {
     expect(result.decision.plannedSteps?.flatMap((step) => step.expectedToolCategories ?? [])).not.toContain('web_search');
   });
 
+  it('routes fresh-directory game framework requests into the attached code session without clarification', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: "Alright, go ahead and build that test game framework it's a fresh directory now",
+        channel: 'web',
+        continuity: {
+          continuityKey: 'web:owner:chat',
+          linkedSurfaceCount: 1,
+          activeExecutionRefs: ['code_session:test-game'],
+        },
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:attached-code-session-work');
+    expect(result.decision).toMatchObject({
+      route: 'coding_task',
+      turnRelation: 'follow_up',
+      resolution: 'ready',
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
+    });
+    expect(result.decision.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'write', 'read', 'answer']);
+  });
+
   it('repairs diagnostics trace inspection clarifications into a ready trace inspect route', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

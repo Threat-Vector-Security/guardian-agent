@@ -665,6 +665,13 @@ function buildContentPlanIntentGatewayRecord(
     }, 'content-plan:second-brain-read');
   }
 
+  const hasAttachedCodeSessionRef = input.continuity?.activeExecutionRefs?.some((ref) => ref.startsWith('code_session:')) === true
+    || !!input.continuity?.activeExecution?.codeSessionId;
+  const normalizedSourceForContinuity = sourceContent.toLowerCase();
+  const activeExecution = input.continuity?.activeExecution;
+  const canUseFreshCodeSessionContentPlan = !activeExecution
+    || asksNotToResumePriorCodingExecution(normalizedSourceForContinuity);
+
   if (
     isExplicitWorkspaceAppBuildRequest(sourceContent)
     && asksForWorkspaceAppRuntimeEvidence(sourceContent)
@@ -734,12 +741,63 @@ function buildContentPlanIntentGatewayRecord(
     }, 'content-plan:workspace-app-build');
   }
 
-  const hasAttachedCodeSessionRef = input.continuity?.activeExecutionRefs?.some((ref) => ref.startsWith('code_session:')) === true
-    || !!input.continuity?.activeExecution?.codeSessionId;
-  const normalizedSourceForContinuity = sourceContent.toLowerCase();
-  const activeExecution = input.continuity?.activeExecution;
-  const canUseFreshCodeSessionContentPlan = !activeExecution
-    || asksNotToResumePriorCodingExecution(normalizedSourceForContinuity);
+  if (
+    hasAttachedCodeSessionRef
+    && canUseFreshCodeSessionContentPlan
+    && isExplicitWorkspaceAppBuildRequest(sourceContent)
+    && !isExplicitBoundedCodeSessionFileMutation(sourceContent)
+  ) {
+    const normalizedSourceContent = sourceContent.toLowerCase();
+    const operation = inferExplicitCodingTaskOperation(normalizedSourceContent, 'unknown') ?? 'update';
+    return normalize({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: operation === 'unknown' ? 'update' : operation,
+      summary: 'Run the requested workspace change against the attached code session.',
+      turnRelation: 'follow_up',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Inspect the current workspace before changing files.',
+          required: true,
+          expectedToolCategories: ['read', 'repo_inspect'],
+        },
+        {
+          kind: 'write',
+          summary: 'Apply the requested workspace change.',
+          required: true,
+          dependsOn: ['step_1'],
+          expectedToolCategories: [operation === 'delete' ? 'delete' : 'write', 'repo_mutation'],
+        },
+        {
+          kind: 'read',
+          summary: 'Read back the changed artifact or collect equivalent verification evidence.',
+          required: true,
+          dependsOn: ['step_2'],
+          expectedToolCategories: ['read', 'repo_inspect'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Report the completed change and verification evidence.',
+          required: true,
+          dependsOn: ['step_3'],
+          expectedToolCategories: ['answer'],
+        },
+      ],
+      entities: {},
+    }, 'content-plan:attached-code-session-work');
+  }
+
   if (
     hasAttachedCodeSessionRef
     && canUseFreshCodeSessionContentPlan

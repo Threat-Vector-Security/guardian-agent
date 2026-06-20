@@ -77,6 +77,7 @@ let terminalListenersBound = false;
 let runTimelineListenersBound = false;
 let codeSessionListenersBound = false;
 let terminalRenderTimer = null;
+let terminalStateSaveTimer = null;
 let terminalUnloadBound = false;
 let terminalLibPromise = null;
 let terminalCssLoaded = false;
@@ -1712,7 +1713,8 @@ function bindTerminalListeners() {
     if (!tab || typeof payload?.data !== 'string') return;
     tab.output = trimTerminalOutput((tab.output || '') + payload.data);
     tab.connected = true;
-    saveState(codeState);
+    scheduleTerminalStateSave();
+    refreshTerminalPaneChrome(tab);
     const instance = terminalInstances.get(tab.id);
     if (instance) instance.term.write(payload.data);
   });
@@ -1728,6 +1730,7 @@ function bindTerminalListeners() {
     const exitCode = Number.isInteger(payload?.exitCode) ? payload.exitCode : 'unknown';
     tab.output = trimTerminalOutput(`${tab.output || ''}\n[process exited ${exitCode}]\n`);
     saveState(codeState);
+    refreshTerminalPaneChrome(tab);
     const instance = terminalInstances.get(tab.id);
     if (instance) {
       instance.term.write(`\r\n[process exited ${exitCode}]\r\n`);
@@ -1902,6 +1905,14 @@ function scheduleTerminalRender() {
     terminalRenderTimer = null;
     rerenderFromState();
   }, 40);
+}
+
+function scheduleTerminalStateSave() {
+  if (terminalStateSaveTimer) return;
+  terminalStateSaveTimer = setTimeout(() => {
+    terminalStateSaveTimer = null;
+    saveState(codeState);
+  }, 500);
 }
 
 function trimTerminalOutput(text) {
@@ -3925,6 +3936,13 @@ function captureFocusState(container) {
   const active = document.activeElement;
   if (!(active instanceof HTMLElement) || !container.contains(active)) return null;
 
+  if (active.matches('[data-code-shell-select]')) {
+    return {
+      type: 'terminal-shell-select',
+      tabId: active.getAttribute('data-code-shell-select') || '',
+    };
+  }
+
   const terminalPane = active.closest('.code-terminal-pane[data-pane-id]');
   if (terminalPane instanceof HTMLElement) {
     return {
@@ -3968,6 +3986,8 @@ function restoreFocusState(container, state) {
     selector = `[data-code-session-form] [name="${state.name}"]`;
   } else if (state.type === 'edit-session-form' && state.name) {
     selector = `[data-code-edit-session-form] [name="${state.name}"]`;
+  } else if (state.type === 'terminal-shell-select' && state.tabId) {
+    selector = `[data-code-shell-select="${cssEscape(state.tabId)}"]`;
   }
   if (!selector) return;
   const element = container.querySelector(selector);
@@ -4120,6 +4140,7 @@ async function ensureTerminalConnected(session, tab) {
     tab.output = 'Connecting to terminal...\n';
   }
   saveState(codeState);
+  refreshTerminalPaneChrome(tab);
   try {
     const result = await api.codeTerminalOpen({
       sessionId: session.id,
@@ -4138,6 +4159,7 @@ async function ensureTerminalConnected(session, tab) {
     if (tab.output === 'Connecting to terminal...\n') {
       tab.output = '';
     }
+    refreshTerminalPaneChrome(tab);
   } catch (err) {
     if (tab.openAttemptId !== attemptId) return;
     const message = err instanceof Error ? err.message : String(err);
@@ -4147,12 +4169,14 @@ async function ensureTerminalConnected(session, tab) {
     tab.openFailed = true;
     tab.openError = message;
     tab.output = trimTerminalOutput(`${tab.output || ''}\n[terminal error: ${message}]\n`);
+    refreshTerminalPaneChrome(tab);
   } finally {
     if (tab.openAttemptId === attemptId) {
       tab.connecting = false;
       tab.openAttemptId = null;
     }
     saveState(codeState);
+    refreshTerminalPaneChrome(tab);
   }
 }
 
@@ -4169,6 +4193,7 @@ async function closeTerminal(tab) {
   tab.exited = true;
   tab.openFailed = false;
   tab.openError = '';
+  refreshTerminalPaneChrome(tab);
 }
 
 function renderDOM(container, { focusTerminalTabId = null } = {}) {
@@ -4524,6 +4549,24 @@ function getVisibleTerminalPanes(session) {
   return session.terminalTabs || [];
 }
 
+function getTerminalStatusLabel(tab) {
+  return tab.connected ? 'connected' : tab.connecting ? 'connecting' : tab.openFailed ? 'error' : tab.exited ? 'exited' : 'disconnected';
+}
+
+function refreshTerminalPaneChrome(tab) {
+  if (!currentContainer || !tab?.id) return;
+  const pane = currentContainer.querySelector(`.code-terminal-pane[data-pane-id="${cssEscape(tab.id)}"]`);
+  if (!(pane instanceof HTMLElement)) return;
+  const badge = pane.querySelector('.code-terminal-pane__badge');
+  if (badge) badge.textContent = getTerminalStatusLabel(tab);
+  const error = pane.querySelector('[data-code-terminal-error]');
+  if (error) {
+    const message = tab.openFailed && typeof tab.openError === 'string' ? tab.openError.trim() : '';
+    error.textContent = message;
+    error.hidden = !message;
+  }
+}
+
 function renderTerminalPane(session, tab) {
   const shellOptions = getShellOptions();
   const currentShell = normalizeTerminalShell(tab.shell);
@@ -4535,7 +4578,7 @@ function renderTerminalPane(session, tab) {
     <div class="code-terminal-pane" data-pane-id="${escAttr(tab.id)}">
       <div class="code-terminal-pane__header">
         <span class="code-terminal-pane__name">${esc(tab.name)}</span>
-        <span class="code-terminal-pane__badge">${tab.connected ? 'connected' : tab.connecting ? 'connecting' : tab.openFailed ? 'error' : tab.exited ? 'exited' : 'disconnected'}</span>
+        <span class="code-terminal-pane__badge">${getTerminalStatusLabel(tab)}</span>
         <select class="code-terminal-pane__shell" data-code-shell-select="${escAttr(tab.id)}">
           ${shellOptions.map((option) => `<option value="${escAttr(option.id)}"${option.id === currentShell ? ' selected' : ''}>${esc(option.label)}</option>`).join('')}
         </select>
@@ -4545,7 +4588,7 @@ function renderTerminalPane(session, tab) {
         <span class="code-terminal__meta">shell: ${esc(selectedShell?.detail || currentShell)}</span>
         <span class="code-terminal__meta">cwd: ${esc(cwd)}</span>
       </div>
-      ${tab.openFailed && terminalError ? `<div class="code-terminal-pane__error">${esc(terminalError)}</div>` : ''}
+      <div class="code-terminal-pane__error" data-code-terminal-error ${tab.openFailed && terminalError ? '' : 'hidden'}>${esc(terminalError)}</div>
       <div class="code-terminal__viewport" data-terminal-viewport="${escAttr(tab.id)}"></div>
     </div>
   `;
@@ -8264,6 +8307,11 @@ function esc(value) {
 
 function escAttr(value) {
   return esc(value).replace(/`/g, '&#96;');
+}
+
+function cssEscape(value) {
+  const raw = String(value ?? '');
+  return window.CSS?.escape ? window.CSS.escape(raw) : raw.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 function normalizeComparablePath(value) {

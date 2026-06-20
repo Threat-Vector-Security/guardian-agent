@@ -61,6 +61,7 @@ const PROVIDER_PROFILES_CHANGED_EVENT = 'guardian:providers-changed';
 const INTENT_GATEWAY_MISSING_SUMMARY = 'No classification summary provided.';
 const CHAT_LIVE_ACTIVITY_VISIBLE_ITEMS = 2;
 const CHAT_PERSISTED_ACTIVITY_VISIBLE_ITEMS = 2;
+const CHAT_BOTTOM_FOLLOW_PX = 96;
 let currentChatContext = 'second-brain';
 let refreshVisiblePendingAction = null;
 let refreshCodeSessionsPromise = null;
@@ -69,6 +70,36 @@ let activeChatIndicator = null;
 let activeRequestController = null;
 let externalPendingClearHandler = null;
 let clearPendingUiHandler = null;
+
+function isChatNearBottom(historyEl) {
+  if (!historyEl) return true;
+  return historyEl.scrollHeight - historyEl.scrollTop - historyEl.clientHeight <= CHAT_BOTTOM_FOLLOW_PX;
+}
+
+function setChatFollowBottom(historyEl, follow) {
+  if (!historyEl) return;
+  historyEl.dataset.followBottom = follow ? 'true' : 'false';
+}
+
+function shouldFollowChatBottom(historyEl) {
+  return !historyEl || historyEl.dataset.followBottom !== 'false';
+}
+
+function scrollChatToBottom(historyEl, options = {}) {
+  if (!historyEl) return;
+  if (options.force || shouldFollowChatBottom(historyEl)) {
+    historyEl.scrollTop = historyEl.scrollHeight;
+  }
+}
+
+function bindChatFollowBottom(historyEl) {
+  if (!historyEl || historyEl.dataset.followBottomBound === 'true') return;
+  historyEl.dataset.followBottomBound = 'true';
+  setChatFollowBottom(historyEl, true);
+  historyEl.addEventListener('scroll', () => {
+    setChatFollowBottom(historyEl, !activeChatIndicator || isChatNearBottom(historyEl));
+  }, { passive: true });
+}
 
 function persistActiveRequest(request) {
   if (!request || typeof request !== 'object') return;
@@ -183,7 +214,7 @@ function syncActiveChatIndicator(historyEl, agentId) {
   }
   historyEl.appendChild(nextEl);
   activeChatIndicator.element = nextEl;
-  historyEl.scrollTop = historyEl.scrollHeight;
+  scrollChatToBottom(historyEl);
 }
 
 function isCodeSessionInvalidation(payload) {
@@ -451,6 +482,7 @@ export async function initChatPanel(container) {
   history.className = 'chat-history';
   history.id = 'chat-history';
   history.style.fontSize = '0.75rem';
+  bindChatFollowBottom(history);
 
   wrapper.appendChild(history);
 
@@ -615,7 +647,7 @@ export async function initChatPanel(container) {
       element: thinkingEl,
     });
     startActiveChatFallbackTicker(Date.now(), { mode: 'approval' });
-    history.scrollTop = history.scrollHeight;
+    scrollChatToBottom(history, { force: true });
 
     const onRunTimeline = (data) => {
       const matches = matchesRunTimelineRequest(data, {
@@ -625,7 +657,7 @@ export async function initChatPanel(container) {
       });
       if (!matches) return;
       updateActiveChatIndicatorTimeline(data);
-      history.scrollTop = history.scrollHeight;
+      scrollChatToBottom(history);
     };
 
     if (sessionId || requestId) {
@@ -722,7 +754,7 @@ export async function initChatPanel(container) {
           );
           activitySummary = null;
         }
-        history.scrollTop = history.scrollHeight;
+        scrollChatToBottom(history);
         return;
       }
 
@@ -771,7 +803,7 @@ export async function initChatPanel(container) {
           }
           history.appendChild(createMessageEl('error', err.message || 'Continuation failed'));
         }
-        history.scrollTop = history.scrollHeight;
+        scrollChatToBottom(history);
         return;
       }
 
@@ -782,7 +814,7 @@ export async function initChatPanel(container) {
           markApprovalUiResolved(approvalIds, decision);
         }
         addAgentMessage(immediateMessages.join('\n'));
-        history.scrollTop = history.scrollHeight;
+        scrollChatToBottom(history);
         return;
       }
 
@@ -793,7 +825,7 @@ export async function initChatPanel(container) {
           markApprovalUiResolved(approvalIds, decision);
         }
         addAgentMessage(results.join('\n'));
-        history.scrollTop = history.scrollHeight;
+        scrollChatToBottom(history);
         return;
       }
 
@@ -895,7 +927,7 @@ export async function initChatPanel(container) {
       element: thinkingEl,
     });
     startActiveChatFallbackTicker();
-    history.scrollTop = history.scrollHeight;
+    scrollChatToBottom(history, { force: true });
 
     try {
       const contextPrefix = getContextPrefix();
@@ -962,7 +994,7 @@ export async function initChatPanel(container) {
           .then((pendingAction) => {
             addAgentMessage(data.content || '', pendingAction, data.metadata?.responseSource, activitySummary, data.metadata);
             notifyTouchedCodeSessions(data?.metadata);
-            history.scrollTop = history.scrollHeight;
+            scrollChatToBottom(history);
           })
           .catch(() => {
             addAgentMessage(data.content || '', data.metadata?.pendingAction, data.metadata?.responseSource, activitySummary, data.metadata);
@@ -989,7 +1021,7 @@ export async function initChatPanel(container) {
           return;
         }
         updateActiveChatIndicatorTimeline(data);
-        history.scrollTop = history.scrollHeight;
+        scrollChatToBottom(history);
       };
 
       const onDone = (data) => {
@@ -1066,7 +1098,7 @@ export async function initChatPanel(container) {
       history.appendChild(createMessageEl('error', errorMsg, { activitySummary }));
     }
 
-    history.scrollTop = history.scrollHeight;
+    scrollChatToBottom(history);
     restoreInput();
   };
 
@@ -1245,6 +1277,8 @@ function clearPendingUiState() {
 }
 
 function renderHistory(historyEl, agentId, onApproval) {
+  const followBottom = shouldFollowChatBottom(historyEl);
+  const previousScrollTop = historyEl.scrollTop;
   historyEl.innerHTML = '';
   if (!agentId) return;
   setActiveChatHistoryKey(agentId);
@@ -1260,7 +1294,11 @@ function renderHistory(historyEl, agentId, onApproval) {
     }));
   }
   syncActiveChatIndicator(historyEl, agentId);
-  historyEl.scrollTop = historyEl.scrollHeight;
+  if (followBottom) {
+    scrollChatToBottom(historyEl, { force: true });
+  } else {
+    historyEl.scrollTop = previousScrollTop;
+  }
 }
 
 function createThinkingEl(initialLabel = 'Starting…') {

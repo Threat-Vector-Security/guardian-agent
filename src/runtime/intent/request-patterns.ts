@@ -5,9 +5,9 @@ const WORKSPACE_SCOPE_PATTERN = /\b(?:coding\s+workspace|coding\s+session|worksp
 const REPO_MUTATION_PATTERN = /\b(?:create|add|make|build|draft|write|generate|touch|update|edit|change|modify|fix|patch|rewrite|append|delete|remove)\b/;
 const REPO_EXECUTION_PATTERN = /\b(?:run|test|build|lint|check|debug|investigate|inspect|review|search|find|grep)\b/;
 const CODING_BACKEND_PATTERN = /\b(?:codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b/;
-const CODE_REPO_TARGET_PATTERN = /\b(?:source|function|class|module|component|symbol|tests?|test suite|unit tests?|build|compile|lint|check|readme)\b/;
+const CODE_REPO_TARGET_PATTERN = /\b(?:source|function|class|module|component|symbol|tests?|test suite|unit tests?|build|compile|lint|check|readme|framework|starter|game|files?)\b/;
 const REPO_DOCUMENT_ARTIFACT_PATTERN = /\b(?:(?:technical\s+)?implementation\s+plan|business\s+plan|design\s+(?:doc|docs|document|plan)|architecture\s+(?:doc|docs|document|plan)|requirements?\s+(?:doc|docs|document)|spec(?:ification)?|roadmap|changelog|readme|operator\s+guide|runbook)\b/;
-const GREENFIELD_APP_BUILD_PATTERN = /\b(?:build|create|make|implement|generate|scaffold)\b[^.!?\n]{0,180}\b(?:app|application|site|website|web\s*app|player|dashboard|ui)\b|\b(?:app|application|site|website|web\s*app|player|dashboard|ui)\b[^.!?\n]{0,180}\b(?:from scratch|runnable locally|local url|playback controls|browsing)\b/;
+const GREENFIELD_APP_BUILD_PATTERN = /\b(?:build|create|make|implement|generate|scaffold)\b[^.!?\n]{0,180}\b(?:app|application|site|website|web\s*app|player|dashboard|ui|game|framework|starter)\b|\b(?:app|application|site|website|web\s*app|player|dashboard|ui|game|framework|starter)\b[^.!?\n]{0,180}\b(?:from scratch|fresh|runnable locally|local url|playback controls|browsing)\b/;
 const CODING_BACKEND_SCOPE_TARGET_PATTERN = /\b(?:top-level directory|root directory|workspace root|project root|repo root|directory|folder)\b/;
 const CODING_BACKEND_RESUME_ACTION_PATTERN = /\b(?:continue|resume|retry|rerun|try\s+again|finish|complete|pick\s+(?:it\s+)?back\s+up|carry\s+on|keep\s+going)\b|\b(?:where|when)\s+(?:you|it)\s+left\s+off\b|\bfrom\s+(?:where\s+)?(?:you|it)\s+left\s+off\b/;
 const CODING_BACKEND_RESUME_TARGET_PATTERN = /\b(?:coding\s+backend|backend\s+run|codex\s+sdk(?:\s+(?:run|task|thread|job|work))?|codex\s+(?:sdk\s+)?run|sdk\s+run|latest\s+(?:codex\s+sdk\s+)?run|interrupted\s+(?:run|task|job|work)|timed[-\s]*out\s+(?:run|task|job|work))\b/;
@@ -234,7 +234,7 @@ export function inferExplicitCodingBackendResumeBackend(content: string | undefi
 
 export function isExplicitWorkspaceAppBuildRequest(content: string | undefined): boolean {
   const normalized = normalizeIntentGatewayRepairText(content);
-  if (!normalized || !WORKSPACE_SCOPE_PATTERN.test(normalized)) return false;
+  if (!normalized || (!WORKSPACE_SCOPE_PATTERN.test(normalized) && !/\bfresh\s+(?:directory|folder)\b/.test(normalized))) return false;
   if (REPO_DOCUMENT_ARTIFACT_PATTERN.test(normalized)) return false;
   return GREENFIELD_APP_BUILD_PATTERN.test(normalized)
     && REPO_MUTATION_PATTERN.test(normalized);
