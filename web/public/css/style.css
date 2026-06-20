@@ -10658,13 +10658,10 @@ body.focused-mode .chat-rail-resizer {
   z-index: 300;
   display: block;
   padding: clamp(2.75rem, 7vh, 4.75rem) clamp(0.75rem, 3vw, 2.5rem) 1rem;
-  background: color-mix(in srgb, var(--bg-primary) 48%, transparent);
-  backdrop-filter: blur(6px);
 }
 
 .focused-route-modal.is-chat-cooperative-route {
   padding-bottom: clamp(7.5rem, 18vh, 10rem);
-  background: color-mix(in srgb, var(--bg-primary) 36%, transparent);
   pointer-events: none;
 }
 
