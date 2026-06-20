@@ -171,6 +171,56 @@ describe('startBootstrapChannels', () => {
     expect(result.getTelegramChannel()).toBe(secondTelegram);
   });
 
+  it('starts web when Telegram startup stalls', async () => {
+    const config = createConfig();
+    config.channels.cli = { enabled: false } as never;
+    config.channels.web = {
+      enabled: true,
+      host: '127.0.0.1',
+      port: 18975,
+    } as never;
+    config.channels.telegram = {
+      enabled: true,
+      allowedChatIds: [123],
+      defaultAgent: 'telegram-agent',
+    } as never;
+
+    const telegram = {
+      start: vi.fn(() => new Promise<void>(() => {})),
+      stop: vi.fn(async () => {}),
+      send: vi.fn(async () => {}),
+      getKnownChatIds: vi.fn(() => []),
+    };
+    const webChannel = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      send: vi.fn(async () => {}),
+      setAuthConfig: vi.fn(),
+      emitDashboardInvalidation: vi.fn(),
+      getCodingBackendTerminalControl: vi.fn(() => ({}) as never),
+    };
+
+    const args = createBaseArgs({
+      config,
+      configRef: { current: config },
+      resolveTelegramBotToken: vi.fn(() => 'telegram-token'),
+      createTelegramChannel: vi.fn(() => telegram),
+      createWebChannel: vi.fn(() => webChannel),
+      createCodingBackendService: vi.fn(() => ({ dispose: vi.fn() }) as never),
+      channelStartTimeoutMs: 1,
+    });
+
+    const result = await startBootstrapChannels(args);
+
+    expect(telegram.start).toHaveBeenCalledOnce();
+    expect(webChannel.start).toHaveBeenCalledOnce();
+    expect(result.webChannel).toBe(webChannel);
+    expect(args.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      'Telegram channel failed to start — continuing without it',
+    );
+  });
+
   it('installs a Codex SDK coding backend service for Telegram without requiring the web channel', async () => {
     process.env['GUARDIAN_CODEX_BACKEND'] = 'codex-sdk';
     process.env['GUARDIAN_CODEX_HOST'] = 'windows';

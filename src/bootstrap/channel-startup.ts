@@ -37,6 +37,17 @@ interface LoggerLike {
   error(data: unknown, message?: string): void;
 }
 
+function withStartupTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 interface DispatchRuntimeLike {
   dispatchMessage: Runtime['dispatchMessage'];
 }
@@ -315,6 +326,7 @@ export async function startBootstrapChannels(args: {
   createCodingBackendService?: (
     options: ConstructorParameters<typeof CodingBackendService>[0],
   ) => CodingBackendService;
+  channelStartTimeoutMs?: number;
 }): Promise<{
   cliChannel: BootstrapCliChannel | null;
   voiceChannel: BootstrapVoiceChannel | null;
@@ -334,6 +346,7 @@ export async function startBootstrapChannels(args: {
     ?? ((options) => new CodingBackendService(options));
   const resolveConfiguredAgentId = args.resolveConfiguredAgentId
     ?? ((agentId?: string) => (typeof agentId === 'string' && agentId.trim() ? agentId.trim() : undefined));
+  const channelStartTimeoutMs = args.channelStartTimeoutMs ?? 15_000;
   const resolveCodingBackendConfig = (): CodingBackendsConfig => applyCodingBackendEnvironmentDefaults(
     args.configRef.current.assistant.tools.codingBackends ?? args.codingBackendsDefaultConfig,
   );
@@ -453,7 +466,7 @@ export async function startBootstrapChannels(args: {
         activeTelegram = null;
         args.log.info('Telegram channel stopped for reload');
       }
-      await startTelegram();
+      await withStartupTimeout(startTelegram(), channelStartTimeoutMs, 'Telegram channel startup');
       const tgConfig = args.configRef.current.channels.telegram;
       if (tgConfig?.enabled && args.resolveTelegramBotToken(args.configRef.current, args.secretStore)) {
         args.log.info('Telegram channel reloaded');
@@ -477,7 +490,7 @@ export async function startBootstrapChannels(args: {
   }
 
   try {
-    await startTelegram();
+    await withStartupTimeout(startTelegram(), channelStartTimeoutMs, 'Telegram channel startup');
   } catch (err) {
     args.log.error({ err }, 'Telegram channel failed to start — continuing without it');
     console.log('  Telegram: FAILED (check bot token) — other channels unaffected');
