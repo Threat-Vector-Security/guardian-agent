@@ -278,7 +278,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
   context.registry.register(
     {
       name: 'second_brain_overview',
-      description: 'Read the current Second Brain overview including today priorities, routines, usage, top tasks, and recent notes.',
+      description: 'Read the current Second Brain overview including today priorities, routines, top tasks, and recent notes.',
       shortDescription: 'Read the current Second Brain overview.',
       risk: 'read_only',
       category: 'memory',
@@ -1368,21 +1368,4 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
     },
   );
 
-  context.registry.register(
-    {
-      name: 'second_brain_usage',
-      description: 'Read Second Brain usage and budget summary.',
-      shortDescription: 'Read Second Brain usage summary.',
-      risk: 'read_only',
-      category: 'memory',
-      deferLoading: true,
-      parameters: { type: 'object', properties: {} },
-    },
-    async (_args, request) => {
-      context.guardAction(request, 'read_file', { path: 'second-brain:usage' });
-      const service = context.getService();
-      if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
-      return { success: true, output: service.getUsageSummary() };
-    },
-  );
 }

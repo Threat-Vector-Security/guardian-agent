@@ -524,7 +524,7 @@ const STRESS_CASES = [
         {
           kind: 'read',
           summary: 'Read the Second Brain overview and related lists.',
-          expectedToolCategories: ['second_brain_overview', 'second_brain_calendar_list', 'second_brain_routine_list', 'second_brain_brief_list', 'second_brain_people_list', 'second_brain_library_list', 'second_brain_usage'],
+          expectedToolCategories: ['second_brain_overview', 'second_brain_calendar_list', 'second_brain_routine_list', 'second_brain_brief_list', 'second_brain_people_list', 'second_brain_library_list'],
           required: true,
           dependsOn: ['step_7'],
         },
@@ -982,7 +982,6 @@ const STRESS_TOOL_SEQUENCES = {
     'second_brain_brief_list',
     'second_brain_people_list',
     'second_brain_library_list',
-    'second_brain_usage',
   ],
   'browser-extraction-state-operator': [
     'browser_capabilities',
@@ -1170,8 +1169,6 @@ function buildStressToolArgs(toolName, testCaseId) {
         query: 'Example',
         limit: 10,
       };
-    case 'second_brain_usage':
-      return {};
     case 'automation_save':
       return {
         id: testCaseId === 'bad-automation-route'

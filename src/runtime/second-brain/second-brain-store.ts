@@ -15,7 +15,6 @@ import type {
   SecondBrainRoutineRecord,
   SecondBrainSyncCursorRecord,
   SecondBrainTaskRecord,
-  SecondBrainUsageRecord,
 } from './types.js';
 
 import { BriefStore } from './brief-store.js';
@@ -24,7 +23,6 @@ import { TaskStore } from './task-store.js';
 import { RoutineStore } from './routine-store.js';
 import { PeopleStore } from './people-store.js';
 import { CalendarStore } from './calendar-store.js';
-import { UsageStore } from './usage-store.js';
 import { SyncCursorStore } from './sync-cursor-store.js';
 import { LinkStore } from './link-store.js';
 
@@ -43,7 +41,6 @@ export interface MemoryStore {
   deletedRoutineIds: Set<string>;
   briefs: Map<string, SecondBrainBriefRecord>;
   syncCursors: Map<string, SecondBrainSyncCursorRecord>;
-  usage: SecondBrainUsageRecord[];
   events: Map<string, SecondBrainEventRecord>;
 }
 
@@ -66,7 +63,6 @@ export class SecondBrainStore implements SecondBrainStoreContext {
     deletedRoutineIds: new Set(),
     briefs: new Map(),
     syncCursors: new Map(),
-    usage: [],
     events: new Map(),
   };
   public readonly db: SQLiteDatabase | null;
@@ -79,7 +75,6 @@ export class SecondBrainStore implements SecondBrainStoreContext {
   public readonly links: LinkStore;
   public readonly briefs: BriefStore;
   public readonly syncCursors: SyncCursorStore;
-  public readonly usage: UsageStore;
 
   constructor(options: SecondBrainStoreOptions) {
     this.now = options.now ?? Date.now;
@@ -120,7 +115,6 @@ export class SecondBrainStore implements SecondBrainStoreContext {
     this.links = new LinkStore(this);
     this.briefs = new BriefStore(this);
     this.syncCursors = new SyncCursorStore(this);
-    this.usage = new UsageStore(this);
   }
 
   private initializeSchema(): void {
@@ -209,21 +203,6 @@ export class SecondBrainStore implements SecondBrainStoreContext {
         payload_json TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS sb_usage_records (
-        id TEXT PRIMARY KEY,
-        timestamp INTEGER NOT NULL,
-        route TEXT NOT NULL,
-        feature_area TEXT NOT NULL,
-        feature_id TEXT,
-        provider TEXT,
-        locality TEXT NOT NULL,
-        prompt_tokens INTEGER NOT NULL,
-        completion_tokens INTEGER NOT NULL,
-        total_tokens INTEGER NOT NULL,
-        connector_calls INTEGER,
-        outbound_action TEXT
       );
 
       CREATE TABLE IF NOT EXISTS sb_sync_cursors (

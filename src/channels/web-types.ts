@@ -52,7 +52,6 @@ import type {
   SecondBrainTaskFilter,
   SecondBrainTaskRecord,
   SecondBrainTaskUpsertInput,
-  SecondBrainUsageSummary,
 } from '../runtime/second-brain/types.js';
 import type { ResponseSourceMetadata } from '../runtime/model-routing-ux.js';
 import type { AssistantOrchestratorState } from '../runtime/orchestrator.js';
@@ -1227,7 +1226,6 @@ export type DashboardSecondBrainPerson = SecondBrainPersonRecord;
 export type DashboardSecondBrainLink = SecondBrainLinkRecord;
 export type DashboardSecondBrainRoutine = SecondBrainRoutineView;
 export type DashboardSecondBrainRoutineCatalogEntry = SecondBrainRoutineTypeView;
-export type DashboardSecondBrainUsage = SecondBrainUsageSummary;
 
 export interface PerformanceActionPreviewTarget {
   targetId: string;
@@ -1632,7 +1630,6 @@ export interface DashboardCallbacks {
   onSecondBrainRoutineUpdate?: (input: SecondBrainRoutineUpdateInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainRoutineDelete?: (id: string) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainSyncNow?: () => DashboardMutationResult | Promise<DashboardMutationResult>;
-  onSecondBrainUsage?: () => DashboardSecondBrainUsage;
   onReferenceGuide?: () => ReferenceGuide;
   onQuickActions?: () => QuickActionDefinition[];
   onQuickActionRun?: (args: {

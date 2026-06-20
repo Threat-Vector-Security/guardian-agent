@@ -53,7 +53,6 @@ describe('SecondBrainService', () => {
     expect(deadlineWatchEntry?.allowMultiple).toBe(true);
     expect(overview.topTasks).toEqual([]);
     expect(overview.recentNotes).toEqual([]);
-    expect(overview.usage.monthlyBudget).toBeGreaterThan(0);
   });
 
   it('creates notes and infers a note title when missing', () => {
@@ -94,7 +93,7 @@ describe('SecondBrainService', () => {
     expect(overview.topTasks.map((task) => task.id)).not.toContain(doneTask.id);
   });
 
-  it('updates routines and aggregates usage', () => {
+  it('updates routines', () => {
     const { service } = createService();
 
     const routine = service.getRoutineById('morning-brief');
@@ -106,25 +105,12 @@ describe('SecondBrainService', () => {
       trigger: { mode: 'cron', cron: '0 9 * * *' },
       defaultRoutingBias: 'balanced',
     });
-    service.recordUsage({
-      featureArea: 'routine',
-      featureId: updated.id,
-      locality: 'external',
-      promptTokens: 120,
-      completionTokens: 30,
-      connectorCalls: 2,
-    });
-
-    const usage = service.getUsageSummary();
-
     expect(updated.enabled).toBe(false);
     expect(updated.timing).toMatchObject({
       kind: 'scheduled',
       schedule: { cadence: 'daily', time: '09:00' },
       label: 'Daily at 9 a.m.',
     });
-    expect(usage.externalTokens).toBe(150);
-    expect(usage.totalConnectorCalls).toBe(2);
   });
 
   it('supports hourly, weekdays, fortnightly, and monthly routine schedules', () => {

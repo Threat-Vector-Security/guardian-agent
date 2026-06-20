@@ -256,31 +256,6 @@ export interface SecondBrainRoutineView {
   updatedAt: number;
 }
 
-export interface SecondBrainUsageRecord {
-  timestamp: number;
-  route: 'personal_assistant_task';
-  featureArea: 'routine' | 'brief' | 'search' | 'draft' | 'maintenance';
-  featureId?: string;
-  provider?: string;
-  locality: 'local' | 'external';
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  connectorCalls?: number;
-  outboundAction?: 'email_send' | 'email_draft' | 'calendar_update' | 'social_post' | 'social_draft';
-}
-
-export interface SecondBrainUsageSummary {
-  totalRecords: number;
-  localTokens: number;
-  externalTokens: number;
-  totalConnectorCalls: number;
-  monthlyBudget: number;
-  dailyBudget: number;
-  quietBudgetMode: boolean;
-  pauseOnOverage: boolean;
-}
-
 export interface SecondBrainOverview {
   generatedAt: number;
   nextEvent: SecondBrainEventRecord | null;
@@ -295,7 +270,6 @@ export interface SecondBrainOverview {
     notes: number;
     routines: number;
   };
-  usage: SecondBrainUsageSummary;
 }
 
 export interface SecondBrainSyncCursorRecord {

@@ -201,7 +201,6 @@ Core harness scripts include:
 | **`scripts/test-code-ui-smoke.mjs`** | Browser smoke for the `#/code` workspace: explorer refresh, Guardian-chat session focus, activity/trust UX, and code-session persistence (Node.js + Playwright) | focused Code UI assertions |
 | **`scripts/test-second-brain-smoke.mjs`** | Dist-backed Second Brain service smoke: tasks, notes, contacts, library links, events, and briefing behavior (Node.js) | focused Second Brain service assertions |
 | **`scripts/test-second-brain-routines.mjs`** | Dist-backed Second Brain routines smoke: seeded routines, horizon scanning, scheduled-task integration, and sync behavior (Node.js) | focused Second Brain routine assertions |
-| **`scripts/test-second-brain-budgeting.mjs`** | Dist-backed Second Brain budgeting smoke: usage accounting and local/external sync budgeting behavior (Node.js) | focused Second Brain budget assertions |
 | **`scripts/test-second-brain-chat-crud.mjs`** | Chat-driven Second Brain CRUD harness: assistant create/update/delete coverage for notes, tasks, local calendar, contacts, library items, briefs, and routines through `POST /api/message`, plus approval-continuation checks and an optional real Ollama smoke lane (Node.js). | focused Second Brain assistant CRUD assertions |
 | **`scripts/test-second-brain-ui-smoke.mjs`** | Browser smoke for the `#/` Second Brain workspace: local calendar/tasks/notes/contacts/library/briefs/routines CRUD through the web UI, plus an optional real Ollama retrieval smoke lane (Node.js + Playwright) | focused Second Brain UI assertions |
 | **`scripts/test-pdf-read.mjs`** | PDF filesystem-read harness against the real repo research PDFs through `POST /api/tools/run` (Node.js) | validates `fs_read` PDF extraction, MIME metadata, titles, and preview text |
@@ -388,7 +387,6 @@ Recommended Second Brain regression loop:
 npm run build
 node scripts/test-second-brain-smoke.mjs
 node scripts/test-second-brain-routines.mjs
-node scripts/test-second-brain-budgeting.mjs
 node scripts/test-second-brain-ui-smoke.mjs
 HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=gemma4:26b node scripts/test-second-brain-ui-smoke.mjs --use-ollama
 HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_BASE_URL=https://ollama.com/api HARNESS_OLLAMA_MODEL=qwen3-coder-next node scripts/test-second-brain-ui-smoke.mjs --use-ollama

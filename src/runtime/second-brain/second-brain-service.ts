@@ -37,18 +37,12 @@ import {
   type SecondBrainTaskFilter,
   type SecondBrainTaskRecord,
   type SecondBrainTaskUpsertInput,
-  type SecondBrainUsageRecord,
-  type SecondBrainUsageSummary,
   type SecondBrainSyncCursorRecord,
 } from './types.js';
 import { SecondBrainStore } from './second-brain-store.js';
 
 interface SecondBrainServiceOptions {
   now?: () => number;
-  monthlyExternalTokenBudget?: number;
-  dailyExternalTokenBudget?: number;
-  quietBudgetMode?: boolean;
-  pauseOnOverage?: boolean;
 }
 
 interface BuiltInRoutineDefinition {
@@ -1103,18 +1097,10 @@ function normalizeTaskStatus(rawValue: unknown): SecondBrainTaskUpsertInput['sta
 export class SecondBrainService {
   private readonly store: SecondBrainStore;
   private readonly now: () => number;
-  private readonly monthlyExternalTokenBudget: number;
-  private readonly dailyExternalTokenBudget: number;
-  private readonly quietBudgetMode: boolean;
-  private readonly pauseOnOverage: boolean;
 
   constructor(store: SecondBrainStore, options: SecondBrainServiceOptions = {}) {
     this.store = store;
     this.now = options.now ?? Date.now;
-    this.monthlyExternalTokenBudget = options.monthlyExternalTokenBudget ?? 25_000;
-    this.dailyExternalTokenBudget = options.dailyExternalTokenBudget ?? 2_500;
-    this.quietBudgetMode = options.quietBudgetMode ?? false;
-    this.pauseOnOverage = options.pauseOnOverage ?? true;
     this.seedBuiltInRoutines();
   }
 
@@ -1136,7 +1122,6 @@ export class SecondBrainService {
     const counts = this.store.getCounts();
     const topTasks = this.store.tasks.listTasks({ status: 'open', limit: 6 });
     const recentNotes = this.store.notes.listNotes({ limit: 4 });
-    const usage = this.getUsageSummary();
     const nextEvent = this.listEvents({ limit: 1, includePast: false })[0] ?? null;
     const routines = this.listRoutines();
     const briefs = this.store.briefs.listBriefs({ limit: 20 });
@@ -1154,7 +1139,6 @@ export class SecondBrainService {
         ...counts,
         routines: routines.length,
       },
-      usage,
     };
   }
 
@@ -1602,49 +1586,6 @@ export class SecondBrainService {
 
   saveSyncCursor(cursor: SecondBrainSyncCursorRecord): SecondBrainSyncCursorRecord {
     return this.store.syncCursors.upsertSyncCursor(cursor);
-  }
-
-  recordUsage(record: Omit<SecondBrainUsageRecord, 'timestamp' | 'route' | 'totalTokens'> & {
-    timestamp?: number;
-    totalTokens?: number;
-  }): void {
-    this.store.usage.appendUsageRecord({
-      timestamp: record.timestamp ?? this.now(),
-      route: 'personal_assistant_task',
-      featureArea: record.featureArea,
-      featureId: record.featureId,
-      provider: record.provider,
-      locality: record.locality,
-      promptTokens: record.promptTokens,
-      completionTokens: record.completionTokens,
-      totalTokens: record.totalTokens ?? (record.promptTokens + record.completionTokens),
-      connectorCalls: record.connectorCalls,
-      outboundAction: record.outboundAction,
-    });
-  }
-
-  listUsage(limit = 50): SecondBrainUsageRecord[] {
-    return this.store.usage.listUsageRecords(limit);
-  }
-
-  getUsageSummary(): SecondBrainUsageSummary {
-    const records = this.store.usage.listUsageRecords(500);
-    return records.reduce<SecondBrainUsageSummary>((summary, record) => ({
-      ...summary,
-      totalRecords: summary.totalRecords + 1,
-      localTokens: summary.localTokens + (record.locality === 'local' ? record.totalTokens : 0),
-      externalTokens: summary.externalTokens + (record.locality === 'external' ? record.totalTokens : 0),
-      totalConnectorCalls: summary.totalConnectorCalls + (record.connectorCalls ?? 0),
-    }), {
-      totalRecords: 0,
-      localTokens: 0,
-      externalTokens: 0,
-      totalConnectorCalls: 0,
-      monthlyBudget: this.monthlyExternalTokenBudget,
-      dailyBudget: this.dailyExternalTokenBudget,
-      quietBudgetMode: this.quietBudgetMode,
-      pauseOnOverage: this.pauseOnOverage,
-    });
   }
 
   summarizeEntityKind(kind: SecondBrainEntityKind): string {

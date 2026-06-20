@@ -95,8 +95,6 @@ Recommended modules:
 - `briefing-service.ts`
 - `sync-service.ts`
 - `horizon-scanner.ts`
-- `usage-service.ts`
-- `budget-policy.ts`
 - `route-service.ts`
 
 Recommended tool and API surfaces:
@@ -131,7 +129,6 @@ Recommended top-level entities:
 - `sb_routines`
 - `sb_briefs`
 - `sb_links`
-- `sb_usage_records`
 - `sb_sync_cursors`
 
 ### Layered data model
@@ -557,7 +554,6 @@ Recommended endpoints:
 - `GET /api/second-brain/library`
 - `GET /api/second-brain/routines`
 - `POST /api/second-brain/routines/update`
-- `GET /api/second-brain/usage`
 - `POST /api/second-brain/briefs/generate`
 
 Impacted contract files:
@@ -887,7 +883,6 @@ Recommended new harnesses:
 
 - `node scripts/test-second-brain-smoke.mjs`
 - `node scripts/test-second-brain-routines.mjs`
-- `node scripts/test-second-brain-budgeting.mjs`
 
 ### Manual validation
 
@@ -895,7 +890,7 @@ Validate these end-to-end flows:
 
 1. create note -> convert to task -> see on `Today`
 2. upcoming meeting -> auto-generated pre-meeting brief
-3. no local model -> API-only budget caps still hold
+3. no local model -> cloud-capable flows degrade transparently through normal provider routing
 4. local model configured -> routine synthesis stays local-first
 5. follow-up draft appears, but send remains approval-gated
 6. same `Second Brain` thread continues across web and Telegram

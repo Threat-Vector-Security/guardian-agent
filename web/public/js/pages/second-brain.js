@@ -509,7 +509,7 @@ function tabsForSecondBrainInvalidation(payload) {
   if (signature.includes('routine')) {
     return ['routines', 'today'];
   }
-  if (signature.includes('overview') || signature.includes('usage')) {
+  if (signature.includes('overview')) {
     return ['today'];
   }
   return TAB_IDS;
@@ -599,7 +599,6 @@ function renderToday(panel, data) {
         <div class="sb-readout-grid">
           ${renderReadoutCard('Date', formatLongDate(nowDate.getTime()))}
           ${renderReadoutCard('Next event', data.overview.nextEvent ? `${data.overview.nextEvent.title} at ${formatTime(data.overview.nextEvent.startsAt)}` : 'No upcoming event queued')}
-          ${renderReadoutCard('Cloud AI budget', formatUsageSummary(data.overview.usage))}
         </div>
       </article>
 
@@ -2970,21 +2969,6 @@ function renderMetricCard(label, value, caption) {
   `;
 }
 
-function renderUsageCard(usage) {
-  const consumed = formatCount(usage.externalTokens);
-  const budget = formatCount(usage.monthlyBudget);
-  const caption = usage.externalTokens > 0
-    ? 'Cloud AI tokens used by Second Brain this month. Local-only work does not count here.'
-    : 'No cloud AI tokens used by Second Brain this month. Local-only work does not count here.';
-  return `
-    <div class="sb-usage-card">
-      <div class="sb-usage-card__label">Cloud AI budget</div>
-      <strong>${esc(`${consumed} / ${budget}`)}</strong>
-      <span>${esc(caption)}</span>
-    </div>
-  `;
-}
-
 function renderReadoutCard(label, value) {
   return `
     <div class="sb-inline-stat">
@@ -2992,10 +2976,6 @@ function renderReadoutCard(label, value) {
       <strong>${esc(value)}</strong>
     </div>
   `;
-}
-
-function formatUsageSummary(usage) {
-  return `${formatCount(usage.externalTokens)} / ${formatCount(usage.monthlyBudget)}`;
 }
 
 function renderFlash(flash) {

@@ -117,7 +117,6 @@ describe('SyncService', () => {
       phone: '+61 400 000 222',
       location: 'Sydney',
     });
-    expect(service.getUsageSummary().totalConnectorCalls).toBe(4);
     expect(service.getSyncCursorById('google:calendar')?.lastSyncAt).toBe(now());
     expect(service.getSyncCursorById('microsoft:contacts')?.lastSyncAt).toBe(now());
   });

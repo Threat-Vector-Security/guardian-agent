@@ -357,15 +357,6 @@ export class SyncService {
         }
       }
 
-      this.secondBrainService.recordUsage({
-        featureArea: 'maintenance',
-        provider: 'google',
-        locality: 'external',
-        promptTokens: 0,
-        completionTokens: 0,
-        connectorCalls,
-      });
-
       const result: ProviderSyncResult = {
         provider: 'google',
         skipped: false,
@@ -505,15 +496,6 @@ export class SyncService {
           cursor: null,
         });
       }
-
-      this.secondBrainService.recordUsage({
-        featureArea: 'maintenance',
-        provider: 'microsoft',
-        locality: 'external',
-        promptTokens: 0,
-        completionTokens: 0,
-        connectorCalls,
-      });
 
       return {
         provider: 'microsoft',

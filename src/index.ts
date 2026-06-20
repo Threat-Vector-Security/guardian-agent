@@ -2961,9 +2961,6 @@ function buildDashboardCallbacks(
         };
       }
     },
-
-    onSecondBrainUsage: () => secondBrainService.getUsageSummary(),
-
     onReferenceGuide: () => getReferenceGuide(),
 
     onQuickActions: () => getQuickActions(configRef.current.assistant.quickActions),

@@ -290,7 +290,6 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ id }),
   }),
-  secondBrainUsage: () => request('/api/second-brain/usage'),
   performanceStatus: () => request('/api/performance/status'),
   performanceProcesses: () => request('/api/performance/processes'),
   performanceApplyProfile: (profileId) => requestPrivileged('/api/performance/profile/apply', 'performance.manage', { profileId }),

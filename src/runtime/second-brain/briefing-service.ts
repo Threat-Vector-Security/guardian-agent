@@ -301,15 +301,6 @@ export class BriefingService {
       routineId: options.routineId ?? 'morning-brief',
     });
 
-    this.secondBrainService.recordUsage({
-      featureArea: 'brief',
-      featureId: brief.id,
-      provider: 'second_brain',
-      locality: 'local',
-      promptTokens: 0,
-      completionTokens: 0,
-    });
-
     return brief;
   }
 
@@ -401,15 +392,6 @@ export class BriefingService {
       content: sections.join('\n'),
       generatedAt: now,
       routineId: options.routineId ?? 'weekly-review',
-    });
-
-    this.secondBrainService.recordUsage({
-      featureArea: 'brief',
-      featureId: brief.id,
-      provider: 'second_brain',
-      locality: 'local',
-      promptTokens: 0,
-      completionTokens: 0,
     });
 
     return brief;
@@ -515,15 +497,6 @@ export class BriefingService {
       ...(options.routineId ? { routineId: options.routineId } : {}),
     });
 
-    this.secondBrainService.recordUsage({
-      featureArea: 'brief',
-      featureId: brief.id,
-      provider: 'second_brain',
-      locality: 'local',
-      promptTokens: 0,
-      completionTokens: 0,
-    });
-
     return brief;
   }
 
@@ -594,15 +567,6 @@ export class BriefingService {
       routineId: options.routineId ?? 'pre-meeting-brief',
     });
 
-    this.secondBrainService.recordUsage({
-      featureArea: 'brief',
-      featureId: brief.id,
-      provider: event.source,
-      locality: event.source === 'local' ? 'local' : 'external',
-      promptTokens: 0,
-      completionTokens: 0,
-    });
-
     return brief;
   }
 
@@ -668,16 +632,6 @@ export class BriefingService {
       generatedAt: now,
       eventId: event.id,
       routineId: options.routineId ?? 'follow-up-watch',
-    });
-
-    this.secondBrainService.recordUsage({
-      featureArea: 'draft',
-      featureId: brief.id,
-      provider: event.source,
-      locality: event.source === 'local' ? 'local' : 'external',
-      promptTokens: 0,
-      completionTokens: 0,
-      outboundAction: 'email_draft',
     });
 
     return brief;
@@ -786,15 +740,6 @@ export class BriefingService {
       routineId: routine.id,
     });
 
-    this.secondBrainService.recordUsage({
-      featureArea: 'brief',
-      featureId: brief.id,
-      provider: 'second_brain',
-      locality: 'local',
-      promptTokens: 0,
-      completionTokens: 0,
-    });
-
     return brief;
   }
 
@@ -863,15 +808,6 @@ export class BriefingService {
       content: sections.join('\n'),
       generatedAt: now,
       routineId: routine.id,
-    });
-
-    this.secondBrainService.recordUsage({
-      featureArea: 'brief',
-      featureId: brief.id,
-      provider: 'second_brain',
-      locality: 'local',
-      promptTokens: 0,
-      completionTokens: 0,
     });
 
     return brief;

@@ -200,7 +200,6 @@ export function getReferenceGuide(): ReferenceGuide {
                   'When setup is still pending, Today shows a guided Second Brain preferences card so you can accept recommended defaults quickly or jump into Configuration for manual changes.',
                   'The quick-add control on Today lets you create a note, task, or local event without leaving the daily view.',
                   'The summary cards on Today are there to help you triage quickly. They surface what matters now, but the dedicated tabs remain the deeper editing surfaces.',
-                  'The Today view includes a Cloud AI budget readout that shows Second Brain cloud-model token usage for the current month. Local-only work does not count toward that number.',
                   'Use Today when you want to decide what to do next fast instead of browsing every tab manually.',
                 ],
               },

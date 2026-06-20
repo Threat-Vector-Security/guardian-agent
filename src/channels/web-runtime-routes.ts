@@ -813,15 +813,6 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     }
   }
 
-  if (req.method === 'GET' && url.pathname === '/api/second-brain/usage') {
-    if (!dashboard.onSecondBrainUsage) {
-      sendJSON(res, 404, { error: 'Not available' });
-      return true;
-    }
-    sendJSON(res, 200, dashboard.onSecondBrainUsage());
-    return true;
-  }
-
   if (req.method === 'GET' && url.pathname === '/api/performance/status') {
     if (!dashboard.onPerformanceStatus) {
       sendJSON(res, 404, { error: 'Not available' });

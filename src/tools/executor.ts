@@ -412,7 +412,6 @@ const REUSABLE_READ_EVIDENCE_TOOLS = new Set([
   'second_brain_routine_catalog',
   'second_brain_routine_list',
   'second_brain_task_list',
-  'second_brain_usage',
   'web_fetch',
   'web_search',
 ]);

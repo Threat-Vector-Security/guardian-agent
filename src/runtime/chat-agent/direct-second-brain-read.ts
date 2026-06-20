@@ -425,7 +425,6 @@ export function tryDirectSecondBrainRead<TContinuityThread, TFocusState>(input: 
         `- Top tasks: ${topTaskSummary}`,
         `- Recent notes: ${recentNoteSummary}`,
         `- Enabled routines: ${overview.enabledRoutineCount}`,
-        `- Usage: ${overview.usage.externalTokens} external tokens this period (${overview.usage.monthlyBudget} monthly budget)`,
       ].join('\n');
     }
   }

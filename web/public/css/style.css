@@ -3482,22 +3482,6 @@ tr:hover td {
   max-width: 48rem;
 }
 
-.second-brain-usage-pill {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.4rem;
-  padding: 0.7rem 0.95rem;
-  border-radius: 0;
-  background: rgba(8, 12, 20, 0.62);
-  border: 1px solid rgba(125, 211, 252, 0.18);
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.second-brain-usage-pill strong {
-  color: var(--text-primary);
-}
-
 .second-brain-tabs .tab-bar {
   margin-bottom: 1rem;
 }
@@ -3739,33 +3723,6 @@ tr:hover td {
   display: grid;
   gap: 0.85rem;
   align-content: start;
-}
-
-.sb-usage-card {
-  display: grid;
-  gap: 0.25rem;
-  padding: 1rem 1.05rem;
-  border-radius: 0;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-}
-
-.sb-usage-card__label {
-  color: #fdba74;
-  font-size: 0.74rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.sb-usage-card strong {
-  font-family: var(--font-display);
-  font-size: 1.8rem;
-  color: var(--text-primary);
-}
-
-.sb-usage-card span {
-  color: #a5b4cf;
-  font-size: 0.8rem;
 }
 
 .sb-hero__actions {

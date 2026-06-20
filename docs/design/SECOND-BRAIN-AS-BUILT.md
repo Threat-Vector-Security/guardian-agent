@@ -120,7 +120,6 @@ That direct-read path is bounded to `inspect`, `read`, and `search` style reques
 - `routine-store.ts`
 - `brief-store.ts`
 - `sync-cursor-store.ts`
-- `usage-store.ts`
 
 ### Current schema families
 
@@ -133,7 +132,6 @@ Implemented and actively used:
 - `sb_routines`
 - `sb_routine_tombstones`
 - `sb_briefs`
-- `sb_usage_records`
 - `sb_sync_cursors`
 
 Present in schema but not yet surfaced through the current runtime surface:
@@ -250,8 +248,7 @@ Microsoft 365:
 The current sync flow:
 1. reads provider data through the shared native provider services
 2. normalizes it into `Second Brain` events and contacts
-3. records connector usage in `sb_usage_records`
-4. stores a `lastSyncAt` record in `sb_sync_cursors`
+3. stores a `lastSyncAt` record in `sb_sync_cursors`
 
 Current limitations:
 - sync cursors are persisted, but the current implementation stores timestamped sync markers rather than provider-native delta tokens
@@ -413,7 +410,6 @@ Current built-in `Second Brain` tools:
 - `second_brain_routine_list`
 - `second_brain_routine_update`
 - `second_brain_routine_delete`
-- `second_brain_usage`
 
 All of these are registered in the `memory` category and exposed through deferred loading.
 
@@ -445,31 +441,9 @@ Current `Second Brain` API routes:
 - `POST /api/second-brain/routines/create`
 - `POST /api/second-brain/routines/update`
 - `POST /api/second-brain/routines/delete`
-- `GET /api/second-brain/usage`
 
 Not currently exposed:
 - reminder CRUD routes
-
-## Usage And Budgeting
-
-`Second Brain` records usage into the shared usage store with route attribution fixed to `personal_assistant_task`.
-
-Current usage summary fields:
-- total records
-- local token total
-- external token total
-- connector call total
-- monthly budget
-- daily budget
-- quiet-budget-mode flag
-- pause-on-overage flag
-
-Current defaults:
-- monthly external budget: `25_000`
-- daily external budget: `2_500`
-
-Current limitation:
-- the current implementation exposes budget visibility and attribution, but it does not yet enforce a separate budget policy engine that pauses or downgrades work automatically based on overage thresholds
 
 ## Channels
 
@@ -489,7 +463,6 @@ Current dedicated verification coverage includes:
 - `src/runtime/second-brain/sync-service.test.ts`
 - `scripts/test-second-brain-smoke.mjs`
 - `scripts/test-second-brain-routines.mjs`
-- `scripts/test-second-brain-budgeting.mjs`
 
 ## Current Gaps Relative To The Plan
 
