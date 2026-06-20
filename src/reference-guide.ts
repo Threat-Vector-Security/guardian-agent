@@ -538,8 +538,8 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Start A Code Session',
                 items: [
-                  'Create a code session either from Guardian chat or from `#/code` by choosing a title plus the workspace root you want Guardian to anchor to.',
-                  'On cloud or container deployments, the default `.` workspace root resolves to a durable projects directory under Guardian state unless you choose a different explicit root.',
+                  'Create a code session either from Guardian chat or from `#/code` by choosing a title plus the project folder you want Guardian to anchor to.',
+                  'In the web Code page on cloud or container deployments, leaving the project folder blank creates a title-based folder under the durable projects directory. Browse when you want to select an existing folder instead.',
                   'Each code session keeps its own coding context, repo state, approvals, recent jobs, and verification history.',
                   'Creating or attaching a code session authorizes repo-local work for that session. It does not widen general non-Code file access.',
                   'Guardian chat is the canonical coding chat in the web UI. CLI and Telegram can also attach to the same code session when you want to continue the work from another surface.',

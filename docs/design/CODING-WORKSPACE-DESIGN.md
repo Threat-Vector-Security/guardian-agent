@@ -61,7 +61,10 @@ Code sessions are persisted in the backend by [code-sessions.ts](../../src/runti
 When a cloud or generic container runtime creates a session with the default
 blank/`.` root, the backend anchors it to `GUARDIAN_PROJECTS_DIR` or
 `<GUARDIAN_BASE_DIR>/projects` and creates that directory before storing the
-session. Explicit workspace roots remain explicit.
+session. In the web Code page, blank new-session roots derive a project folder
+from the title under that projects directory; existing folders can still be
+selected explicitly. Relative cloud roots stay inside the durable projects
+directory, while absolute workspace roots remain explicit.
 
 Primary persisted shape:
 

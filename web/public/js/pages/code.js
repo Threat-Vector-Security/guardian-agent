@@ -6224,6 +6224,8 @@ function renderSessionForm() {
   const formId = isEdit ? 'data-code-edit-session-form' : 'data-code-session-form';
   const submitLabel = isEdit ? 'Save' : 'Create';
   const cancelAttr = isEdit ? 'data-code-cancel-edit' : 'data-code-cancel-create';
+  const rawWorkspaceRoot = draft.workspaceRoot ?? '';
+  const workspaceRootValue = isCreate && rawWorkspaceRoot === '.' ? '' : rawWorkspaceRoot;
   const workspaceTrust = editSession?.workspaceTrust || null;
   const effectiveTrustState = getEffectiveWorkspaceTrustState(editSession) || workspaceTrust?.state || null;
   const reviewActive = isWorkspaceTrustReviewActive(editSession);
@@ -6277,11 +6279,12 @@ function renderSessionForm() {
         <input name="title" type="text" value="${escAttr(draft.title || '')}" placeholder="Frontend app">
       </label>
       <label>
-        Workspace Root
+        ${isCreate ? 'Project Folder' : 'Workspace Root'}
         <div class="code-session-form__field-row">
-          <input name="workspaceRoot" type="text" value="${escAttr(draft.workspaceRoot || '.')}" placeholder=". or /path/to/project" style="flex:1">
+          <input name="workspaceRoot" type="text" value="${escAttr(workspaceRootValue)}" placeholder="${isCreate ? 'Auto-create from title or browse existing' : '. or /path/to/project'}" style="flex:1">
           <button class="btn btn-secondary btn-sm" type="button" data-code-browse-dir>Browse</button>
         </div>
+        ${isCreate ? '<div class="code-session__hint">Leave blank to create a folder from the title in the projects directory. Browse to use an existing folder.</div>' : ''}
       </label>
       ${renderDirPicker()}
       ${formError}
@@ -7478,7 +7481,7 @@ function bindEvents(container) {
     event.preventDefault();
     const form = event.currentTarget;
     const title = form.elements.title.value.trim() || 'Coding Session';
-    const workspaceRoot = form.elements.workspaceRoot.value.trim() || '.';
+    const workspaceRoot = form.elements.workspaceRoot.value.trim();
     if (codeState.sessions.length >= MAX_CODE_SESSIONS) {
       codeState.sessionRailError = getCodeSessionLimitMessage();
       saveState(codeState);
@@ -7497,7 +7500,7 @@ function bindEvents(container) {
       codeState.attachedSessionId = session?.id || null;
       codeState.sessionRailError = '';
       codeState.showCreateForm = false;
-      codeState.createDraft = { title: '', workspaceRoot: '.' };
+      codeState.createDraft = { title: '', workspaceRoot: '' };
       treeCache.clear();
       cachedFileView = { source: '', diff: '', error: null };
       closeDirPicker();
@@ -7606,7 +7609,9 @@ function bindEvents(container) {
   container.querySelector('[data-code-browse-dir]')?.addEventListener('click', () => {
     const currentInput = container.querySelector('[name="workspaceRoot"]');
     const activeSession = getActiveSession();
+    const createMode = !!container.querySelector('[data-code-session-form]');
     const startPath = currentInput?.value?.trim()
+      || (createMode ? '.' : '')
       || activeSession?.resolvedRoot
       || activeSession?.workspaceRoot
       || '.';
@@ -7997,7 +8002,7 @@ function loadState() {
       sessionRailError: '',
       showCreateForm: false,
       activePanel: 'sessions',
-      createDraft: { title: '', workspaceRoot: '.' },
+      createDraft: { title: '', workspaceRoot: '' },
     };
   } catch {
     return {
@@ -8009,7 +8014,7 @@ function loadState() {
       sessionRailError: '',
       showCreateForm: false,
       activePanel: 'sessions',
-      createDraft: { title: '', workspaceRoot: '.' },
+      createDraft: { title: '', workspaceRoot: '' },
     };
   }
 }
@@ -8086,7 +8091,7 @@ function normalizeState(raw, { preserveEditorDrafts = false } = {}) {
     editDraft: raw?.editDraft || null,
     createDraft: {
       title: raw?.createDraft?.title || '',
-      workspaceRoot: raw?.createDraft?.workspaceRoot || '.',
+      workspaceRoot: raw?.createDraft?.workspaceRoot === '.' ? '' : raw?.createDraft?.workspaceRoot || '',
     },
   };
 

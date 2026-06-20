@@ -5089,6 +5089,43 @@ describe('WebChannel', () => {
       });
     });
 
+    it('POST /api/code/sessions should default blank workspace roots from the title', async () => {
+      const seen: Array<{ title: string; workspaceRoot: string }> = [];
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onCodeSessionCreate: (args) => {
+          seen.push({ title: args.title, workspaceRoot: args.workspaceRoot });
+          return {
+            session: {
+              id: 'code-new',
+              title: args.title,
+              workspaceRoot: args.workspaceRoot,
+            },
+            history: [],
+            attached: true,
+          } as ReturnType<NonNullable<DashboardCallbacks['onCodeSessionCreate']>>;
+        },
+      };
+
+      web = new WebChannel({ port: 19001, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:19001/api/code/sessions', {
+        method: 'POST',
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          title: 'Frontend App!',
+          workspaceRoot: '',
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(seen).toEqual([{ title: 'Frontend App!', workspaceRoot: 'frontend-app' }]);
+    });
+
     it('POST /api/code/sessions/references should forward referenced session ids with surface context', async () => {
       const seen: Array<{ userId: string; channel: string; surfaceId: string; referencedSessionIds: string[] }> = [];
       const dashboard: DashboardCallbacks = {

@@ -458,11 +458,22 @@ function normalizePath(value: string): string {
 
 export function resolveCodeSessionWorkspaceRoot(value: string): string {
   const trimmed = value.trim();
-  if (trimmed && trimmed !== '.') return trimmed;
-
   const runtime = detectRuntimeEnvironment();
-  if (runtime.kind !== 'cloud' && runtime.kind !== 'container') return trimmed || '.';
+  const isDeployedRuntime = runtime.kind === 'cloud' || runtime.kind === 'container';
+  if (trimmed && trimmed !== '.') {
+    const normalized = normalizePathForHost(trimmed);
+    if (isDeployedRuntime && !isAbsolute(normalized)) {
+      const projectsRoot = resolveCodeSessionWorkspaceRoot('.');
+      const projectPath = normalizePath(join(projectsRoot, normalized));
+      if (!isPathInside(projectPath, projectsRoot)) {
+        throw new Error('Relative cloud workspace roots must stay inside the projects directory.');
+      }
+      return projectPath;
+    }
+    return trimmed;
+  }
 
+  if (!isDeployedRuntime) return trimmed || '.';
   const workspaceRoot = normalizePath(process.env.GUARDIAN_PROJECTS_DIR?.trim() || join(getGuardianBaseDir(), 'projects'));
   mkdirSync(workspaceRoot, { recursive: true });
   return workspaceRoot;
@@ -723,6 +734,7 @@ export class CodeSessionStore {
     const id = randomUUID();
     const workspaceRoot = resolveCodeSessionWorkspaceRoot(input.workspaceRoot);
     const resolvedRoot = normalizePath(workspaceRoot);
+    mkdirSync(resolvedRoot, { recursive: true });
     const workspaceProfile = inspectCodeWorkspaceSync(resolvedRoot, now);
     const workspaceTrust = assessCodeWorkspaceTrustSync(resolvedRoot, now);
     const record: CodeSessionRecord = {
@@ -772,6 +784,9 @@ export class CodeSessionStore {
       ? resolveCodeSessionWorkspaceRoot(input.workspaceRoot)
       : undefined;
     const nextResolvedRoot = nextWorkspaceRoot !== undefined ? normalizePath(nextWorkspaceRoot) : existing.resolvedRoot;
+    if (nextWorkspaceRoot !== undefined) {
+      mkdirSync(nextResolvedRoot, { recursive: true });
+    }
     const workspaceRootChanged = nextResolvedRoot !== existing.resolvedRoot;
     const nextWorkspaceProfile = input.workState?.workspaceProfile !== undefined
       ? cloneWorkspaceProfile(input.workState.workspaceProfile)

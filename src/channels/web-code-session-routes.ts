@@ -58,6 +58,15 @@ function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
+function defaultProjectDirectoryName(title: string): string {
+  return title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'coding-session';
+}
+
 export async function handleWebCodeSessionRoutes(
   context: WebCodeSessionRoutesContext,
 ): Promise<boolean> {
@@ -93,10 +102,15 @@ export async function handleWebCodeSessionRoutes(
       agentId?: string | null;
       attach?: boolean;
     };
-    if (!trimOptionalString(parsed.title) || !trimOptionalString(parsed.workspaceRoot)) {
-      sendJSON(res, 400, { error: 'title and workspaceRoot are required' });
+    const title = trimOptionalString(parsed.title);
+    if (!title) {
+      sendJSON(res, 400, { error: 'title is required' });
       return true;
     }
+    const requestedWorkspaceRoot = trimOptionalString(parsed.workspaceRoot);
+    const workspaceRoot = !requestedWorkspaceRoot || requestedWorkspaceRoot === '.'
+      ? defaultProjectDirectoryName(title)
+      : requestedWorkspaceRoot;
     const principal = context.resolveRequestPrincipal(req);
     try {
       const result = dashboard.onCodeSessionCreate({
@@ -104,8 +118,8 @@ export async function handleWebCodeSessionRoutes(
         principalId: principal.principalId,
         channel: WEB_CODE_CHANNEL,
         surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
-        title: parsed.title!,
-        workspaceRoot: parsed.workspaceRoot!,
+        title,
+        workspaceRoot,
         agentId: trimOptionalString(parsed.agentId) ?? null,
         attach: parsed.attach !== false,
       });
