@@ -1534,7 +1534,7 @@ runtime:
   });
 
   it('infers cloud deployment profile from Fly env when the config omits it', () => {
-    vi.stubEnv('FLY_APP_NAME', 'guardian-agent-example');
+    vi.stubEnv('FLY_APP_NAME', 'guardian-example');
     const configPath = join(TEST_DIR, 'fly-profile.yaml');
     writeFileSync(
       configPath,
@@ -1584,7 +1584,7 @@ runtime:
   });
 
   it('preserves an explicit deployment profile in cloud runtime envs', () => {
-    vi.stubEnv('FLY_APP_NAME', 'guardian-agent-example');
+    vi.stubEnv('FLY_APP_NAME', 'guardian-example');
     const configPath = join(TEST_DIR, 'explicit-profile.yaml');
     writeFileSync(
       configPath,
@@ -1601,7 +1601,7 @@ assistant:
   });
 
   it('preserves an explicit manual terminal degraded-fallback setting in cloud runtime envs', () => {
-    vi.stubEnv('FLY_APP_NAME', 'guardian-agent-example');
+    vi.stubEnv('FLY_APP_NAME', 'guardian-example');
     const configPath = join(TEST_DIR, 'explicit-terminal-fallback.yaml');
     writeFileSync(
       configPath,

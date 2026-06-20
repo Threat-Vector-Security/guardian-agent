@@ -11,13 +11,13 @@ import { DEFAULT_CONFIG, type GuardianAgentConfig } from './config/types.js';
 describe('buildRuntimeEnvironmentPromptSection', () => {
   it('describes Fly cloud runtime separately from the managed-cloud provider lane', () => {
     const section = buildRuntimeEnvironmentPromptSection(undefined, {
-      FLY_APP_NAME: 'guardian-agent-example',
+      FLY_APP_NAME: 'guardian-example',
     });
 
     expect(section.section).toBe('runtime_environment');
     expect(section.content).toContain('guardianDeploymentProfile: cloud');
     expect(section.content).toContain('guardianRuntime: hosted cloud deployment');
-    expect(section.content).toContain('runtimePlatform: Fly.io app guardian-agent-example');
+    expect(section.content).toContain('runtimePlatform: Fly.io app guardian-example');
     expect(section.content).toContain('response source/model label is separate');
     expect(section.content).toContain('Managed cloud, Ollama Cloud, frontier, and model names describe the LLM provider');
     expect(section.content).toContain('Only claim sandbox execution when an active coding/backend workspace is actually running there');
@@ -28,12 +28,12 @@ describe('buildRuntimeEnvironmentPromptSection', () => {
     config.assistant.security.deploymentProfile = 'home';
 
     const section = buildRuntimeEnvironmentPromptSection(config, {
-      FLY_APP_NAME: 'guardian-agent-example',
+      FLY_APP_NAME: 'guardian-example',
     });
 
     expect(section.content).toContain('guardianDeploymentProfile: home');
     expect(section.content).toContain('guardianRuntime: home or lab runtime');
-    expect(section.content).toContain('runtimePlatform: Fly.io app guardian-agent-example');
+    expect(section.content).toContain('runtimePlatform: Fly.io app guardian-example');
   });
 });
 

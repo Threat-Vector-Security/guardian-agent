@@ -241,7 +241,7 @@ describe('assessSecurityPosture', () => {
 
 describe('inferRuntimeDeploymentProfile', () => {
   it('detects Fly.io runtimes as cloud deployments', () => {
-    expect(inferRuntimeDeploymentProfile({ FLY_APP_NAME: 'guardian-agent-example' })).toBe('cloud');
+    expect(inferRuntimeDeploymentProfile({ FLY_APP_NAME: 'guardian-example' })).toBe('cloud');
   });
 
   it('detects generic managed runtimes as cloud deployments', () => {
