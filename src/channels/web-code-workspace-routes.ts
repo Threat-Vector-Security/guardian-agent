@@ -5,6 +5,7 @@ import type { PrincipalRole } from '../tools/types.js';
 import type { DashboardCallbacks } from './web-types.js';
 import { readBody, sendJSON } from './web-json.js';
 import { resolveWebSurfaceId } from '../runtime/channel-surface-ids.js';
+import { resolveCodeSessionWorkspaceRoot } from '../runtime/code-sessions.js';
 
 interface RequestPrincipal {
   principalId: string;
@@ -48,10 +49,10 @@ async function listWindowsDriveRoots(): Promise<Array<{ name: string; type: 'dir
 
 function resolveLocalBrowsePath(requestedPath: string | undefined): { virtualRoot: boolean; path: string } {
   const trimmed = trimOptionalString(requestedPath);
+  if (!trimmed || trimmed === '.') {
+    return { virtualRoot: false, path: resolve(resolveCodeSessionWorkspaceRoot(trimmed || '.')) };
+  }
   if (process.platform === 'win32') {
-    if (!trimmed || trimmed === '.') {
-      return { virtualRoot: false, path: resolve(process.cwd()) };
-    }
     if (trimmed === '/' || trimmed === '\\') {
       return { virtualRoot: true, path: '/' };
     }

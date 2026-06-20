@@ -456,7 +456,7 @@ function normalizePath(value: string): string {
     : resolve(normalized || '.');
 }
 
-function resolveCodeSessionWorkspaceRoot(value: string): string {
+export function resolveCodeSessionWorkspaceRoot(value: string): string {
   const trimmed = value.trim();
   if (trimmed && trimmed !== '.') return trimmed;
 

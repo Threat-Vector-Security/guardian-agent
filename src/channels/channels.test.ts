@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { join } from 'node:path';
-import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { CLIChannel } from './cli.js';
 import type { AgentInfo, RuntimeStatus } from './cli.js';
 import { WebChannel } from './web.js';
@@ -3719,6 +3719,47 @@ describe('WebChannel', () => {
     expect(body.success).toBe(true);
     expect(body.path).toBe(process.cwd());
     expect(body.entries.some((entry) => entry.type === 'dir' && entry.name === 'src')).toBe(true);
+  });
+
+  it('browses the durable projects root by default in cloud runtimes', async () => {
+    const baseDir = join(process.cwd(), `__test_cloud_code_root_${randomUUID()}`);
+    const previousEnv = {
+      FLY_APP_NAME: process.env.FLY_APP_NAME,
+      FLY_MACHINE_ID: process.env.FLY_MACHINE_ID,
+      GUARDIAN_BASE_DIR: process.env.GUARDIAN_BASE_DIR,
+      GUARDIAN_PROJECTS_DIR: process.env.GUARDIAN_PROJECTS_DIR,
+    };
+    process.env.FLY_APP_NAME = 'guardian-test';
+    process.env.FLY_MACHINE_ID = 'machine-test';
+    process.env.GUARDIAN_BASE_DIR = baseDir;
+    delete process.env.GUARDIAN_PROJECTS_DIR;
+
+    try {
+      web = new WebChannel({ port: 18993, authToken: TEST_TOKEN });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18993/api/code/fs/browse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ path: '.' }),
+      });
+      const body = await res.json() as { success: boolean; path: string };
+      const expectedRoot = join(baseDir, 'projects');
+
+      expect(res.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.path).toBe(expectedRoot);
+      expect(existsSync(expectedRoot)).toBe(true);
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+      rmSync(baseDir, { recursive: true, force: true });
+    }
   });
 
   it('requires a privileged ticket for sensitive memory config updates', async () => {
