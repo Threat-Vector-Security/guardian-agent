@@ -37,10 +37,13 @@ async function readErrorBody(res) {
 }
 
 function isAuthFailureResponse(status, body) {
-  if (status === 401) return true;
-  if (status !== 403) return false;
   const errorText = typeof body?.error === 'string' ? body.error.trim() : '';
   const errorCode = typeof body?.errorCode === 'string' ? body.errorCode.trim().toUpperCase() : '';
+  if (status === 429 && (errorCode === 'AUTH_RATE_LIMITED' || errorText.startsWith('Too many authentication failures.'))) {
+    return true;
+  }
+  if (status === 401) return true;
+  if (status !== 403) return false;
   if (errorCode === 'AUTH_FAILED' || errorCode === 'AUTH_REQUIRED' || errorCode === 'AUTH_INVALID_TOKEN') {
     return true;
   }

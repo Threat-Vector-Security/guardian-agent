@@ -6746,6 +6746,27 @@ describe('WebChannel', () => {
       await new Promise(r => setTimeout(r, 150));
     });
 
+    it('GET /sse should not lock out stale browser cookie retries', async () => {
+      const dashboard: DashboardCallbacks = {
+        onSSESubscribe: () => () => {},
+      };
+
+      web = new WebChannel({ port: 19002, authToken: 'sse-token', dashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      for (let i = 0; i < 10; i++) {
+        const res = await fetch('http://localhost:19002/sse', {
+          headers: { Cookie: 'guardianagent_sid=stale-session' },
+        });
+        expect(res.status).toBe(401);
+      }
+
+      const valid = await fetch('http://localhost:19002/api/status', {
+        headers: { Authorization: 'Bearer sse-token' },
+      });
+      expect(valid.status).toBe(200);
+    });
+
     it('WebChannel.send should emit assistant.notice over SSE', async () => {
       const dashboard: DashboardCallbacks = {
         onSSESubscribe: () => () => {},

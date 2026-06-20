@@ -52,6 +52,7 @@ async function checkAuth() {
     await api.status({ retryOnAuth: false });
     return 'ok';
   } catch (e) {
+    if (e.code === 'AUTH_RATE_LIMITED') return 'auth_limited';
     if (e.message === 'AUTH_FAILED') return 'auth_failed';
     // Network error — server is unreachable
     return 'unreachable';
@@ -94,7 +95,9 @@ async function initAuth() {
   // AUTH_FAILED — clear any stale token so it doesn't keep causing 401s
   clearToken();
 
-  showAuthPrompt();
+  showAuthPrompt(result === 'auth_limited'
+    ? 'Too many authentication attempts. Wait a minute, then enter the web access token again.'
+    : '');
 }
 
 function showAuthPrompt(initialError = '') {
@@ -148,7 +151,11 @@ function showAuthPrompt(initialError = '') {
       }
     } else {
       clearToken();
-      errorEl.textContent = check === 'unreachable' ? 'Server unreachable' : 'Invalid token';
+      errorEl.textContent = check === 'unreachable'
+        ? 'Server unreachable'
+        : check === 'auth_limited'
+          ? 'Too many authentication attempts. Wait a minute, then try again.'
+          : 'Invalid token';
       errorEl.style.display = '';
     }
   };

@@ -105,6 +105,28 @@ describe('dashboard api client', () => {
     expect(fetchMock.mock.calls[2]?.[0]).toBe('/api/tools/policy');
   });
 
+  it('classifies auth rate limits as auth failures', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockResolvedValueOnce(makeJsonResponse(429, {
+      error: 'Too many authentication failures. Try again later.',
+      errorCode: 'AUTH_RATE_LIMITED',
+    }) as Response);
+
+    const { api, AUTH_FAILED_EVENT } = await import('../web/public/js/api.js');
+
+    let authFailures = 0;
+    window.addEventListener(AUTH_FAILED_EVENT, () => {
+      authFailures += 1;
+    });
+
+    await expect(api.status({ retryOnAuth: false })).rejects.toMatchObject({
+      message: 'AUTH_FAILED',
+      code: 'AUTH_RATE_LIMITED',
+      status: 429,
+    });
+    expect(authFailures).toBe(1);
+  });
+
   it('uses privileged tickets for other privileged config mutations', async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     fetchMock

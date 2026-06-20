@@ -556,7 +556,10 @@ export class WebChannel implements ChannelAdapter {
   private sendAuthBlocked(res: ServerResponse, retryAfterMs: number): false {
     const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
     res.setHeader('Retry-After', String(retryAfterSeconds));
-    sendJSON(res, 429, { error: 'Too many authentication failures. Try again later.' });
+    sendJSON(res, 429, {
+      error: 'Too many authentication failures. Try again later.',
+      errorCode: 'AUTH_RATE_LIMITED',
+    });
     return false;
   }
 
@@ -765,19 +768,20 @@ export class WebChannel implements ChannelAdapter {
       return true;
     }
 
+    if (!authHeader) {
+      sendJSON(res, 401, {
+        error: 'Authentication required. SSE requires an authenticated session cookie or Authorization header.',
+      });
+      return false;
+    }
+
     const blockMs = this.recordAuthFailure(req);
     if (blockMs > 0) {
       log.warn({ client: this.getClientAddress(req) }, 'Web auth temporarily blocked after repeated SSE failures');
       return this.sendAuthBlocked(res, blockMs);
     }
 
-    if (authHeader) {
-      sendJSON(res, 403, { error: 'Invalid token' });
-    } else {
-      sendJSON(res, 401, {
-        error: 'Authentication required. SSE requires an authenticated session cookie or Authorization header.',
-      });
-    }
+    sendJSON(res, 403, { error: 'Invalid token' });
     return false;
   }
 
