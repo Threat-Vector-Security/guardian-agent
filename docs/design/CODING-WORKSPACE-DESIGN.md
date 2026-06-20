@@ -58,6 +58,11 @@ Core layers:
 
 Code sessions are persisted in the backend by [code-sessions.ts](../../src/runtime/code-sessions.ts).
 
+When a cloud or generic container runtime creates a session with the default
+blank/`.` root, the backend anchors it to `GUARDIAN_PROJECTS_DIR` or
+`<GUARDIAN_BASE_DIR>/projects` and creates that directory before storing the
+session. Explicit workspace roots remain explicit.
+
 Primary persisted shape:
 
 - `CodeSessionRecord`

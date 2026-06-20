@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -55,6 +55,47 @@ describe('CodeSessionStore', () => {
     expect(session.workState.workspaceProfile?.summary).toContain('test-app');
     expect(session.workState.workspaceProfile?.inspectedFiles).toContain('README.md');
     expect(session.workState.workspaceTrust?.state).toBe('trusted');
+  });
+
+  it('uses a durable projects root for default cloud workspaces', () => {
+    const baseDir = createWorkspace('cloud-base', {});
+    const previousEnv = {
+      FLY_APP_NAME: process.env.FLY_APP_NAME,
+      FLY_MACHINE_ID: process.env.FLY_MACHINE_ID,
+      GUARDIAN_BASE_DIR: process.env.GUARDIAN_BASE_DIR,
+      GUARDIAN_PROJECTS_DIR: process.env.GUARDIAN_PROJECTS_DIR,
+    };
+
+    process.env.FLY_APP_NAME = 'guardian-test';
+    process.env.FLY_MACHINE_ID = 'machine-test';
+    process.env.GUARDIAN_BASE_DIR = baseDir;
+    delete process.env.GUARDIAN_PROJECTS_DIR;
+
+    try {
+      const store = new CodeSessionStore({
+        enabled: false,
+        sqlitePath: join(baseDir, '.guardianagent', 'code-sessions.sqlite'),
+      });
+
+      const session = store.createSession({
+        ownerUserId: 'owner',
+        title: 'Cloud Session',
+        workspaceRoot: '.',
+      });
+
+      const expectedRoot = join(baseDir, 'projects');
+      expect(session.workspaceRoot).toBe(expectedRoot);
+      expect(session.resolvedRoot).toBe(expectedRoot);
+      expect(existsSync(expectedRoot)).toBe(true);
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
   });
 
   it('normalizes routing lane agent pins out of stored sessions', () => {

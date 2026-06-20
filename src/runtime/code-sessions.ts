@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { dirname, isAbsolute, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import {
   hasSQLiteDriver,
   openSQLiteDatabase,
@@ -37,6 +37,8 @@ import type {
   RemoteExecutionDiagnosticCause,
   RemoteExecutionHealthState,
 } from './remote-execution/policy.js';
+import { detectRuntimeEnvironment } from './security-controls.js';
+import { getGuardianBaseDir } from '../util/env.js';
 
 export type CodeSessionStatus =
   | 'idle'
@@ -454,6 +456,18 @@ function normalizePath(value: string): string {
     : resolve(normalized || '.');
 }
 
+function resolveCodeSessionWorkspaceRoot(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed && trimmed !== '.') return trimmed;
+
+  const runtime = detectRuntimeEnvironment();
+  if (runtime.kind !== 'cloud' && runtime.kind !== 'container') return trimmed || '.';
+
+  const workspaceRoot = normalizePath(process.env.GUARDIAN_PROJECTS_DIR?.trim() || join(getGuardianBaseDir(), 'projects'));
+  mkdirSync(workspaceRoot, { recursive: true });
+  return workspaceRoot;
+}
+
 function isPathInside(candidate: string, root: string): boolean {
   const normalizedCandidate = sep === '\\' ? candidate.toLowerCase() : candidate;
   const normalizedRoot = sep === '\\' ? root.toLowerCase() : root;
@@ -707,7 +721,7 @@ export class CodeSessionStore {
 
     const now = this.now();
     const id = randomUUID();
-    const workspaceRoot = input.workspaceRoot.trim() || '.';
+    const workspaceRoot = resolveCodeSessionWorkspaceRoot(input.workspaceRoot);
     const resolvedRoot = normalizePath(workspaceRoot);
     const workspaceProfile = inspectCodeWorkspaceSync(resolvedRoot, now);
     const workspaceTrust = assessCodeWorkspaceTrustSync(resolvedRoot, now);
@@ -754,7 +768,10 @@ export class CodeSessionStore {
     if (!existing) return null;
 
     const now = this.now();
-    const nextResolvedRoot = input.workspaceRoot !== undefined ? normalizePath(input.workspaceRoot) : existing.resolvedRoot;
+    const nextWorkspaceRoot = input.workspaceRoot !== undefined
+      ? resolveCodeSessionWorkspaceRoot(input.workspaceRoot)
+      : undefined;
+    const nextResolvedRoot = nextWorkspaceRoot !== undefined ? normalizePath(nextWorkspaceRoot) : existing.resolvedRoot;
     const workspaceRootChanged = nextResolvedRoot !== existing.resolvedRoot;
     const nextWorkspaceProfile = input.workState?.workspaceProfile !== undefined
       ? cloneWorkspaceProfile(input.workState.workspaceProfile)
@@ -799,7 +816,7 @@ export class CodeSessionStore {
     const next: CodeSessionRecord = {
       ...existing,
       title: input.title !== undefined ? (input.title.trim() || existing.title) : existing.title,
-      workspaceRoot: input.workspaceRoot !== undefined ? (input.workspaceRoot.trim() || existing.workspaceRoot) : existing.workspaceRoot,
+      workspaceRoot: nextWorkspaceRoot ?? existing.workspaceRoot,
       agentId: input.agentId !== undefined ? this.normalizeAgentIdValue(input.agentId) : existing.agentId,
       attachmentPolicy: input.attachmentPolicy ?? existing.attachmentPolicy,
       status: input.status ?? existing.status,
