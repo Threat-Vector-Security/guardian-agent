@@ -7,6 +7,7 @@ primary_region = "iad"
 [env]
   GUARDIAN_BASE_DIR = "/data"
   GUARDIAN_CONFIG_PATH = "/data/config.yaml"
+  GUARDIAN_PROJECTS_DIR = "/data/projects"
   LOG_LEVEL = "info"
 
 [mounts]
