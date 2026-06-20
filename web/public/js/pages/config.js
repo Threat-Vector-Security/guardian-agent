@@ -483,7 +483,7 @@ const CONFIG_OVERVIEW_SECTIONS = [
   {
     id: 'appearance',
     label: 'Appearance',
-    detail: 'Default Chat, Classic, or Web Browser shell layer, theme bundle, text scale, and motion preferences.',
+    detail: 'Default Chat, Classic, or Workstation shell layer, theme bundle, text scale, and motion preferences.',
   },
 ];
 
@@ -7603,7 +7603,7 @@ function renderAppearanceTab(panel) {
       compact: true,
       whatItIs: 'This tab controls the Web UI shell layer, color bundle, typography, text scale, motion, and editor alignment.',
       whatSeeing: 'You are seeing shell-layer controls, display controls, bundle filters, preview cards, and search.',
-      whatCanDo: 'Switch between Default Chat, Classic, and Web Browser layers, pick a bundle, tune text scale, or reduce UI motion.',
+      whatCanDo: 'Switch between Default Chat, Classic, and Workstation layers, pick a bundle, tune text scale, or reduce UI motion.',
       howLinks: 'Appearance changes presentation only. It does not change monitoring, policy, or workflow behavior.',
     })}
     <div class="table-container">
@@ -7612,7 +7612,7 @@ function renderAppearanceTab(panel) {
         <div class="cfg-mode-toggle" role="group" aria-label="Shell layer">
           <button class="cfg-mode-btn ${currentShellLayer === 'focused' ? 'active' : ''}" type="button" data-shell-layer="focused">Default Chat</button>
           <button class="cfg-mode-btn ${currentShellLayer === 'classic' ? 'active' : ''}" type="button" data-shell-layer="classic">Classic Layer</button>
-          <button class="cfg-mode-btn ${currentShellLayer === 'workstation' ? 'active' : ''}" type="button" data-shell-layer="workstation">Web Browser Layer</button>
+          <button class="cfg-mode-btn ${currentShellLayer === 'workstation' ? 'active' : ''}" type="button" data-shell-layer="workstation">Workstation Layer</button>
         </div>
         <div class="ops-task-sub">Choose which shell opens by default in this browser.</div>
       </div>

@@ -24,6 +24,7 @@ const ROUTE_LABELS = {
 const MIN_WINDOW_WIDTH = 360;
 const MIN_WINDOW_HEIGHT = 260;
 const WINDOW_MARGIN = 8;
+const FOCUSED_WINDOW_STATE_KEY = 'guardianagent_focused_route_window_v1';
 
 export function initFocusedShell({
   app,
@@ -40,6 +41,7 @@ export function initFocusedShell({
   let active = getSavedShellLayer() === 'focused';
   let activeRoute = null;
   let activePath = null;
+  let focusedWindowState = loadFocusedWindowState();
 
   const modal = document.createElement('section');
   modal.id = 'focused-route-modal';
@@ -89,11 +91,7 @@ export function initFocusedShell({
   const closeButton = modal.querySelector('.focused-route-modal__close');
 
   closeButton?.addEventListener('click', closeRouteWindow);
-  maxButton?.addEventListener('click', () => {
-    materializeWindowRect();
-    windowEl.classList.toggle('is-maximized');
-    maxButton.setAttribute('aria-label', windowEl.classList.contains('is-maximized') ? 'Restore page window' : 'Maximize page window');
-  });
+  maxButton?.addEventListener('click', toggleMaximized);
   modal.addEventListener('click', (event) => {
     if (event.target === modal) closeRouteWindow();
   });
@@ -164,6 +162,7 @@ export function initFocusedShell({
     modal.classList.toggle('is-config-route', normalizedPath === '/config');
     modal.classList.toggle('is-chat-cooperative-route', normalizedPath !== '/config');
     modal.hidden = false;
+    restoreWindowState();
     await renderRoute({
       route,
       path: normalizedPath,
@@ -203,14 +202,19 @@ export function initFocusedShell({
   }
 
   function materializeWindowRect() {
-    if (!windowEl || modal.hidden || windowEl.classList.contains('is-positioned')) return;
+    if (!windowEl || modal.hidden) return null;
+    if (windowEl.classList.contains('is-positioned')) return currentWindowRect();
     const modalRect = modal.getBoundingClientRect();
     const windowRect = windowEl.getBoundingClientRect();
-    windowEl.style.left = `${windowRect.left - modalRect.left}px`;
-    windowEl.style.top = `${windowRect.top - modalRect.top}px`;
-    windowEl.style.width = `${windowRect.width}px`;
-    windowEl.style.height = `${windowRect.height}px`;
+    const rect = {
+      left: windowRect.left - modalRect.left,
+      top: windowRect.top - modalRect.top,
+      width: windowRect.width,
+      height: windowRect.height,
+    };
+    applyRect(rect);
     windowEl.classList.add('is-positioned');
+    return rect;
   }
 
   function clampRect(left, top, width, height) {
@@ -232,6 +236,60 @@ export function initFocusedShell({
     windowEl.style.top = `${next.top}px`;
     windowEl.style.width = `${next.width}px`;
     windowEl.style.height = `${next.height}px`;
+    windowEl.classList.add('is-positioned');
+    return next;
+  }
+
+  function restoreWindowState() {
+    if (focusedWindowState) {
+      focusedWindowState = {
+        ...applyRect(focusedWindowState),
+        maximized: Boolean(focusedWindowState.maximized),
+        z: Number(focusedWindowState.z) || 300,
+      };
+      windowEl.classList.toggle('is-maximized', focusedWindowState.maximized);
+      modal.style.zIndex = String(focusedWindowState.z);
+    }
+    syncMaxButton();
+  }
+
+  function saveWindowState(rect = currentWindowRect()) {
+    if (!rect || modal.hidden) return;
+    focusedWindowState = {
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      maximized: windowEl.classList.contains('is-maximized'),
+      z: Number(modal.style.zIndex || getComputedStyle(modal).zIndex) || 300,
+    };
+    localStorage.setItem(FOCUSED_WINDOW_STATE_KEY, JSON.stringify(focusedWindowState));
+  }
+
+  function currentWindowRect() {
+    return {
+      left: windowEl.offsetLeft,
+      top: windowEl.offsetTop,
+      width: windowEl.offsetWidth,
+      height: windowEl.offsetHeight,
+    };
+  }
+
+  function toggleMaximized() {
+    if (windowEl.classList.contains('is-maximized')) {
+      windowEl.classList.remove('is-maximized');
+      saveWindowState();
+    } else {
+      const rect = materializeWindowRect();
+      saveWindowState(rect);
+      windowEl.classList.add('is-maximized');
+      saveWindowState(rect);
+    }
+    syncMaxButton();
+  }
+
+  function syncMaxButton() {
+    maxButton?.setAttribute('aria-label', windowEl.classList.contains('is-maximized') ? 'Restore page window' : 'Maximize page window');
   }
 
   function installWindowDrag() {
@@ -263,6 +321,7 @@ export function initFocusedShell({
     }
 
     function stop() {
+      if (start) saveWindowState();
       start = null;
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', stop);
@@ -311,6 +370,7 @@ export function initFocusedShell({
     }
 
     function stop() {
+      if (start) saveWindowState();
       start = null;
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', stop);
@@ -329,6 +389,22 @@ export function initFocusedShell({
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function loadFocusedWindowState() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FOCUSED_WINDOW_STATE_KEY) || 'null');
+    if (!parsed || typeof parsed !== 'object') return null;
+    const rect = ['left', 'top', 'width', 'height'].reduce((next, key) => {
+      next[key] = Number(parsed[key]);
+      return next;
+    }, {});
+    return Object.values(rect).every(Number.isFinite)
+      ? { ...rect, maximized: Boolean(parsed.maximized), z: Number(parsed.z) || 300 }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function labelFor(path, route) {

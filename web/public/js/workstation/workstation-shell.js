@@ -220,6 +220,8 @@ export function initWorkstationShell({
   let paletteSelectedIndex = 0;
   const frames = new Map();
   const frameState = loadLayoutState();
+  zIndex = Math.max(zIndex, ...Object.values(frameState.frames || {}).map((frame) => Number(frame.z) || 0));
+  let restoringFrames = false;
   const classicChatParent = layout;
 
   const shell = document.createElement('section');
@@ -245,7 +247,7 @@ export function initWorkstationShell({
         <select class="ws-shell-layer-select" aria-label="UI layout">
           <option value="focused">Default Chat</option>
           <option value="classic">Classic</option>
-          <option value="workstation">Web Browser</option>
+          <option value="workstation">Workstation</option>
         </select>
         <button class="ws-killswitch" type="button" title="Shut down all services" aria-label="Shut down all services">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -483,10 +485,14 @@ export function initWorkstationShell({
   }
 
   function restorePersistedRouteFrames() {
-    for (const [key, saved] of Object.entries(frameState.frames || {})) {
+    restoringFrames = true;
+    const savedEntries = Object.entries(frameState.frames || {})
+      .sort(([, a], [, b]) => (Number(a.z) || 0) - (Number(b.z) || 0));
+    for (const [key, saved] of savedEntries) {
       if (key === 'chat' || saved.closed || frames.has(key) || !routes[key]) continue;
       void openRouteFrame(key, routes[key], new URLSearchParams(saved.query || ''), { flashIfOpen: false });
     }
+    restoringFrames = false;
   }
 
   function createFrame({ key, title, routePath, icon, trust, className, bodyClassName, rect }) {
@@ -527,6 +533,8 @@ export function initWorkstationShell({
     frameObj.route.textContent = routePath;
     frameObj.trust.textContent = trust;
     setRect(frame, rect);
+    const savedZ = Number(frameState.frames?.[key]?.z);
+    if (Number.isFinite(savedZ) && savedZ > 0) frame.style.zIndex = String(savedZ);
     makeDraggable(frameObj);
     frame.querySelectorAll('[data-resize-edge]').forEach((handle) => makeResizable(frameObj, handle));
     frame.addEventListener('pointerdown', () => focusFrame(frameObj, false));
@@ -830,7 +838,13 @@ export function initWorkstationShell({
   function focusFrame(frame, flash = false) {
     shell.querySelectorAll('.ws-frame').forEach((candidate) => candidate.classList.remove('is-active'));
     frame.el.classList.add('is-active');
-    frame.el.style.zIndex = String(++zIndex);
+    const savedZ = restoringFrames ? Number(frameState.frames?.[frame.key]?.z) : 0;
+    if (restoringFrames && Number.isFinite(savedZ) && savedZ > 0) {
+      frame.el.style.zIndex = String(savedZ);
+      zIndex = Math.max(zIndex, savedZ);
+    } else {
+      frame.el.style.zIndex = String(++zIndex);
+    }
     activePath = frame.key === 'chat' ? activePath : frame.key;
     if (frame.routeDef) activeRoute = frame.routeDef;
     if (flash) flashFrame(frame.el);
