@@ -92,6 +92,8 @@ export function initFocusedShell({
 
   closeButton?.addEventListener('click', closeRouteWindow);
   maxButton?.addEventListener('click', toggleMaximized);
+  headerEl?.setAttribute('title', 'Double-click to reset window size and position');
+  headerEl?.addEventListener('dblclick', resetWindowState);
   modal.addEventListener('click', (event) => {
     if (event.target === modal) closeRouteWindow();
   });
@@ -250,6 +252,16 @@ export function initFocusedShell({
       windowEl.classList.toggle('is-maximized', focusedWindowState.maximized);
       modal.style.zIndex = String(focusedWindowState.z);
     }
+    syncMaxButton();
+  }
+
+  function resetWindowState(event) {
+    if (event?.target?.closest('button')) return;
+    focusedWindowState = null;
+    localStorage.removeItem(FOCUSED_WINDOW_STATE_KEY);
+    windowEl.classList.remove('is-positioned', 'is-maximized');
+    windowEl.removeAttribute('style');
+    modal.style.zIndex = '300';
     syncMaxButton();
   }
 
