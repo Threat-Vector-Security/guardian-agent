@@ -108,6 +108,72 @@ describe('coding workflow recipes', () => {
     expect(workflow?.nextAction).toMatch(/targeted tests|proof/i);
   });
 
+  it('treats generic unverified tool metadata as pending proof, not failed proof', () => {
+    const workflow = deriveCodeSessionWorkflowState({
+      focusSummary: 'Build a browser game framework.',
+      planSummary: '',
+      pendingApprovals: [],
+      recentJobs: [
+        {
+          id: 'job-1',
+          toolName: 'fs_mkdir',
+          status: 'succeeded',
+          verificationStatus: 'unverified',
+        },
+        {
+          id: 'job-2',
+          toolName: 'shell_safe',
+          status: 'succeeded',
+          verificationStatus: 'unverified',
+        },
+      ],
+      verification: [],
+      plannedWorkflowType: 'implementation',
+      hasRepoEvidence: true,
+      now: 457,
+    });
+
+    expect(workflow).toMatchObject({
+      currentStage: 'verify',
+      status: 'blocked',
+      verificationState: 'pending',
+      updatedAt: 457,
+    });
+  });
+
+  it('lets explicit verified tool evidence satisfy required workflow proof', () => {
+    const workflow = deriveCodeSessionWorkflowState({
+      focusSummary: 'Build a browser game framework.',
+      planSummary: '',
+      pendingApprovals: [],
+      recentJobs: [
+        {
+          id: 'job-1',
+          toolName: 'fs_mkdir',
+          status: 'succeeded',
+          verificationStatus: 'unverified',
+        },
+        {
+          id: 'job-2',
+          toolName: 'code_test',
+          status: 'succeeded',
+          verificationStatus: 'verified',
+        },
+      ],
+      verification: [],
+      plannedWorkflowType: 'implementation',
+      hasRepoEvidence: true,
+      now: 458,
+    });
+
+    expect(workflow).toMatchObject({
+      currentStage: 'summarize',
+      status: 'completed',
+      verificationState: 'passed',
+      updatedAt: 458,
+    });
+  });
+
   it('shows the approve stage while a coding approval is pending', () => {
     const workflow = deriveCodeSessionWorkflowState({
       focusSummary: 'Fix the auth failure.',

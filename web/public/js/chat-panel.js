@@ -987,7 +987,7 @@ export async function initChatPanel(container) {
         finalised = true;
         cleanup();
         clearActiveRequestIfCurrent();
-        const activitySummary = captureActiveChatActivitySummary({ forcePersist: true });
+        const activitySummary = captureActiveChatActivitySummary();
         clearActiveChatIndicator();
         restoreInput();
         Promise.resolve(resolvePendingActionForDisplay(data?.metadata, { source: 'response' }))

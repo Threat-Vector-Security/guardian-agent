@@ -2078,7 +2078,15 @@ guardian:
     );
 
     if (provider.mode === 'fake') {
-      const routingTrace = readJsonLines(path.join(tmpDir, '.guardianagent', 'routing', 'intent-routing.jsonl'));
+      const tracePath = path.join(tmpDir, '.guardianagent', 'routing', 'intent-routing.jsonl');
+      const routingTrace = await waitFor(() => {
+        const trace = readJsonLines(tracePath);
+        return trace.some((entry) => (
+          String(entry?.contentPreview ?? '').includes('Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.')
+        ))
+          ? trace
+          : null;
+      }, 5_000, 'Expected routing trace for delegated repo inspection request.');
       const delegatedPlanTrace = [...routingTrace].reverse().find((entry) => (
         entry?.stage === 'delegated_worker_started'
         && String(entry?.contentPreview ?? '').includes('Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.')

@@ -104,7 +104,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Open Configuration > Second Brain when you want to change assistant response style, the Second Brain home setup card, or default delivery channels later without rerunning a one-shot wizard.',
                   'Open Configuration > Integrations > Coding Assistants when you want to confirm whether Guardian can delegate work to Claude Code, Codex, Gemini CLI, or Aider.',
                   'Open Configuration > Appearance when you want to switch between shell layouts, built-in and curated design-system bundles, theme-following typography, text scale, editor alignment, or reduced motion.',
-                  'Use Configuration > Appearance > Shell Layer to choose Focused Chat, Classic Layer, or Web Browser Layer. Focused Chat keeps chat full-height with a compact side rail and opens Configuration as a modal window.',
+                  'Use the top-right UI layout selector, or Configuration > Appearance > Shell Layer, to choose Default Chat, Classic Layer, or Web Browser Layer. Default Chat keeps chat full-height with a compact side rail and opens page windows that can be moved, resized, or maximized.',
                   'Drag the edge of the web chat rail to resize it. Guardian keeps the chosen size locally while new sessions keep the default 460px rail.',
                   'Open `#/code` when you want the repo-scoped coding surface, and `#/security` when you want alerts, findings, and security status.',
                   'Use CLI `/providers` or Configuration > AI Providers to confirm the selected provider is reachable.',

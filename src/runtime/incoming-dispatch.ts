@@ -601,11 +601,25 @@ export function createIncomingDispatchPreparer(args: {
         })),
       });
       if (repair) {
+        const resolved = repair.record ?? current;
         recordIntentRoutingTrace('gateway_classified', {
           msg,
           requestId,
           details: {
             source: 'routing_plan_repair',
+            route: resolved.decision.route,
+            confidence: resolved.decision.confidence,
+            operation: resolved.decision.operation,
+            turnRelation: resolved.decision.turnRelation,
+            resolution: resolved.decision.resolution,
+            missingFields: resolved.decision.missingFields,
+            executionClass: resolved.decision.executionClass,
+            preferredTier: resolved.decision.preferredTier,
+            requiresRepoGrounding: resolved.decision.requiresRepoGrounding,
+            requiresToolSynthesis: resolved.decision.requiresToolSynthesis,
+            expectedContextPressure: resolved.decision.expectedContextPressure,
+            simpleVsComplex: resolved.decision.simpleVsComplex,
+            preferredAnswerPath: resolved.decision.preferredAnswerPath,
             semanticPlanRepairAttempted: repair.attempted,
             semanticPlanRepairAdopted: repair.adopted,
             semanticPlanRepairProviderOrder: repair.providerOrder,

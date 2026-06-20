@@ -1610,6 +1610,9 @@ describe('createIncomingDispatchPreparer', () => {
       stage: 'gateway_classified',
       details: expect.objectContaining({
         source: 'routing_plan_repair',
+        route: 'general_assistant',
+        operation: 'search',
+        resolution: 'ready',
         semanticPlanRepairAttempted: true,
         semanticPlanRepairAdopted: true,
         semanticPlanRepairProvider: 'openai',

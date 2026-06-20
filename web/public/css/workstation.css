@@ -189,7 +189,6 @@ body.workstation-mode .workstation-shell {
   background: currentColor;
 }
 
-.ws-exit,
 .ws-killswitch,
 .ws-frame-control {
   display: inline-flex;
@@ -201,9 +200,13 @@ body.workstation-mode .workstation-shell {
   transition: all 0.15s ease;
 }
 
-.ws-exit {
+.ws-shell-layer-select {
   height: 28px;
+  min-width: 128px;
   padding: 0 0.7rem;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
   font-family: var(--font-display);
   font-size: 0.62rem;
   font-weight: 700;
@@ -234,7 +237,7 @@ body.workstation-mode .workstation-shell {
   stroke-linejoin: round;
 }
 
-.ws-exit:hover,
+.ws-shell-layer-select:hover,
 .ws-killswitch:hover,
 .ws-frame-control:hover {
   color: var(--text-primary);

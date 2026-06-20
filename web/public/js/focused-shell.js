@@ -21,6 +21,10 @@ const ROUTE_LABELS = {
   '/config': 'Configuration',
 };
 
+const MIN_WINDOW_WIDTH = 360;
+const MIN_WINDOW_HEIGHT = 260;
+const WINDOW_MARGIN = 8;
+
 export function initFocusedShell({
   app,
   routes,
@@ -49,12 +53,27 @@ export function initFocusedShell({
           <span class="focused-route-modal__label" id="focused-route-title">Configuration</span>
           <span class="focused-route-modal__path"></span>
         </div>
-        <button class="focused-route-modal__close" type="button" aria-label="Close page window">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M18 6 6 18"/>
-            <path d="m6 6 12 12"/>
-          </svg>
-        </button>
+        <div class="focused-route-modal__controls">
+          <button class="focused-route-modal__max" type="button" aria-label="Maximize page window">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 4h12v12"/>
+              <path d="M20 4 8 16"/>
+              <path d="M4 8v12h12"/>
+            </svg>
+          </button>
+          <button class="focused-route-modal__close" type="button" aria-label="Close page window">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6 6 18"/>
+              <path d="m6 6 12 12"/>
+            </svg>
+          </button>
+        </div>
+      <span class="focused-route-modal__resize focused-route-modal__resize--top" data-focused-resize="top"></span>
+      <span class="focused-route-modal__resize focused-route-modal__resize--right" data-focused-resize="right"></span>
+      <span class="focused-route-modal__resize focused-route-modal__resize--bottom" data-focused-resize="bottom"></span>
+      <span class="focused-route-modal__resize focused-route-modal__resize--left" data-focused-resize="left"></span>
+      <span class="focused-route-modal__resize focused-route-modal__resize--bottom-right" data-focused-resize="bottom-right"></span>
+      <span class="focused-route-modal__resize focused-route-modal__resize--bottom-left" data-focused-resize="bottom-left"></span>
       </header>
       <main class="focused-route-modal__body"></main>
     </article>
@@ -64,12 +83,22 @@ export function initFocusedShell({
   const titleEl = modal.querySelector('.focused-route-modal__label');
   const pathEl = modal.querySelector('.focused-route-modal__path');
   const bodyEl = modal.querySelector('.focused-route-modal__body');
+  const windowEl = modal.querySelector('.focused-route-modal__window');
+  const headerEl = modal.querySelector('.focused-route-modal__header');
+  const maxButton = modal.querySelector('.focused-route-modal__max');
   const closeButton = modal.querySelector('.focused-route-modal__close');
 
   closeButton?.addEventListener('click', closeRouteWindow);
+  maxButton?.addEventListener('click', () => {
+    materializeWindowRect();
+    windowEl.classList.toggle('is-maximized');
+    maxButton.setAttribute('aria-label', windowEl.classList.contains('is-maximized') ? 'Restore page window' : 'Maximize page window');
+  });
   modal.addEventListener('click', (event) => {
     if (event.target === modal) closeRouteWindow();
   });
+  installWindowDrag();
+  modal.querySelectorAll('[data-focused-resize]').forEach((handle) => installWindowResize(handle));
   window.addEventListener('keydown', (event) => {
     if (active && !modal.hidden && event.key === 'Escape') {
       closeRouteWindow();
@@ -157,6 +186,7 @@ export function initFocusedShell({
   function closeRouteWindow() {
     modal.hidden = true;
     modal.classList.remove('is-config-route', 'is-chat-cooperative-route');
+    windowEl.classList.remove('is-maximized');
     bodyEl.innerHTML = '';
     activePath = '/';
     activeRoute = routes['/'];
@@ -172,6 +202,122 @@ export function initFocusedShell({
     }
   }
 
+  function materializeWindowRect() {
+    if (!windowEl || modal.hidden || windowEl.classList.contains('is-positioned')) return;
+    const modalRect = modal.getBoundingClientRect();
+    const windowRect = windowEl.getBoundingClientRect();
+    windowEl.style.left = `${windowRect.left - modalRect.left}px`;
+    windowEl.style.top = `${windowRect.top - modalRect.top}px`;
+    windowEl.style.width = `${windowRect.width}px`;
+    windowEl.style.height = `${windowRect.height}px`;
+    windowEl.classList.add('is-positioned');
+  }
+
+  function clampRect(left, top, width, height) {
+    const maxWidth = Math.max(MIN_WINDOW_WIDTH, modal.clientWidth - WINDOW_MARGIN * 2);
+    const maxHeight = Math.max(MIN_WINDOW_HEIGHT, modal.clientHeight - WINDOW_MARGIN * 2);
+    const nextWidth = clamp(width, MIN_WINDOW_WIDTH, maxWidth);
+    const nextHeight = clamp(height, MIN_WINDOW_HEIGHT, maxHeight);
+    return {
+      left: clamp(left, WINDOW_MARGIN, modal.clientWidth - nextWidth - WINDOW_MARGIN),
+      top: clamp(top, WINDOW_MARGIN, modal.clientHeight - nextHeight - WINDOW_MARGIN),
+      width: nextWidth,
+      height: nextHeight,
+    };
+  }
+
+  function applyRect(rect) {
+    const next = clampRect(rect.left, rect.top, rect.width, rect.height);
+    windowEl.style.left = `${next.left}px`;
+    windowEl.style.top = `${next.top}px`;
+    windowEl.style.width = `${next.width}px`;
+    windowEl.style.height = `${next.height}px`;
+  }
+
+  function installWindowDrag() {
+    let start = null;
+    headerEl?.addEventListener('pointerdown', (event) => {
+      if (event.target.closest('button') || windowEl.classList.contains('is-maximized')) return;
+      materializeWindowRect();
+      start = {
+        x: event.clientX,
+        y: event.clientY,
+        left: windowEl.offsetLeft,
+        top: windowEl.offsetTop,
+        width: windowEl.offsetWidth,
+        height: windowEl.offsetHeight,
+      };
+      headerEl.setPointerCapture?.(event.pointerId);
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', stop);
+      window.addEventListener('pointercancel', stop);
+    });
+
+    function onMove(event) {
+      if (!start) return;
+      applyRect({
+        ...start,
+        left: start.left + event.clientX - start.x,
+        top: start.top + event.clientY - start.y,
+      });
+    }
+
+    function stop() {
+      start = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+    }
+  }
+
+  function installWindowResize(handle) {
+    let start = null;
+    const edge = handle.dataset.focusedResize || '';
+    handle.addEventListener('pointerdown', (event) => {
+      if (windowEl.classList.contains('is-maximized')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      materializeWindowRect();
+      start = {
+        x: event.clientX,
+        y: event.clientY,
+        left: windowEl.offsetLeft,
+        top: windowEl.offsetTop,
+        width: windowEl.offsetWidth,
+        height: windowEl.offsetHeight,
+      };
+      handle.setPointerCapture?.(event.pointerId);
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', stop);
+      window.addEventListener('pointercancel', stop);
+    });
+
+    function onMove(event) {
+      if (!start) return;
+      const dx = event.clientX - start.x;
+      const dy = event.clientY - start.y;
+      const next = { ...start };
+      if (edge.includes('right')) next.width = start.width + dx;
+      if (edge.includes('bottom')) next.height = start.height + dy;
+      if (edge.includes('left')) {
+        next.left = start.left + dx;
+        next.width = start.width - dx;
+      }
+      if (edge.includes('top')) {
+        next.top = start.top + dy;
+        next.height = start.height - dy;
+      }
+      applyRect(next);
+    }
+
+    function stop() {
+      start = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+    }
+  }
+
   return {
     isActive: () => active,
     setActive,
@@ -179,6 +325,10 @@ export function initFocusedShell({
     refreshActiveRoute,
     restoreClassicContent,
   };
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function labelFor(path, route) {

@@ -378,6 +378,20 @@ body {
   border-color: currentColor;
 }
 
+.shell-layer-select {
+  min-width: 132px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: var(--font-label-tracking);
+  text-transform: uppercase;
+}
+
 .btn-killswitch {
   display: inline-flex;
   align-items: center;
@@ -10323,6 +10337,11 @@ tr:hover td {
     display: none;
   }
 
+  .shell-layer-select {
+    min-width: 112px;
+    max-width: 34vw;
+  }
+
   .btn-workstation-toggle,
   .btn-killswitch {
     width: 34px;
@@ -10482,7 +10501,7 @@ body.focused-mode .header-right {
 }
 
 body.focused-mode .indicator,
-body.focused-mode .btn-workstation-toggle,
+body.focused-mode .shell-layer-select,
 body.focused-mode .btn-killswitch {
   min-width: 34px;
   height: 34px;
@@ -10498,6 +10517,11 @@ body.focused-mode .indicator {
   overflow: hidden;
   color: var(--success);
   font-size: 0;
+}
+
+body.focused-mode .shell-layer-select {
+  width: 132px;
+  min-width: 132px;
 }
 
 body.focused-mode .indicator.disconnected {
@@ -10632,9 +10656,7 @@ body.focused-mode .chat-rail-resizer {
   position: fixed;
   inset: 0 0 0 56px;
   z-index: 300;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  display: block;
   padding: clamp(2.75rem, 7vh, 4.75rem) clamp(0.75rem, 3vw, 2.5rem) 1rem;
   background: color-mix(in srgb, var(--bg-primary) 48%, transparent);
   backdrop-filter: blur(6px);
@@ -10651,8 +10673,12 @@ body.focused-mode .chat-rail-resizer {
 }
 
 .focused-route-modal__window {
+  position: absolute;
+  left: 50%;
+  top: clamp(2.75rem, 7vh, 4.75rem);
+  transform: translateX(-50%);
   width: min(1180px, calc(100vw - 104px));
-  max-height: calc(100vh - clamp(4.5rem, 10vh, 6rem));
+  height: min(760px, calc(100vh - clamp(4.5rem, 10vh, 6rem)));
   min-height: min(620px, calc(100vh - 6rem));
   display: flex;
   flex-direction: column;
@@ -10664,8 +10690,22 @@ body.focused-mode .chat-rail-resizer {
   pointer-events: auto;
 }
 
+.focused-route-modal__window.is-positioned {
+  transform: none;
+}
+
+.focused-route-modal__window.is-maximized {
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  border-radius: 0;
+  transform: none !important;
+}
+
 .focused-route-modal.is-chat-cooperative-route .focused-route-modal__window {
-  max-height: calc(100vh - clamp(10.5rem, 24vh, 14rem));
+  height: min(680px, calc(100vh - clamp(10.5rem, 24vh, 14rem)));
   min-height: min(540px, calc(100vh - clamp(11rem, 25vh, 14.5rem)));
 }
 
@@ -10678,6 +10718,12 @@ body.focused-mode .chat-rail-resizer {
   padding: 0 0.85rem 0 1rem;
   border-bottom: 1px solid var(--border);
   background: var(--panel-header-bg);
+  cursor: grab;
+  user-select: none;
+}
+
+.focused-route-modal__header:active {
+  cursor: grabbing;
 }
 
 .focused-route-modal__title {
@@ -10706,6 +10752,13 @@ body.focused-mode .chat-rail-resizer {
   white-space: nowrap;
 }
 
+.focused-route-modal__controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.focused-route-modal__max,
 .focused-route-modal__close {
   width: 28px;
   height: 28px;
@@ -10719,12 +10772,19 @@ body.focused-mode .chat-rail-resizer {
   cursor: pointer;
 }
 
+.focused-route-modal__max:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 .focused-route-modal__close:hover {
   border-color: var(--error);
   color: var(--error);
   background: color-mix(in srgb, var(--error) 10%, transparent);
 }
 
+.focused-route-modal__max svg,
 .focused-route-modal__close svg {
   width: 15px;
   height: 15px;
@@ -10733,6 +10793,60 @@ body.focused-mode .chat-rail-resizer {
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.focused-route-modal__resize {
+  position: absolute;
+  z-index: 4;
+}
+
+.focused-route-modal__resize--top {
+  left: 18px;
+  right: 72px;
+  top: 0;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.focused-route-modal__resize--right {
+  right: 0;
+  top: 42px;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.focused-route-modal__resize--bottom {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.focused-route-modal__resize--left {
+  left: 0;
+  top: 42px;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.focused-route-modal__resize--bottom-right,
+.focused-route-modal__resize--bottom-left {
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+}
+
+.focused-route-modal__resize--bottom-right {
+  right: 0;
+  cursor: nwse-resize;
+}
+
+.focused-route-modal__resize--bottom-left {
+  left: 0;
+  cursor: nesw-resize;
 }
 
 .focused-route-modal__body {
@@ -10761,6 +10875,11 @@ body.focused-mode .chat-rail-resizer {
 
   body.focused-mode .indicator {
     display: none;
+  }
+
+  body.focused-mode .shell-layer-select {
+    width: 116px;
+    min-width: 116px;
   }
 
   body.focused-mode .layout,
@@ -10825,14 +10944,15 @@ body.focused-mode .chat-rail-resizer {
   }
 
   .focused-route-modal__window {
+    top: 3.4rem;
     width: calc(100vw - 59px);
+    height: calc(100vh - 4rem);
     min-height: min(560px, calc(100vh - 4rem));
-    max-height: calc(100vh - 4rem);
   }
 
   .focused-route-modal.is-chat-cooperative-route .focused-route-modal__window {
+    height: calc(100vh - 9rem);
     min-height: min(460px, calc(100vh - 9rem));
-    max-height: calc(100vh - 9rem);
   }
 }
 

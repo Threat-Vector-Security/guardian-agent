@@ -344,7 +344,6 @@ function isImplementationJob(job: CodeSessionRecentJob): boolean {
   if (!toolName) return false;
   if (toolName === 'code_plan' || toolName === 'find_tools') return false;
   if (isVerificationToolName(toolName)) return false;
-  if (job.verificationStatus) return false;
   return toolName === 'code_edit'
     || toolName === 'code_patch'
     || toolName === 'code_create'
@@ -371,7 +370,7 @@ function resolveVerificationState(
   if (recentJobs.some((job) => job.status === 'failed' && isVerificationToolName(String(job.toolName || '').trim()))) {
     return 'failed';
   }
-  if (recentJobs.some((job) => job.verificationStatus === 'unverified')) {
+  if (recentJobs.some((job) => job.verificationStatus === 'failed')) {
     return 'failed';
   }
   if (verification.some((entry) => entry.status === 'pass')) {
@@ -416,7 +415,7 @@ export function deriveCodeSessionWorkflowState(input: DeriveCodeSessionWorkflowS
     status = 'blocked';
     blockedReason = 'Repo evidence is still missing.';
     nextAction = 'Inspect the workspace files and gather concrete repo evidence before continuing.';
-  } else if (!hasPlan) {
+  } else if (!hasPlan && !hasImplementationActivity) {
     currentStage = 'plan';
     status = 'ready';
     nextAction = recipe.stages.find((stage) => stage.id === 'plan')?.detail || 'Write a bounded plan before editing.';

@@ -19,7 +19,7 @@ import { applyInputTooltips } from './tooltip.js';
 import { initTheme } from './theme.js';
 import { initFocusedShell } from './focused-shell.js';
 import { initWorkstationShell, installClassicChatRailResize } from './workstation/workstation-shell.js';
-import { SHELL_LAYER_EVENT } from './shell-layout.js';
+import { SHELL_LAYER_EVENT, getSavedShellLayer, readShellLayerFromEvent, setSavedShellLayer } from './shell-layout.js';
 
 const content = document.getElementById('content');
 const chatPanel = document.getElementById('chat-panel');
@@ -541,6 +541,18 @@ function startClock() {
   setInterval(tick, 1000);
 }
 
+function initShellLayerSelect() {
+  const select = document.getElementById('shell-layer-select');
+  if (!select) return;
+  select.value = getSavedShellLayer();
+  select.addEventListener('change', () => {
+    setSavedShellLayer(select.value);
+  });
+  window.addEventListener(SHELL_LAYER_EVENT, (event) => {
+    select.value = readShellLayerFromEvent(event);
+  });
+}
+
 function startApp() {
   appStarted = true;
   connectSSE();
@@ -556,6 +568,7 @@ function startApp() {
     pushAssistantNotice(payload);
   });
   startClock();
+  initShellLayerSelect();
   void initChatPanel(chatPanel).then(() => {
     const { route } = getRouteState();
     setChatContext(currentPage || route?.name || 'second-brain');

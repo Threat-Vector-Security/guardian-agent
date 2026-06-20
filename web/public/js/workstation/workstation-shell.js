@@ -242,7 +242,11 @@ export function initWorkstationShell({
       <div class="ws-titlebar__right">
         <span class="ws-clock"></span>
         <span class="ws-status">Connected</span>
-        <button class="ws-exit" type="button">Classic</button>
+        <select class="ws-shell-layer-select" aria-label="UI layout">
+          <option value="focused">Default Chat</option>
+          <option value="classic">Classic</option>
+          <option value="workstation">Web Browser</option>
+        </select>
         <button class="ws-killswitch" type="button" title="Shut down all services" aria-label="Shut down all services">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="m13 2-9 13h7l-1 7 9-13h-7l1-7Z"/>
@@ -278,7 +282,7 @@ export function initWorkstationShell({
   const paletteList = shell.querySelector('.ws-palette__list');
   const commandTrigger = shell.querySelector('.ws-command-trigger');
   const workspaceName = shell.querySelector('.ws-workspace-name');
-  const exitButton = shell.querySelector('.ws-exit');
+  const shellLayerSelect = shell.querySelector('.ws-shell-layer-select');
   const workstationKillButton = shell.querySelector('.ws-killswitch');
   const toggleButton = document.getElementById('workstation-toggle');
 
@@ -301,11 +305,16 @@ export function initWorkstationShell({
   startClock();
   observeConnection();
 
-  exitButton.addEventListener('click', () => setActive(false));
+  shellLayerSelect.value = getSavedShellLayer();
+  shellLayerSelect.addEventListener('change', () => setSavedShellLayer(shellLayerSelect.value));
   workstationKillButton?.addEventListener('click', () => {
     document.getElementById('killswitch-btn')?.click();
   });
-  window.addEventListener(SHELL_LAYER_EVENT, (event) => applyLayer(readShellLayerFromEvent(event)));
+  window.addEventListener(SHELL_LAYER_EVENT, (event) => {
+    const layer = readShellLayerFromEvent(event);
+    shellLayerSelect.value = layer;
+    applyLayer(layer);
+  });
   window.addEventListener(LEGACY_WORKSTATION_MODE_EVENT, (event) => {
     if (event?.detail?.layer) return;
     applyLayer(readShellLayerFromEvent(event));
