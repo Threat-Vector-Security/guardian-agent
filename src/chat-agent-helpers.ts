@@ -26,6 +26,7 @@ import {
   DEFAULT_ASSISTANT_SECURITY_MONITORING_PROFILE,
   DEFAULT_SECURITY_OPERATING_MODE,
   DEFAULT_SECURITY_TRIAGE_LLM_PROVIDER,
+  detectRuntimeEnvironment,
   inferRuntimeDeploymentProfile,
 } from './runtime/security-controls.js';
 import { resolveDegradedFallbackConfig } from './sandbox/security-controls.js';
@@ -98,24 +99,12 @@ function describeDeploymentProfile(profile: string): string {
   }
 }
 
-function describeRuntimePlatform(env: NodeJS.ProcessEnv): string | undefined {
-  if (env.FLY_APP_NAME || env.FLY_MACHINE_ID) {
-    return env.FLY_APP_NAME ? `Fly.io app ${env.FLY_APP_NAME}` : 'Fly.io';
-  }
-  if (env.K_SERVICE) return `Google Cloud Run service ${env.K_SERVICE}`;
-  if (env.VERCEL) return 'Vercel';
-  if (env.AWS_EXECUTION_ENV) return 'AWS runtime';
-  if (env.WEBSITE_SITE_NAME) return `Azure App Service ${env.WEBSITE_SITE_NAME}`;
-  if (env.RENDER_SERVICE_ID) return 'Render';
-  return undefined;
-}
-
 function buildRuntimeEnvironmentPromptSection(
   config: GuardianAgentConfig | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): PromptAssemblyAdditionalSection {
-  const profile = config?.assistant.security?.deploymentProfile ?? inferRuntimeDeploymentProfile(env);
-  const platform = describeRuntimePlatform(env);
+  const detection = detectRuntimeEnvironment(env);
+  const profile = config?.assistant.security?.deploymentProfile ?? detection.deploymentProfile;
   const runtimeLabel = describeDeploymentProfile(profile);
   return {
     section: 'runtime_environment',
@@ -124,8 +113,9 @@ function buildRuntimeEnvironmentPromptSection(
     content: [
       '<runtime-environment>',
       `guardianDeploymentProfile: ${profile}`,
+      `guardianRuntimeKind: ${detection.kind}`,
       `guardianRuntime: ${runtimeLabel}`,
-      ...(platform ? [`runtimePlatform: ${platform}`] : []),
+      ...(detection.platform ? [`runtimePlatform: ${detection.platform}`] : []),
       'providerLane: The response source/model label is separate from where Guardian itself is running. Managed cloud, Ollama Cloud, frontier, and model names describe the LLM provider for this turn.',
       'executionSandbox: Coding backends and remote sandboxes are also separate from Guardian runtime. Only claim sandbox execution when an active coding/backend workspace is actually running there.',
       'securityPosture: Use guardianDeploymentProfile for security recommendations and explain cloud/workstation capability differences instead of assuming local host or filesystem access.',

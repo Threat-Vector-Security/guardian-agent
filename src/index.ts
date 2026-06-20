@@ -114,6 +114,7 @@ import {
   DEFAULT_ASSISTANT_SECURITY_MONITORING_PROFILE,
   DEFAULT_SECURITY_OPERATING_MODE,
   DEFAULT_SECURITY_TRIAGE_LLM_PROVIDER,
+  detectRuntimeEnvironment,
   inferRuntimeDeploymentProfile,
   type DeploymentProfile,
   type SecurityOperatingMode,
@@ -6575,6 +6576,12 @@ async function main(): Promise<void> {
       };
     }
     if (isDegradedSandboxFallbackActive(liveSandboxConfig, sandboxHealth) && !resolveDegradedFallbackConfig(liveSandboxConfig).allowManualCodeTerminals) {
+      const runtimeEnvironment = detectRuntimeEnvironment();
+      const riskTarget = runtimeEnvironment.kind === 'cloud'
+        ? 'cloud runtime'
+        : runtimeEnvironment.kind === 'container'
+          ? 'container runtime'
+          : 'host workstation';
       runtime.auditLog?.record?.({
         type: 'action_denied',
         severity: 'warn',
@@ -6588,7 +6595,7 @@ async function main(): Promise<void> {
       });
       return {
         allowed: false,
-        reason: 'Manual code terminals stay disabled by default on degraded sandbox backends. Enable them in Configuration > Security if you explicitly accept the host risk.',
+        reason: `Manual code terminals stay disabled by default on degraded sandbox backends. Enable them in Configuration > Security if you explicitly accept the ${riskTarget} risk.`,
       };
     }
     return { allowed: true };

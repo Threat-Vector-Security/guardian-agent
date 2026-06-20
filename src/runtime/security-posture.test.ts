@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assessSecurityPosture } from './security-posture.js';
-import { inferRuntimeDeploymentProfile } from './security-controls.js';
+import { detectRuntimeEnvironment, inferRuntimeDeploymentProfile } from './security-controls.js';
 
 describe('assessSecurityPosture', () => {
   it('stays in monitor when there are no active alerts', () => {
@@ -242,6 +242,20 @@ describe('assessSecurityPosture', () => {
 describe('inferRuntimeDeploymentProfile', () => {
   it('detects Fly.io runtimes as cloud deployments', () => {
     expect(inferRuntimeDeploymentProfile({ FLY_APP_NAME: 'guardian-agent-example' })).toBe('cloud');
+  });
+
+  it('detects generic managed runtimes as cloud deployments', () => {
+    expect(inferRuntimeDeploymentProfile({ KUBERNETES_SERVICE_HOST: '10.0.0.1' })).toBe('cloud');
+    expect(inferRuntimeDeploymentProfile({ RAILWAY_SERVICE_ID: 'svc_123' })).toBe('cloud');
+    expect(inferRuntimeDeploymentProfile({ DYNO: 'web.1' })).toBe('cloud');
+  });
+
+  it('detects generic containerized runtimes separately from cloud profile', () => {
+    expect(detectRuntimeEnvironment({ container: 'oci' })).toMatchObject({
+      kind: 'container',
+      deploymentProfile: 'personal',
+      platform: 'containerized runtime',
+    });
   });
 
   it('defaults non-cloud runtimes to personal', () => {

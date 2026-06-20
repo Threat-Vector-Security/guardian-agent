@@ -29,11 +29,13 @@ import {
 import { normalizeCpanelConnectionConfig } from '../tools/cloud/cpanel-profile.js';
 import { normalizeConfigInputs, normalizeHttpUrlInput } from './input-normalization.js';
 import { getGuardianBaseDir } from '../util/env.js';
+import { DEFAULT_DEGRADED_FALLBACK_CONFIG, DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
 import {
   isAssistantSecurityAutoContainmentCategory,
   isAssistantSecurityAutoContainmentSeverity,
   isAssistantSecurityMonitoringProfile,
   isDeploymentProfile,
+  detectRuntimeEnvironment,
   inferRuntimeDeploymentProfile,
   isSecurityOperatingMode,
   isSecurityTriageLlmProvider,
@@ -152,6 +154,17 @@ function hasExplicitDeploymentProfile(config: Partial<GuardianAgentConfig>): boo
     && Object.prototype.hasOwnProperty.call(security, 'deploymentProfile');
 }
 
+function hasExplicitDegradedFallbackAllowance(
+  config: Partial<GuardianAgentConfig>,
+  key: 'allowManualCodeTerminals',
+): boolean {
+  const degradedFallback = config.assistant?.tools?.sandbox?.degradedFallback;
+  return !!degradedFallback
+    && typeof degradedFallback === 'object'
+    && !Array.isArray(degradedFallback)
+    && Object.prototype.hasOwnProperty.call(degradedFallback, key);
+}
+
 function applyRuntimeDeploymentProfileDefault(
   config: GuardianAgentConfig,
   source: Partial<GuardianAgentConfig>,
@@ -173,6 +186,45 @@ function applyRuntimeDeploymentProfileDefault(
         ...DEFAULT_CONFIG.assistant.security!,
         ...config.assistant.security,
         deploymentProfile: inferredProfile,
+      },
+    },
+  };
+}
+
+function applyRuntimeSandboxDefaults(
+  config: GuardianAgentConfig,
+  source: Partial<GuardianAgentConfig>,
+): GuardianAgentConfig {
+  if (hasExplicitDegradedFallbackAllowance(source, 'allowManualCodeTerminals')) {
+    return config;
+  }
+
+  const detection = detectRuntimeEnvironment();
+  const explicitProfile = hasExplicitDeploymentProfile(source)
+    ? config.assistant.security?.deploymentProfile
+    : undefined;
+  const defaultAllowManualTerminals = explicitProfile
+    ? explicitProfile === 'cloud'
+    : detection.kind === 'cloud' || detection.kind === 'container';
+  const sandbox = config.assistant.tools.sandbox ?? DEFAULT_SANDBOX_CONFIG;
+  if (!defaultAllowManualTerminals || sandbox.degradedFallback?.allowManualCodeTerminals) {
+    return config;
+  }
+
+  return {
+    ...config,
+    assistant: {
+      ...config.assistant,
+      tools: {
+        ...config.assistant.tools,
+        sandbox: {
+          ...sandbox,
+          degradedFallback: {
+            ...DEFAULT_DEGRADED_FALLBACK_CONFIG,
+            ...sandbox.degradedFallback,
+            allowManualCodeTerminals: true,
+          },
+        },
       },
     },
   };
@@ -1817,6 +1869,7 @@ export function loadConfigFromFile(filePath: string, options?: ConfigLoadOptions
   }
 
   merged = applyRuntimeDeploymentProfileDefault(merged, interpolated);
+  merged = applyRuntimeSandboxDefaults(merged, interpolated);
 
   // Resolve unified operator controls (sandbox_mode, approval_policy, writable_roots)
   merged = resolveUnifiedOperatorControls(merged);
@@ -1928,9 +1981,10 @@ export function loadConfig(filePath?: string, options?: ConfigLoadOptions): Guar
       structuredClone(DEFAULT_CONFIG),
       {},
     );
-    applyDerivedDefaultProvider(fallback);
-    enforceSecurityBaseline(fallback, 'config_file');
-    return fallback;
+    const withSandboxDefaults = applyRuntimeSandboxDefaults(fallback, {});
+    applyDerivedDefaultProvider(withSandboxDefaults);
+    enforceSecurityBaseline(withSandboxDefaults, 'config_file');
+    return withSandboxDefaults;
   }
 
   return loadConfigFromFile(path, options);

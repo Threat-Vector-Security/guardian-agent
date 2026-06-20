@@ -1549,6 +1549,40 @@ runtime:
     vi.unstubAllEnvs();
   });
 
+  it('enables manual code terminals by default on detected cloud runtimes', () => {
+    vi.stubEnv('KUBERNETES_SERVICE_HOST', '10.0.0.1');
+    const configPath = join(TEST_DIR, 'kubernetes-profile.yaml');
+    writeFileSync(
+      configPath,
+      `
+runtime:
+  logLevel: info
+`,
+    );
+
+    const config = loadConfigFromFile(configPath);
+    expect(config.assistant.security?.deploymentProfile).toBe('cloud');
+    expect(config.assistant.tools.sandbox.degradedFallback?.allowManualCodeTerminals).toBe(true);
+    vi.unstubAllEnvs();
+  });
+
+  it('enables manual code terminals by default in generic containers', () => {
+    vi.stubEnv('container', 'oci');
+    const configPath = join(TEST_DIR, 'container-profile.yaml');
+    writeFileSync(
+      configPath,
+      `
+runtime:
+  logLevel: info
+`,
+    );
+
+    const config = loadConfigFromFile(configPath);
+    expect(config.assistant.security?.deploymentProfile).toBe('personal');
+    expect(config.assistant.tools.sandbox.degradedFallback?.allowManualCodeTerminals).toBe(true);
+    vi.unstubAllEnvs();
+  });
+
   it('preserves an explicit deployment profile in cloud runtime envs', () => {
     vi.stubEnv('FLY_APP_NAME', 'guardian-agent-example');
     const configPath = join(TEST_DIR, 'explicit-profile.yaml');
@@ -1563,6 +1597,26 @@ assistant:
 
     const config = loadConfigFromFile(configPath);
     expect(config.assistant.security?.deploymentProfile).toBe('personal');
+    vi.unstubAllEnvs();
+  });
+
+  it('preserves an explicit manual terminal degraded-fallback setting in cloud runtime envs', () => {
+    vi.stubEnv('FLY_APP_NAME', 'guardian-agent-example');
+    const configPath = join(TEST_DIR, 'explicit-terminal-fallback.yaml');
+    writeFileSync(
+      configPath,
+      `
+assistant:
+  tools:
+    sandbox:
+      degradedFallback:
+        allowManualCodeTerminals: false
+`,
+    );
+
+    const config = loadConfigFromFile(configPath);
+    expect(config.assistant.security?.deploymentProfile).toBe('cloud');
+    expect(config.assistant.tools.sandbox.degradedFallback?.allowManualCodeTerminals).toBe(false);
     vi.unstubAllEnvs();
   });
 
@@ -2083,6 +2137,7 @@ describe('loadConfig', () => {
     vi.stubEnv('FLY_MACHINE_ID', 'machine-example');
     const config = loadConfig('/nonexistent/path/config.yaml');
     expect(config.assistant.security?.deploymentProfile).toBe('cloud');
+    expect(config.assistant.tools.sandbox.degradedFallback?.allowManualCodeTerminals).toBe(true);
     vi.unstubAllEnvs();
   });
 });

@@ -573,6 +573,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use the inline editor search beside `Inspect` to search within the current file, jump to each match in Monaco, and step forward or backward through repeated hits without opening the full Monaco find widget.',
                   'The editor theme selector can follow the current app bundle by default, or you can pin a different code theme when you want the IDE to diverge from the rest of the UI.',
                   'Manual terminals remain operator-controlled. Assistant actions still stay under approvals and policy rather than taking over a terminal directly.',
+                  'Cloud or containerized Guardian runtimes allow manual Code terminals on degraded sandbox backends by default; local workstation runtimes keep that fallback off unless you enable it in Configuration > Security.',
                   'Manual terminals are for operator use rather than a substitute for guarded assistant actions.',
                 ],
               },
