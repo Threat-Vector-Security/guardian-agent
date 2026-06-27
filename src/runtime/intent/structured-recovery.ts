@@ -224,10 +224,14 @@ export function normalizeIntentGatewayDecision(
     operation,
     classifierSource,
   );
-  const derivedWorkload = deriveWorkloadMetadata(route, operation, {
+  const workloadMetadataSource = {
     ...parsed,
     ...entityResolution.entities,
-  });
+  };
+  if (!entityResolution.entities.uiSurface) {
+    delete workloadMetadataSource.uiSurface;
+  }
+  const derivedWorkload = deriveWorkloadMetadata(route, operation, workloadMetadataSource);
   const explicitProviderConfigRequest = route === 'general_assistant'
     && isExplicitProviderConfigRequest(repairContext?.sourceContent);
   const normalizedExecutionClass = normalizeExecutionClass(parsed.executionClass);

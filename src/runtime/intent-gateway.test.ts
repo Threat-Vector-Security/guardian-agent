@@ -3120,6 +3120,38 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('tool_loop');
   });
 
+  it('does not preserve AI-provider config routing for connected email account questions', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'what email do you have connected',
+        channel: 'telegram',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'read',
+          summary: 'Checks connected email accounts.',
+          uiSurface: 'config',
+          executionClass: 'provider_crud',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'tool_loop',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('general_assistant');
+    expect(result.decision.entities.uiSurface).toBeUndefined();
+    expect(result.decision.executionClass).not.toBe('provider_crud');
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+  });
+
   it('includes file-grounded coding review guidance in the gateway system prompt', async () => {
     const gateway = new IntentGateway();
     let inspectedSystemPrompt = '';

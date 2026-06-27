@@ -68,10 +68,12 @@ export function resolveIntentGatewayEntities(
   const normalizedSourceContent = rawSourceContent.toLowerCase();
   const providerConfigRequest = isExplicitProviderConfigRequest(rawSourceContent);
   const provenance: NonNullable<IntentGatewayDecisionProvenance['entities']> = {};
-  const uiSurface = normalizeUiSurface(parsed.uiSurface)
-    ?? (route === 'general_assistant' && providerConfigRequest ? 'config' : undefined);
+  const parsedUiSurface = normalizeUiSurface(parsed.uiSurface);
+  const uiSurface = shouldKeepParsedUiSurface(parsedUiSurface, route, providerConfigRequest)
+    ? parsedUiSurface
+    : (route === 'general_assistant' && providerConfigRequest ? 'config' : undefined);
   if (uiSurface) {
-    provenance.uiSurface = normalizeUiSurface(parsed.uiSurface)
+    provenance.uiSurface = uiSurface === parsedUiSurface
       ? classifierSource
       : 'resolver.provider_config';
   }
@@ -405,6 +407,15 @@ export function resolveIntentGatewayEntities(
     entities,
     ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
   };
+}
+
+function shouldKeepParsedUiSurface(
+  uiSurface: IntentGatewayEntities['uiSurface'] | undefined,
+  route: IntentGatewayDecision['route'],
+  providerConfigRequest: boolean,
+): boolean {
+  if (!uiSurface) return false;
+  return uiSurface !== 'config' || route !== 'general_assistant' || providerConfigRequest;
 }
 
 function hasAttachedCodeSessionReference(repairContext: IntentGatewayRepairContext | undefined): boolean {
