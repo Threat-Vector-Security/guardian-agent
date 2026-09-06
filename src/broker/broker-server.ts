@@ -3,9 +3,10 @@ import { getMemoryMutationIntentDeniedMessage, isMemoryMutationToolName } from '
 import type { ToolExecutor } from '../tools/executor.js';
 import type { Runtime } from '../runtime/runtime.js';
 import type { CapabilityTokenManager } from './capability-token.js';
-import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from './types.js';
+import type { CapabilityToken, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from './types.js';
+import { CapabilityController } from '../guardian/guardian.js';
 import { assignProvenance } from './provenance.js';
-import type { ToolExecutionRequest } from '../tools/types.js';
+import type { ToolDefinition, ToolJobRecord, ToolExecutionRequest } from '../tools/types.js';
 import { parseToolJobOutputPreview } from '../tools/job-results.js';
 import type { ChatMessage, ChatOptions, ChatResponse, LLMProvider } from '../llm/types.js';
 import { chatProviderWithTimeout } from '../llm/model-fallback.js';
@@ -33,6 +34,8 @@ export class BrokerServer {
   private readonly workerId: string;
   private readonly onNotification?: (notification: JsonRpcNotification) => void;
   private buffer = '';
+  private readonly capabilityController = new CapabilityController();
+  private readonly outputTrust = new Map<string, { level: 'trusted' | 'low_trust' | 'quarantined'; reasons: string[] }>();
 
   constructor(options: BrokerServerOptions) {
     this.tools = options.tools;
@@ -105,29 +108,35 @@ export class BrokerServer {
 
       switch (request.method) {
         case 'tool.search': {
-          result = { tools: this.tools.searchTools(String(request.params.query ?? '')) };
+          result = { tools: this.tools.searchTools(String(request.params.query ?? '')).filter((tool) => this.isToolAllowed(token, tool)) };
           break;
         }
 
         case 'tool.listLoaded': {
           const baseTools = this.tools.listAlwaysLoadedDefinitions();
-          const codeContext = isRecord(request.params.codeContext) ? request.params.codeContext : null;
+          const codeContext = token.executionContext?.codeContext;
           const tools = codeContext
             ? [
                 ...baseTools,
                 ...this.tools.listCodeSessionEagerToolDefinitions().filter((definition) => !baseTools.some((base) => base.name === definition.name)),
               ]
             : baseTools;
-          result = { tools };
+          result = { tools: tools.filter((tool) => this.isToolAllowed(token, tool)) };
           break;
         }
 
         case 'tool.call': {
           const toolName = String(request.params.toolName ?? '');
           const args = isRecord(request.params.args) ? request.params.args : {};
-          const requestId = typeof request.params.requestId === 'string' ? request.params.requestId : undefined;
+          const context = token.executionContext ?? {};
+          const requestId = context.requestId;
+          const toolDefinition = this.tools.getToolDefinition(toolName);
+          if (!toolDefinition || !this.isToolAllowed(token, toolDefinition)) {
+            throw new Error('Tool is outside the capability token category grant');
+          }
+          const trust = this.outputTrust.get(token.id);
 
-          if (isMemoryMutationToolName(toolName) && request.params.allowModelMemoryMutation !== true) {
+          if (isMemoryMutationToolName(toolName) && context.allowModelMemoryMutation !== true) {
             result = {
               success: false,
               status: 'denied',
@@ -141,48 +150,37 @@ export class BrokerServer {
             toolName,
             args,
             agentId: token.agentId,
-            requestText: typeof request.params.requestText === 'string' ? request.params.requestText : undefined,
-            userId: typeof request.params.userId === 'string' ? request.params.userId : token.authorizedBy,
-            surfaceId: typeof request.params.surfaceId === 'string' ? request.params.surfaceId : undefined,
-            principalId: typeof request.params.principalId === 'string' ? request.params.principalId : token.authorizedBy,
-            principalRole: request.params.principalRole === 'approver'
-              ? 'approver'
-              : request.params.principalRole === 'viewer'
-                ? 'viewer'
-                : request.params.principalRole === 'operator'
-                  ? 'operator'
-                  : 'owner',
+            ...context,
+            userId: token.authorizedBy,
+            principalId: context.principalId ?? token.authorizedBy,
+            principalRole: context.principalRole ?? 'viewer',
             channel: token.authorizedChannel,
             requestId,
-            contentTrustLevel: request.params.contentTrustLevel === 'quarantined'
-              ? 'quarantined'
-              : request.params.contentTrustLevel === 'low_trust'
-                ? 'low_trust'
-                : 'trusted',
-            taintReasons: Array.isArray(request.params.taintReasons)
-              ? request.params.taintReasons.filter((value): value is string => typeof value === 'string')
-              : undefined,
-            derivedFromTaintedContent: request.params.derivedFromTaintedContent === true,
-            allowModelMemoryMutation: request.params.allowModelMemoryMutation === true,
-            scheduleId: typeof request.params.scheduleId === 'string' ? request.params.scheduleId : undefined,
+            contentTrustLevel: trust?.level ?? context.contentTrustLevel ?? 'trusted',
+            taintReasons: [...new Set([...(context.taintReasons ?? []), ...(trust?.reasons ?? [])])],
+            derivedFromTaintedContent: context.derivedFromTaintedContent === true || (trust !== undefined && trust.level !== 'trusted'),
             dryRun: request.params.dryRun === true,
-            activeSkills: Array.isArray(request.params.activeSkills)
-              ? request.params.activeSkills.filter((value): value is string => typeof value === 'string')
-              : undefined,
-            ...(request.params.codeContext && typeof request.params.codeContext === 'object'
-              ? { codeContext: request.params.codeContext as { workspaceRoot: string; sessionId?: string } }
-              : {}),
+            agentContext: {
+              checkAction: (action) => {
+                const guardedAction = { ...action, agentId: token.agentId, capabilities: token.grantedCapabilities };
+                // This mandatory grant check remains active even if a runtime disables other Guardian controllers.
+                const capabilityDenied = this.capabilityController.check(guardedAction);
+                if (capabilityDenied && !capabilityDenied.allowed) throw new Error(capabilityDenied.reason);
+                const admitted = this.runtime.guardian.check(guardedAction);
+                if (!admitted.allowed) throw new Error(`Action denied: ${admitted.reason}`);
+              },
+            },
             ...(request.params.toolContextMode === 'tight' || request.params.toolContextMode === 'standard'
               ? { toolContextMode: request.params.toolContextMode }
               : {}),
           };
 
-          const toolDefinition = this.tools.getToolDefinition(toolName);
           const runResponse = await this.tools.runTool(executionRequest);
           const provenance = assignProvenance(toolName, toolDefinition?.category);
           const providerKind = provenance.source === 'remote' ? 'external' : 'local';
           const rawOutput = runResponse.output;
           const scannedOutput = this.runtime.outputGuardian.scanToolResult(toolName, rawOutput, { providerKind });
+          this.retainOutputTrust(token, scannedOutput.trustLevel, scannedOutput.taintReasons);
           const approvalSummary = runResponse.approvalId
             ? this.tools.getApprovalSummaries([runResponse.approvalId]).get(runResponse.approvalId)
             : undefined;
@@ -224,34 +222,15 @@ export class BrokerServer {
         }
 
         case 'approval.decide': {
-          const approvalId = String(request.params.approvalId ?? '');
-          const decision = request.params.decision === 'denied' ? 'denied' : 'approved';
-          const actor = String(request.params.actor ?? token.authorizedBy);
-          const actorRole = request.params.actorRole === 'approver'
-            ? 'approver'
-            : request.params.actorRole === 'viewer'
-              ? 'viewer'
-              : request.params.actorRole === 'operator'
-                ? 'operator'
-                : 'owner';
-          const reason = typeof request.params.reason === 'string' ? request.params.reason : undefined;
-          const decided = await this.tools.decideApproval(approvalId, decision, actor, actorRole, reason);
-          result = {
-            success: decided.success,
-            approved: decided.approved,
-            executionSucceeded: decided.executionSucceeded,
-            message: decided.message,
-            status: decided.result?.status ?? decided.job?.status,
-            jobId: decided.job?.id ?? decided.result?.jobId,
-          };
-          break;
+          // Approval decisions are authenticated human/control-plane operations, never worker authority.
+          throw new Error('Workers cannot decide approvals; use the authenticated approval control plane');
         }
 
         case 'approval.result': {
           const approvalId = String(request.params.approvalId ?? '');
           const approvals = this.tools.listApprovals(500);
-          const approval = approvals.find((entry) => entry.id === approvalId);
-          const job = this.tools.listJobs(500).find((entry) => entry.approvalId === approvalId);
+          const job = this.tools.listJobs(500).find((entry) => entry.approvalId === approvalId && this.ownsJob(token, entry));
+          const approval = job ? approvals.find((entry) => entry.id === approvalId && entry.jobId === job.id) : undefined;
           result = {
             found: !!approval,
             status: approval?.status ?? 'not_found',
@@ -272,7 +251,8 @@ export class BrokerServer {
         case 'approval.status': {
           const approvalId = String(request.params.approvalId ?? '');
           const approvals = this.tools.listApprovals(500);
-          const approval = approvals.find((entry) => entry.id === approvalId);
+          const job = this.tools.listJobs(500).find((entry) => entry.approvalId === approvalId && this.ownsJob(token, entry));
+          const approval = job ? approvals.find((entry) => entry.id === approvalId && entry.jobId === job.id) : undefined;
           result = {
             status: approval?.status ?? 'not_found',
             decidedBy: approval?.decidedBy,
@@ -362,14 +342,16 @@ export class BrokerServer {
         }
 
         case 'job.list': {
-          const userId = typeof request.params.userId === 'string' ? request.params.userId : undefined;
-          const channel = typeof request.params.channel === 'string' ? request.params.channel : undefined;
+          const userId = token.authorizedBy;
+          const channel = token.authorizedChannel;
           const requestId = typeof request.params.requestId === 'string' ? request.params.requestId : undefined;
           const codeSessionId = typeof request.params.codeSessionId === 'string' ? request.params.codeSessionId : undefined;
-          const limit = typeof request.params.limit === 'number' ? request.params.limit : 50;
+          const limit = typeof request.params.limit === 'number' && Number.isFinite(request.params.limit)
+            ? Math.max(1, Math.min(500, Math.floor(request.params.limit))) : 50;
           const jobs = this.tools.listJobs(limit)
             .filter((job) => (
-              (!userId || job.userId === userId)
+              this.ownsJob(token, job)
+              && job.userId === userId
               && (!channel || job.channel === channel)
               && (!requestId || job.requestId === requestId)
               && (!codeSessionId || job.codeSessionId === codeSessionId)
@@ -399,6 +381,14 @@ export class BrokerServer {
 
       this.sendResponse({ jsonrpc: '2.0', id: request.id, result });
     } catch (error) {
+      this.runtime.auditLog?.record({
+        type: 'broker_action',
+        severity: 'warn',
+        agentId: token.agentId,
+        userId: token.authorizedBy,
+        channel: token.authorizedChannel,
+        details: { method: request.method, workerId: token.workerId, outcome: 'denied_or_failed' },
+      });
       this.sendResponse({
         jsonrpc: '2.0',
         id: request.id,
@@ -408,6 +398,30 @@ export class BrokerServer {
         },
       });
     }
+  }
+
+  private isToolAllowed(token: CapabilityToken, tool: ToolDefinition): boolean {
+    return token.allowedToolCategories === undefined
+      || (tool.category !== undefined && token.allowedToolCategories.includes(tool.category));
+  }
+
+  private ownsJob(token: CapabilityToken, job: ToolJobRecord): boolean {
+    return job.userId === token.authorizedBy
+      && job.channel === token.authorizedChannel
+      && job.agentId === token.agentId
+      && job.principalId === (token.executionContext?.principalId ?? token.authorizedBy)
+      && job.codeSessionId === token.executionContext?.codeContext?.sessionId;
+  }
+
+  private retainOutputTrust(token: CapabilityToken, level: 'trusted' | 'low_trust' | 'quarantined', reasons: string[]): void {
+    // Worker-reported trust can never clear taint observed by the supervisor.
+    for (const id of this.outputTrust.keys()) {
+      if (!this.tokenManager.get(id)) this.outputTrust.delete(id);
+    }
+    const prior = this.outputTrust.get(token.id);
+    const levels = ['trusted', 'low_trust', 'quarantined'] as const;
+    const strongest = Math.max(levels.indexOf(prior?.level ?? token.executionContext?.contentTrustLevel ?? 'trusted'), levels.indexOf(level));
+    this.outputTrust.set(token.id, { level: levels[strongest], reasons: [...new Set([...(prior?.reasons ?? []), ...reasons])] });
   }
 
   private handleNotification(notification: JsonRpcNotification): void {

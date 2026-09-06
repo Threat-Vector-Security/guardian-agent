@@ -1,5 +1,7 @@
 # GuardianAgent Architecture Overview
 
+> **Default product:** Guardian's security conversion is described in [SECURITY-CONVERSION.md](SECURITY-CONVERSION.md). The architecture below documents the retained legacy assistant. The new security entrypoint serves a shared authenticated operations service and ContextCypher workspace without starting the assistant runtime.
+
 ## Design Philosophy
 
 GuardianAgent is a **security-first, event-driven AI agent orchestration system**. It is a self-contained orchestrator with curated capabilities, strict guardrails, and a brokered worker boundary for the built-in chat/planner execution path.

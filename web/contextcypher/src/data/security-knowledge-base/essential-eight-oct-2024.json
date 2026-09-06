@@ -1,0 +1,2156 @@
+{
+  "metadata": {
+    "version": "October 2024",
+    "lastUpdated": "2026-02-22T04:05:49.153Z",
+    "source": "Essential Eight derived from Australian ISM December 2025",
+    "description": "Essential Eight mitigation strategies with maturity levels"
+  },
+  "controls": [
+    {
+      "identifier": "ISM-0123",
+      "description": "Cyber security incidents are reported to the chief information security officer, or one of their delegates, as soon as possible after they occur or are discovered.",
+      "guideline": "Guidelines for cyber security incidents",
+      "section": "Managing cyber security incidents",
+      "topic": "Reporting cyber security incidents",
+      "revision": "4",
+      "updated": "Jun-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-0140",
+      "description": "Cyber security incidents are reported to ASD as soon as possible after they occur or are discovered.",
+      "guideline": "Guidelines for cyber security incidents",
+      "section": "Managing cyber security incidents",
+      "topic": "Reporting cyber security incidents to ASD",
+      "revision": "8",
+      "updated": "Sep-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1819",
+      "description": "Following the identification of a cyber security incident, the cyber security incident response plan is enacted.",
+      "guideline": "Guidelines for cyber security incidents",
+      "section": "Responding to cyber security incidents",
+      "topic": "Enacting cyber security incident response plans",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1507",
+      "description": "Requests for privileged access to systems and their resources are validated when first requested.",
+      "guideline": "Guidelines for personnel security",
+      "section": "Access to systems and their resources",
+      "topic": "Privileged access to systems",
+      "revision": "4",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1508",
+      "description": "Privileged access to systems and their resources is limited to only what is required for users and services to undertake their duties.",
+      "guideline": "Guidelines for personnel security",
+      "section": "Access to systems and their resources",
+      "topic": "Privileged access to systems",
+      "revision": "4",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1175",
+      "description": "Privileged user accounts (excluding those explicitly authorised to access online services) are prevented from accessing the internet, email and web services.",
+      "guideline": "Guidelines for personnel security",
+      "section": "Access to systems and their resources",
+      "topic": "Privileged access to systems",
+      "revision": "6",
+      "updated": "Sep-24",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1883",
+      "description": "Privileged user accounts explicitly authorised to access online services are strictly limited to only what is required for users and services to undertake their duties.",
+      "guideline": "Guidelines for personnel security",
+      "section": "Access to systems and their resources",
+      "topic": "Privileged access to systems",
+      "revision": "1",
+      "updated": "Sep-24",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1649",
+      "description": "Just-in-time administration is used for the administration of systems and their resources.",
+      "guideline": "Guidelines for personnel security",
+      "section": "Access to systems and their resources",
+      "topic": "Privileged access to systems",
+      "revision": "1",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-0445",
+      "description": "Privileged users are assigned a dedicated privileged user account to be used solely for duties requiring privileged access.",
+      "guideline": "Guidelines for personnel security",
+      "section": "Access to systems and their resources",
+      "topic": "Privileged access to systems",
+      "revision": "8",
+      "updated": "Sep-24",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1509",
+      "description": "Privileged access events are centrally logged.",
+      "guideline": "Guidelines for personnel security",
+      "section": "Access to systems and their resources",
+      "topic": "Privileged access to systems",
+      "revision": "3",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1650",
+      "description": "Privileged user account and security group management events are centrally logged.",
+      "guideline": "Guidelines for personnel security",
+      "section": "Access to systems and their resources",
+      "topic": "Privileged access to systems",
+      "revision": "3",
+      "updated": "Sep-24",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1648",
+      "description": "Privileged access to systems and their resources are disabled after 45 days of inactivity.",
+      "guideline": "Guidelines for personnel security",
+      "section": "Access to systems and their resources",
+      "topic": "Suspension of access to systems",
+      "revision": "2",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1647",
+      "description": "Privileged access to systems and their resources are disabled after 12 months unless revalidated.",
+      "guideline": "Guidelines for personnel security",
+      "section": "Access to systems and their resources",
+      "topic": "Suspension of access to systems",
+      "revision": "2",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1407",
+      "description": "The latest release, or the previous release, of operating systems are used.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Operating system releases and versions",
+      "revision": "5",
+      "updated": "Dec-22",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1654",
+      "description": "Internet Explorer 11 is disabled or removed.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Hardening operating system configurations",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1655",
+      "description": ".NET Framework 3.5 (includes .NET 2.0 and 3.0) is disabled or removed.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Hardening operating system configurations",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-0843",
+      "description": "Application control is implemented on workstations.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Application control",
+      "revision": "9",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1490",
+      "description": "Application control is implemented on internet-facing servers.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Application control",
+      "revision": "3",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1656",
+      "description": "Application control is implemented on non-internet-facing servers.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Application control",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1870",
+      "description": "Application control is applied to user profiles and temporary folders used by operating systems, web browsers and email clients.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Application control",
+      "revision": "0",
+      "updated": "Sep-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1871",
+      "description": "Application control is applied to all locations other than user profiles and temporary folders used by operating systems, web browsers and email clients.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Application control",
+      "revision": "0",
+      "updated": "Sep-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1657",
+      "description": "Application control restricts the execution of executables, libraries, scripts, installers, compiled HTML, HTML applications and control panel applets to an organisation-approved set.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Application control",
+      "revision": "1",
+      "updated": "Sep-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1658",
+      "description": "Application control restricts the execution of drivers to an organisation-approved set.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Application control",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1544",
+      "description": "Microsoft’s recommended application blocklist is implemented.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Application control",
+      "revision": "3",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1659",
+      "description": "Microsoft’s vulnerable driver blocklist is implemented.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Application control",
+      "revision": "1",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1582",
+      "description": "Application control rulesets are validated on an annual or more frequent basis.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Application control",
+      "revision": "1",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1660",
+      "description": "Allowed and blocked application control events are centrally logged.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Application control",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1889",
+      "description": "Command line process creation events are centrally logged.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "Command Shell",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1621",
+      "description": "Windows PowerShell 2.0 is disabled or removed.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "PowerShell",
+      "revision": "1",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1622",
+      "description": "PowerShell is configured to use Constrained Language Mode.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "PowerShell",
+      "revision": "0",
+      "updated": "Oct-20",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1623",
+      "description": "PowerShell module logging, script block logging and transcription events are centrally logged.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Operating system hardening",
+      "topic": "PowerShell",
+      "revision": "1",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1667",
+      "description": "Microsoft Office is blocked from creating child processes.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1668",
+      "description": "Microsoft Office is blocked from creating executable content.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1669",
+      "description": "Microsoft Office is blocked from injecting code into other processes.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1542",
+      "description": "Microsoft Office is configured to prevent activation of Object Linking and Embedding packages.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "0",
+      "updated": "Jan-19",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1859",
+      "description": "Office productivity suites are hardened using ASD and vendor hardening guidance, with the most restrictive guidance taking precedence when conflicts occur.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1823",
+      "description": "Office productivity suite security settings cannot be changed by users.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "0",
+      "updated": "Mar-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1486",
+      "description": "Web browsers do not process Java from the internet.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "1",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1485",
+      "description": "Web browsers do not process web advertisements from the internet.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "1",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1412",
+      "description": "Web browsers are hardened using ASD and vendor hardening guidance, with the most restrictive guidance taking precedence when conflicts occur.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "6",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1585",
+      "description": "Web browser security settings cannot be changed by users.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "2",
+      "updated": "Mar-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1670",
+      "description": "PDF applications are blocked from creating child processes.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "1",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1860",
+      "description": "PDF applications are hardened using ASD and vendor hardening guidance, with the most restrictive guidance taking precedence when conflicts occur.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "3",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1824",
+      "description": "PDF application security settings cannot be changed by users.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Hardening user application configurations",
+      "revision": "1",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1671",
+      "description": "Microsoft Office macros are disabled for users that do not have a demonstrated business requirement.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Microsoft Office macros",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1488",
+      "description": "Microsoft Office macros in files originating from the internet are blocked.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Microsoft Office macros",
+      "revision": "1",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1672",
+      "description": "Microsoft Office macro antivirus scanning is enabled.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Microsoft Office macros",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1673",
+      "description": "Microsoft Office macros are blocked from making Win32 API calls.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Microsoft Office macros",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1674",
+      "description": "Only Microsoft Office macros running from within a sandboxed environment, a Trusted Location or that are digitally signed by a trusted publisher are allowed to execute.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Microsoft Office macros",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1890",
+      "description": "Microsoft Office macros are checked to ensure they are free of malicious code before being digitally signed or placed within Trusted Locations.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Microsoft Office macros",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1487",
+      "description": "Only privileged users responsible for checking that Microsoft Office macros are free of malicious code can write to and modify content within Trusted Locations.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Microsoft Office macros",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1675",
+      "description": "Microsoft Office macros digitally signed by an untrusted publisher cannot be enabled via the Message Bar or Backstage View.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Microsoft Office macros",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1891",
+      "description": "Microsoft Office macros digitally signed by signatures other than V3 signatures cannot be enabled via the Message Bar or Backstage View.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Microsoft Office macros",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1676",
+      "description": "Microsoft Office’s list of trusted publishers is validated on an annual or more frequent basis.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Microsoft Office macros",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1489",
+      "description": "Microsoft Office macro security settings cannot be changed by users.",
+      "guideline": "Guidelines for system hardening",
+      "section": "User application hardening",
+      "topic": "Microsoft Office macros",
+      "revision": "0",
+      "updated": "Sep-18",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1504",
+      "description": "Multi-factor authentication is used to authenticate users to their organisation’s online services that process, store or communicate their organisation’s sensitive data.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "3",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1679",
+      "description": "Multi-factor authentication is used to authenticate users to third-party online services that process, store or communicate their organisation’s sensitive data.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "1",
+      "updated": "Sep-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1680",
+      "description": "Multi-factor authentication (where available) is used to authenticate users to third-party online services that process, store or communicate their organisation’s non-sensitive data.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "1",
+      "updated": "Sep-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1892",
+      "description": "Multi-factor authentication is used to authenticate users to their organisation’s online customer services that process, store or communicate their organisation’s sensitive customer data.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1893",
+      "description": "Multi-factor authentication is used to authenticate users to third-party online customer services that process, store or communicate their organisation’s sensitive customer data.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1681",
+      "description": "Multi-factor authentication is used to authenticate customers to online customer services that process, store or communicate sensitive customer data.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "3",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1173",
+      "description": "Multi-factor authentication is used to authenticate privileged users of systems.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "4",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-0974",
+      "description": "Multi-factor authentication is used to authenticate unprivileged users of systems.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "6",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1505",
+      "description": "Multi-factor authentication is used to authenticate users of data repositories.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "3",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1401",
+      "description": "Multi-factor authentication uses either: something users have and something users know, or something users have that is unlocked by something users know or are.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "5",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1872",
+      "description": "Multi-factor authentication used for authenticating users of online services is phishing-resistant.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "1",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1873",
+      "description": "Multi-factor authentication used for authenticating customers of online customer services provides a phishing-resistant option.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "1",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2"
+      ]
+    },
+    {
+      "identifier": "ISM-1874",
+      "description": "Multi-factor authentication used for authenticating customers of online customer services is phishing-resistant.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "1",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1682",
+      "description": "Multi-factor authentication used for authenticating users of systems is phishing-resistant.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "3",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1894",
+      "description": "Multi-factor authentication used for authenticating users of data repositories is phishing-resistant.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1683",
+      "description": "Successful and unsuccessful multi-factor authentication events are centrally logged.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Multi-factor authentication",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1685",
+      "description": "Credentials for break glass accounts, local administrator accounts and service accounts are long, unique, unpredictable and managed.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Setting credentials for built-in Administrator accounts, break glass accounts, local administrator accounts and service accounts",
+      "revision": "2",
+      "updated": "Jun-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1896",
+      "description": "Memory integrity functionality is enabled.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Protecting credentials",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1861",
+      "description": "Local Security Authority protection functionality is enabled.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Protecting credentials",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1686",
+      "description": "Credential Guard functionality is enabled.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Protecting credentials",
+      "revision": "1",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1897",
+      "description": "Remote Credential Guard functionality is enabled.",
+      "guideline": "Guidelines for system hardening",
+      "section": "Authentication hardening",
+      "topic": "Protecting credentials",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1898",
+      "description": "Secure Admin Workstations are used in the performance of administrative activities.",
+      "guideline": "Guidelines for system management",
+      "section": "System administration",
+      "topic": "Separate privileged operating environments",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1380",
+      "description": "Privileged users use separate privileged and unprivileged operating environments.",
+      "guideline": "Guidelines for system management",
+      "section": "System administration",
+      "topic": "Separate privileged operating environments",
+      "revision": "5",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1687",
+      "description": "Privileged operating environments are not virtualised within unprivileged operating environments.",
+      "guideline": "Guidelines for system management",
+      "section": "System administration",
+      "topic": "Separate privileged operating environments",
+      "revision": "0",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1688",
+      "description": "Unprivileged user accounts cannot logon to privileged operating environments.",
+      "guideline": "Guidelines for system management",
+      "section": "System administration",
+      "topic": "Separate privileged operating environments",
+      "revision": "1",
+      "updated": "Sep-24",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1689",
+      "description": "Privileged user accounts (excluding local administrator accounts) cannot logon to unprivileged operating environments.",
+      "guideline": "Guidelines for system management",
+      "section": "System administration",
+      "topic": "Separate privileged operating environments",
+      "revision": "1",
+      "updated": "Sep-24",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1387",
+      "description": "Administrative activities are conducted through jump servers.",
+      "guideline": "Guidelines for system management",
+      "section": "System administration",
+      "topic": "Administrative infrastructure",
+      "revision": "2",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1807",
+      "description": "An automated method of asset discovery is used at least fortnightly to support the detection of assets for subsequent vulnerability scanning activities.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Scanning for unmitigated vulnerabilities",
+      "revision": "0",
+      "updated": "Dec-22",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1808",
+      "description": "A vulnerability scanner with an up-to-date vulnerability database is used for vulnerability scanning activities.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Scanning for unmitigated vulnerabilities",
+      "revision": "0",
+      "updated": "Dec-22",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1698",
+      "description": "A vulnerability scanner is used at least daily to identify missing patches or updates for vulnerabilities in online services.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Scanning for unmitigated vulnerabilities",
+      "revision": "1",
+      "updated": "Sep-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1699",
+      "description": "A vulnerability scanner is used at least weekly to identify missing patches or updates for vulnerabilities in office productivity suites, web browsers and their extensions, email clients, PDF applications, and security products.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Scanning for unmitigated vulnerabilities",
+      "revision": "2",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1700",
+      "description": "A vulnerability scanner is used at least fortnightly to identify missing patches or updates for vulnerabilities in applications other than office productivity suites, web browsers and their extensions, email clients, PDF applications, and security products.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Scanning for unmitigated vulnerabilities",
+      "revision": "3",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1701",
+      "description": "A vulnerability scanner is used at least daily to identify missing patches or updates for vulnerabilities in operating systems of internet-facing servers and internet-facing network devices.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Scanning for unmitigated vulnerabilities",
+      "revision": "1",
+      "updated": "Sep-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1702",
+      "description": "A vulnerability scanner is used at least fortnightly to identify missing patches or updates for vulnerabilities in operating systems of workstations, non-internet-facing servers and non-internet-facing network devices.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Scanning for unmitigated vulnerabilities",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1703",
+      "description": "A vulnerability scanner is used at least fortnightly to identify missing patches or updates for vulnerabilities in drivers.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Scanning for unmitigated vulnerabilities",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1900",
+      "description": "A vulnerability scanner is used at least fortnightly to identify missing patches or updates for vulnerabilities in firmware.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Scanning for unmitigated vulnerabilities",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1876",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in online services are applied within 48 hours of release when vulnerabilities are assessed as critical by vendors or when working exploits exist.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "0",
+      "updated": "Sep-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1690",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in online services are applied within two weeks of release when vulnerabilities are assessed as non-critical by vendors and no working exploits exist.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1691",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in office productivity suites, web browsers and their extensions, email clients, PDF applications, and security products are applied within two weeks of release.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "2",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2"
+      ]
+    },
+    {
+      "identifier": "ISM-1692",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in office productivity suites, web browsers and their extensions, email clients, PDF applications, and security products are applied within 48 hours of release when vulnerabilities are assessed as critical by vendors or when working exploits exist.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "2",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1901",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in office productivity suites, web browsers and their extensions, email clients, PDF applications, and security products are applied within two weeks of release when vulnerabilities are assessed as non-critical by vendors and no working exploits exist.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "1",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1693",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in applications other than office productivity suites, web browsers and their extensions, email clients, PDF applications, and security products are applied within one month of release.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "3",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1877",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in operating systems of internet-facing servers and internet-facing network devices are applied within 48 hours of release when vulnerabilities are assessed as critical by vendors or when working exploits exist.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "0",
+      "updated": "Sep-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1694",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in operating systems of internet-facing servers and internet-facing network devices are applied within two weeks of release when vulnerabilities are assessed as non-critical by vendors and no working exploits exist.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1695",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in operating systems of workstations, non-internet-facing servers and non-internet-facing network devices are applied within one month of release.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2"
+      ]
+    },
+    {
+      "identifier": "ISM-1696",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in operating systems of workstations, non-internet-facing servers and non-internet-facing network devices are applied within 48 hours of release when vulnerabilities are assessed as critical by vendors or when working exploits exist.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "1",
+      "updated": "Sep-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1902",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in operating systems of workstations, non-internet-facing servers and non-internet-facing network devices are applied within one month of release when vulnerabilities are assessed as non-critical by vendors and no working exploits exist.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1879",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in drivers are applied within 48 hours of release when vulnerabilities are assessed as critical by vendors or when working exploits exist.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "1",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1697",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in drivers are applied within one month of release when vulnerabilities are assessed as non-critical by vendors and no working exploits exist.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1903",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in firmware are applied within 48 hours of release when vulnerabilities are assessed as critical by vendors or when working exploits exist.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1904",
+      "description": "Patches, updates or other vendor mitigations for vulnerabilities in firmware are applied within one month of release when vulnerabilities are assessed as non-critical by vendors and no working exploits exist.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Mitigating known vulnerabilities",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1905",
+      "description": "Online services that are no longer supported by vendors are removed.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Cessation of support",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1704",
+      "description": "Office productivity suites, web browsers and their extensions, email clients, PDF applications, Adobe Flash Player, and security products that are no longer supported by vendors are removed.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Cessation of support",
+      "revision": "3",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-0304",
+      "description": "Applications other than office productivity suites, web browsers and their extensions, email clients, PDF applications, Adobe Flash Player, and security products that are no longer supported by vendors are removed.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Cessation of support",
+      "revision": "8",
+      "updated": "Jun-25",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1501",
+      "description": "Operating systems that are no longer supported by vendors are replaced.",
+      "guideline": "Guidelines for system management",
+      "section": "System patching",
+      "topic": "Cessation of support",
+      "revision": "1",
+      "updated": "Sep-21",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1511",
+      "description": "Backups of data, applications and settings are performed and retained in accordance with business criticality and business continuity requirements.",
+      "guideline": "Guidelines for system management",
+      "section": "Data backup and restoration",
+      "topic": "Performing and retaining backups",
+      "revision": "4",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1810",
+      "description": "Backups of data, applications and settings are synchronised to enable restoration to a common point in time.",
+      "guideline": "Guidelines for system management",
+      "section": "Data backup and restoration",
+      "topic": "Performing and retaining backups",
+      "revision": "1",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1811",
+      "description": "Backups of data, applications and settings are retained in a secure and resilient manner.",
+      "guideline": "Guidelines for system management",
+      "section": "Data backup and restoration",
+      "topic": "Performing and retaining backups",
+      "revision": "1",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1812",
+      "description": "Unprivileged user accounts cannot access backups belonging to other user accounts.",
+      "guideline": "Guidelines for system management",
+      "section": "Data backup and restoration",
+      "topic": "Backup access",
+      "revision": "1",
+      "updated": "Sep-24",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1813",
+      "description": "Unprivileged user accounts cannot access their own backups.",
+      "guideline": "Guidelines for system management",
+      "section": "Data backup and restoration",
+      "topic": "Backup access",
+      "revision": "1",
+      "updated": "Sep-24",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1705",
+      "description": "Privileged user accounts (excluding backup administrator accounts) cannot access backups belonging to other user accounts.",
+      "guideline": "Guidelines for system management",
+      "section": "Data backup and restoration",
+      "topic": "Backup access",
+      "revision": "2",
+      "updated": "Sep-24",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1706",
+      "description": "Privileged user accounts (excluding backup administrator accounts) cannot access their own backups.",
+      "guideline": "Guidelines for system management",
+      "section": "Data backup and restoration",
+      "topic": "Backup access",
+      "revision": "2",
+      "updated": "Sep-24",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1814",
+      "description": "Unprivileged user accounts are prevented from modifying and deleting backups.",
+      "guideline": "Guidelines for system management",
+      "section": "Data backup and restoration",
+      "topic": "Backup modification and deletion",
+      "revision": "1",
+      "updated": "Sep-24",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1707",
+      "description": "Privileged user accounts (excluding backup administrator accounts) are prevented from modifying and deleting backups.",
+      "guideline": "Guidelines for system management",
+      "section": "Data backup and restoration",
+      "topic": "Backup modification and deletion",
+      "revision": "2",
+      "updated": "Sep-24",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1708",
+      "description": "Backup administrator accounts are prevented from modifying and deleting backups during their retention period.",
+      "guideline": "Guidelines for system management",
+      "section": "Data backup and restoration",
+      "topic": "Backup modification and deletion",
+      "revision": "2",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1515",
+      "description": "Restoration of data, applications and settings from backups to a common point in time is tested as part of disaster recovery exercises.",
+      "guideline": "Guidelines for system management",
+      "section": "Data backup and restoration",
+      "topic": "Testing restoration of backups",
+      "revision": "4",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML1",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1815",
+      "description": "Event logs are protected from unauthorised modification and deletion.",
+      "guideline": "Guidelines for system monitoring",
+      "section": "Event logging and monitoring",
+      "topic": "Centralised event logging facility",
+      "revision": "1",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1906",
+      "description": "Event logs from internet-facing servers are analysed in a timely manner to detect cyber security events.",
+      "guideline": "Guidelines for system monitoring",
+      "section": "Event logging and monitoring",
+      "topic": "Event log monitoring",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1907",
+      "description": "Event logs from non-internet-facing servers are analysed in a timely manner to detect cyber security events.",
+      "guideline": "Guidelines for system monitoring",
+      "section": "Event logging and monitoring",
+      "topic": "Event log monitoring",
+      "revision": "0",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-0109",
+      "description": "Event logs from workstations are analysed in a timely manner to detect cyber security events.",
+      "guideline": "Guidelines for system monitoring",
+      "section": "Event logging and monitoring",
+      "topic": "Event log monitoring",
+      "revision": "9",
+      "updated": "Dec-23",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML3"
+      ]
+    },
+    {
+      "identifier": "ISM-1228",
+      "description": "Cyber security events are analysed in a timely manner to identify cyber security incidents.",
+      "guideline": "Guidelines for system monitoring",
+      "section": "Event logging and monitoring",
+      "topic": "Event log monitoring",
+      "revision": "3",
+      "updated": "Mar-22",
+      "tags": [
+        "OS",
+        "P",
+        "S",
+        "TS",
+        "ML2",
+        "ML3"
+      ]
+    }
+  ]
+}

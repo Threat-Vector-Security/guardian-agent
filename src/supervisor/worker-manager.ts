@@ -9,6 +9,7 @@ import { sandboxedSpawn, detectSandboxHealth, type SandboxConfig, DEFAULT_SANDBO
 import { createLogger } from '../util/logging.js';
 import { BrokerServer } from '../broker/broker-server.js';
 import { CapabilityTokenManager } from '../broker/capability-token.js';
+import type { BrokerExecutionContext } from '../broker/types.js';
 import type { ToolApprovalDecisionResult, ToolExecutor } from '../tools/executor.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
 import type { Runtime } from '../runtime/runtime.js';
@@ -4054,7 +4055,6 @@ export class WorkerManager {
     if (existingId) {
       const existing = this.workers.get(existingId);
       if (existing && existing.status === 'ready') {
-        this.refreshWorkerCapabilityToken(existing, agentId, userId, channel, grantedCapabilities);
         existing.authorizedBy = userId;
         existing.authorizedChannel = channel;
         existing.grantedCapabilities = [...grantedCapabilities];
@@ -4243,6 +4243,7 @@ export class WorkerManager {
     userId: string,
     channel: string,
     grantedCapabilities: string[],
+    executionContext: BrokerExecutionContext,
   ): void {
     this.tokenManager.revokeForWorker(worker.id);
     const token = this.tokenManager.mint({
@@ -4252,6 +4253,7 @@ export class WorkerManager {
       authorizedBy: userId,
       authorizedChannel: channel,
       grantedCapabilities,
+      executionContext,
       maxToolCalls: this.config.capabilityTokenMaxToolCalls,
     });
     worker.brokerServer.sendNotification('capability.refreshed', {
@@ -4292,7 +4294,8 @@ export class WorkerManager {
       dispatchTimeoutMs?: number;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
-    const queuedDispatch = worker.dispatchQueue.then(() => this.dispatchToWorkerNow(worker, params));
+    const grantedCapabilities = [...worker.grantedCapabilities];
+    const queuedDispatch = worker.dispatchQueue.then(() => this.dispatchToWorkerNow(worker, params, grantedCapabilities));
     worker.dispatchQueue = queuedDispatch.then(() => undefined, () => undefined);
     return queuedDispatch;
   }
@@ -4327,6 +4330,7 @@ export class WorkerManager {
       recoveryAdvisor?: RecoveryAdvisorRequest;
       dispatchTimeoutMs?: number;
     },
+    grantedCapabilities: string[],
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     if (!this.workers.has(worker.id) || worker.status !== 'ready') {
       return Promise.reject(new Error('Worker is not available for dispatch'));
@@ -4376,6 +4380,17 @@ export class WorkerManager {
       const { abortSignal: _abortSignal, ...messageForWorker } = params.message;
       const { dispatchTimeoutMs: _dispatchTimeoutMs, ...paramsForWorker } = params;
       try {
+        // Rotate only when this queued turn starts: authority comes from supervisor input, never worker RPC.
+        this.refreshWorkerCapabilityToken(worker, worker.agentId, params.message.userId, params.message.channel, grantedCapabilities, {
+          principalId: params.message.principalId ?? params.message.userId,
+          principalRole: params.message.principalRole ?? 'viewer',
+          surfaceId: params.message.surfaceId,
+          requestId: params.message.id,
+          requestText: params.message.content,
+          codeContext: this.readMessageCodeContext(params.message),
+          activeSkills: params.activeSkills.map((skill) => skill.id),
+          allowModelMemoryMutation: false,
+        });
         worker.brokerServer.sendNotification('message.handle', {
           ...paramsForWorker,
           message: messageForWorker,

@@ -1,5 +1,7 @@
 # GuardianAgent Forward Architecture
 
+> **Security conversion (2026-09-06):** The default product now follows [SECURITY-CONVERSION.md](SECURITY-CONVERSION.md). Its structured HTTP/CLI/MCP operations use the security application service directly, with explicit audiences and scopes. The general-assistant architecture below remains the contract for retained legacy code; it does not require the new service to start chat, workers, or an LLM.
+
 ## Purpose
 
 This document defines the target application structure for GuardianAgent as the codebase is modularized. It is the architecture contract for future refactors and new capabilities.

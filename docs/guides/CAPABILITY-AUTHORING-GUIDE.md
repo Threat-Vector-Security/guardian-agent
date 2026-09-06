@@ -1,5 +1,7 @@
 # Capability Authoring Guide
 
+> For the converted security product, register structured operations and schemas in `src/security-workspace/operations.ts`, implement them in its shared application service, and test every transport against that contract. See [SECURITY-CONVERSION.md](../architecture/SECURITY-CONVERSION.md). The legacy routing/control-plane rules below still govern legacy natural-language capabilities; they do not require adding an LLM classifier to an already named operation.
+
 This guide is the single source of truth for adding new capabilities to Guardian Agent.
 
 Use it when you are adding or changing any of the following:

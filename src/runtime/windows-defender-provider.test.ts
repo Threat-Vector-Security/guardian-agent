@@ -9,6 +9,30 @@ function makePersistPath(): string {
 }
 
 describe('WindowsDefenderProvider', () => {
+  it.each([null, undefined, '', false, -1, 0.5, 65535, 4294967295])('preserves unavailable Defender age %s as null', async (age) => {
+    const provider = new WindowsDefenderProvider({
+      platform: 'win32', persistPath: makePersistPath(),
+      runner: async (_command, args) => {
+        const script = args.at(-1) ?? '';
+        if (script.includes('Get-MpComputerStatus')) return JSON.stringify({ AntivirusEnabled: true, AntivirusSignatureAge: age, QuickScanAge: age, FullScanAge: age });
+        if (script.includes('Get-MpPreference')) return '{}';
+        return '[]';
+      },
+    });
+    const status = await provider.refreshStatus();
+    expect(status.available).toBe(true);
+    expect(status.signatureAgeHours).toBeNull();
+    expect(status.quickScanAgeHours).toBeNull();
+    expect(status.fullScanAgeHours).toBeNull();
+    expect(status.controlledFolderAccessEnabled).toBeNull();
+    expect(provider.listAlerts().some((alert) => alert.type === 'defender_signatures_stale')).toBe(false);
+  });
+
+  it('does not report an empty antivirus status as available', async () => {
+    const provider = new WindowsDefenderProvider({ platform: 'win32', persistPath: makePersistPath(), runner: async () => '{}' });
+    expect(await provider.refreshStatus()).toMatchObject({ available: false, antivirusEnabled: null });
+  });
+
   it('reports unsupported status on non-Windows platforms', async () => {
     const provider = new WindowsDefenderProvider({
       platform: 'linux',
@@ -32,9 +56,9 @@ describe('WindowsDefenderProvider', () => {
           AntivirusEnabled: true,
           RealTimeProtectionEnabled: true,
           BehaviorMonitorEnabled: true,
-          AntivirusSignatureAge: 96,
-          QuickScanAge: 12,
-          FullScanAge: 168,
+          AntivirusSignatureAge: 4,
+          QuickScanAge: 2,
+          FullScanAge: 7,
           AntivirusSignatureVersion: '1.2.3.4',
           AMEngineVersion: '5.6.7.8',
         });
@@ -74,6 +98,8 @@ describe('WindowsDefenderProvider', () => {
     expect(status.supported).toBe(true);
     expect(status.available).toBe(true);
     expect(status.signatureAgeHours).toBe(96);
+    expect(status.quickScanAgeHours).toBe(48);
+    expect(status.fullScanAgeHours).toBe(168);
     expect(status.controlledFolderAccessEnabled).toBe(false);
     expect(status.firewallEnabled).toBe(false);
     expect(status.activeAlertCount).toBe(4);

@@ -28,6 +28,7 @@ import { APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY } from '../runtime/approval-
 import { requestNeedsExactFileReferences } from '../runtime/intent/request-patterns.js';
 import { attachPreRoutedIntentGatewayMetadata, readPreRoutedIntentGatewayMetadata, type IntentGatewayDecision } from '../runtime/intent-gateway.js';
 import { PendingActionStore, type PendingActionRecord } from '../runtime/pending-actions.js';
+import { CapabilityTokenManager } from '../broker/capability-token.js';
 import {
   attachWorkerSuspensionMetadata,
   WORKER_SUSPENSION_SCHEMA_VERSION,
@@ -672,6 +673,7 @@ describe('WorkerManager', () => {
   });
 
   it('refreshes the capability token when reusing a live worker', async () => {
+    const mintedTokens = vi.spyOn(CapabilityTokenManager.prototype, 'mint');
     const { WorkerManager } = await import('./worker-manager.js');
     const sandbox = await import('../sandbox/index.js');
 
@@ -714,6 +716,8 @@ describe('WorkerManager', () => {
       message: {
         id: 'm1',
         userId: 'tester',
+        principalId: 'authenticated-tester',
+        principalRole: 'operator' as const,
         channel: 'web',
         content: 'hello',
         timestamp: Date.now(),
@@ -755,8 +759,21 @@ describe('WorkerManager', () => {
       'message.handle',
     ]);
     expect(typeof workerNotifications[0]?.params.capabilityToken).toBe('string');
+    expect(mintedTokens.mock.calls.at(-1)?.[0]).toMatchObject({
+      authorizedBy: 'tester',
+      authorizedChannel: 'web',
+      grantedCapabilities: [],
+      executionContext: {
+        principalId: 'authenticated-tester',
+        principalRole: 'operator',
+        requestId: 'm2',
+        requestText: 'second message',
+        allowModelMemoryMutation: false,
+      },
+    });
 
     manager.shutdown();
+    mintedTokens.mockRestore();
   });
 
   it('cancels an in-flight brokered worker dispatch when the message aborts', async () => {

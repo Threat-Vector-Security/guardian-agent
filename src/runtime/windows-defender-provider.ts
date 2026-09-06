@@ -193,13 +193,16 @@ export class WindowsDefenderProvider {
       ]);
 
       const status = parseJsonRecord(statusRaw);
+      if (typeof status.AntivirusEnabled !== 'boolean') {
+        throw new Error('Windows Defender returned no usable antivirus status.');
+      }
       const preference = parseJsonRecord(preferenceRaw);
       const firewallProfiles = parseJsonArray(firewallRaw);
       const detections = parseJsonArray(detectionsRaw);
 
-      const signatureAgeHours = coerceNumber(status.AntivirusSignatureAge);
-      const quickScanAgeHours = coerceNumber(status.QuickScanAge);
-      const fullScanAgeHours = coerceNumber(status.FullScanAge);
+      const signatureAgeHours = defenderAgeHours(status.AntivirusSignatureAge);
+      const quickScanAgeHours = defenderAgeHours(status.QuickScanAge);
+      const fullScanAgeHours = defenderAgeHours(status.FullScanAge);
       const controlledFolderAccessEnabled = normalizeControlledFolderAccess(preference.EnableControlledFolderAccess);
       const firewallEnabled = firewallProfiles.length > 0
         ? firewallProfiles.every((profile) => profile.Enabled === true)
@@ -534,8 +537,17 @@ function normalizeControlledFolderAccess(value: unknown): boolean | null {
 }
 
 function coerceNumber(value: unknown): number | null {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) return null;
   const numeric = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function defenderAgeHours(value: unknown): number | null {
+  const days = coerceNumber(value);
+  // MSFT_MpComputerStatus reports days; 65535 and UINT32_MAX represent unavailable history.
+  // https://learn.microsoft.com/en-us/previous-versions/windows/desktop/defender/msft-mpcomputerstatus
+  if (days === null || !Number.isInteger(days) || days < 0 || days >= 65_535) return null;
+  return days * 24;
 }
 
 function parseDefenderTime(value: unknown): number | undefined {

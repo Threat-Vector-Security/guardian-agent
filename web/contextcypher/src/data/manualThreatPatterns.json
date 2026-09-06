@@ -1,0 +1,300 @@
+{
+  "metadata": {
+    "version": "1.0.0",
+    "lastUpdated": "2025-07-06T05:01:57.204Z",
+    "source": "Comprehensive security knowledge base",
+    "description": "Enhanced threat patterns based on MITRE ATT&CK, OWASP, and industry intelligence"
+  },
+  "patterns": [
+    {
+      "id": "TP001",
+      "name": "Credential Stuffing",
+      "description": "Automated injection of breached username/password pairs to fraudulently gain access to user accounts",
+      "category": "Initial Access",
+      "severity": "HIGH",
+      "likelihood": "HIGH",
+      "impact": "HIGH",
+      "commonTargets": [
+        "web-application",
+        "api",
+        "mobile-app"
+      ],
+      "mitreTechniques": [
+        "T1110.004"
+      ],
+      "owaspCategories": [
+        "A07"
+      ],
+      "indicators": [
+        "Multiple failed logins",
+        "Unusual login patterns",
+        "High volume requests"
+      ],
+      "mitigations": [
+        "Account lockout",
+        "Rate limiting",
+        "Multi-factor authentication",
+        "CAPTCHA"
+      ],
+      "detectionMethods": [
+        "Login anomaly detection",
+        "Velocity checks",
+        "IP reputation analysis"
+      ]
+    },
+    {
+      "id": "TP002",
+      "name": "SQL Injection",
+      "description": "Injection of malicious SQL code into application queries to access or manipulate database",
+      "category": "Execution",
+      "severity": "HIGH",
+      "likelihood": "MEDIUM",
+      "impact": "CRITICAL",
+      "commonTargets": [
+        "web-application",
+        "database",
+        "api"
+      ],
+      "mitreTechniques": [
+        "T1190"
+      ],
+      "owaspCategories": [
+        "A03"
+      ],
+      "indicators": [
+        "Database error messages",
+        "Unusual query patterns",
+        "Privilege escalation"
+      ],
+      "mitigations": [
+        "Parameterized queries",
+        "Input validation",
+        "Web application firewall",
+        "Least privilege"
+      ],
+      "detectionMethods": [
+        "Query anomaly detection",
+        "Database monitoring",
+        "Web application security scanning"
+      ]
+    },
+    {
+      "id": "TP003",
+      "name": "Cross-Site Scripting (XSS)",
+      "description": "Injection of malicious scripts into web applications viewed by other users",
+      "category": "Execution",
+      "severity": "MEDIUM",
+      "likelihood": "HIGH",
+      "impact": "MEDIUM",
+      "commonTargets": [
+        "web-application",
+        "user-interface"
+      ],
+      "mitreTechniques": [
+        "T1055"
+      ],
+      "owaspCategories": [
+        "A03"
+      ],
+      "indicators": [
+        "Unusual script execution",
+        "Modified web content",
+        "Session hijacking"
+      ],
+      "mitigations": [
+        "Input validation",
+        "Output encoding",
+        "Content Security Policy",
+        "XSS filters"
+      ],
+      "detectionMethods": [
+        "Script monitoring",
+        "Content integrity checks",
+        "User behavior analysis"
+      ]
+    },
+    {
+      "id": "TP004",
+      "name": "API Abuse",
+      "description": "Exploitation of API endpoints for unauthorized access or excessive resource consumption",
+      "category": "Initial Access",
+      "severity": "MEDIUM",
+      "likelihood": "HIGH",
+      "impact": "MEDIUM",
+      "commonTargets": [
+        "api",
+        "web-service"
+      ],
+      "mitreTechniques": [
+        "T1190"
+      ],
+      "owaspCategories": [
+        "A01",
+        "A05"
+      ],
+      "indicators": [
+        "Unusual API usage patterns",
+        "High request volumes",
+        "Error rate spikes"
+      ],
+      "mitigations": [
+        "API gateway",
+        "Rate limiting",
+        "Authentication",
+        "Input validation"
+      ],
+      "detectionMethods": [
+        "API monitoring",
+        "Traffic analysis",
+        "Anomaly detection"
+      ]
+    },
+    {
+      "id": "TP005",
+      "name": "Privilege Escalation",
+      "description": "Gaining higher-level permissions than initially authorized",
+      "category": "Privilege Escalation",
+      "severity": "HIGH",
+      "likelihood": "MEDIUM",
+      "impact": "CRITICAL",
+      "commonTargets": [
+        "system",
+        "application",
+        "database"
+      ],
+      "mitreTechniques": [
+        "T1055",
+        "T1078"
+      ],
+      "owaspCategories": [
+        "A01",
+        "A04"
+      ],
+      "indicators": [
+        "Unusual privilege changes",
+        "Access to restricted resources",
+        "Administrative actions"
+      ],
+      "mitigations": [
+        "Least privilege",
+        "Privilege monitoring",
+        "Access controls",
+        "Regular audits"
+      ],
+      "detectionMethods": [
+        "Privilege monitoring",
+        "Access logging",
+        "Behavioral analysis"
+      ]
+    },
+    {
+      "id": "TP006",
+      "name": "Data Exfiltration",
+      "description": "Unauthorized transfer of data from systems",
+      "category": "Exfiltration",
+      "severity": "CRITICAL",
+      "likelihood": "MEDIUM",
+      "impact": "CRITICAL",
+      "commonTargets": [
+        "database",
+        "file-system",
+        "cloud-storage"
+      ],
+      "mitreTechniques": [
+        "T1565",
+        "T1071"
+      ],
+      "owaspCategories": [
+        "A01",
+        "A02"
+      ],
+      "indicators": [
+        "Large data transfers",
+        "Unusual file access",
+        "Network anomalies"
+      ],
+      "mitigations": [
+        "Data loss prevention",
+        "Access controls",
+        "Network monitoring",
+        "Encryption"
+      ],
+      "detectionMethods": [
+        "Data flow monitoring",
+        "Network analysis",
+        "File integrity monitoring"
+      ]
+    },
+    {
+      "id": "TP007",
+      "name": "Phishing",
+      "description": "Social engineering attack to steal credentials or install malware",
+      "category": "Initial Access",
+      "severity": "HIGH",
+      "likelihood": "HIGH",
+      "impact": "HIGH",
+      "commonTargets": [
+        "user",
+        "email-system"
+      ],
+      "mitreTechniques": [
+        "T1566"
+      ],
+      "owaspCategories": [
+        "A07"
+      ],
+      "indicators": [
+        "Suspicious emails",
+        "Credential harvesting",
+        "Malware downloads"
+      ],
+      "mitigations": [
+        "Email security",
+        "User training",
+        "Anti-phishing tools",
+        "Multi-factor authentication"
+      ],
+      "detectionMethods": [
+        "Email analysis",
+        "URL reputation",
+        "User reporting"
+      ]
+    },
+    {
+      "id": "TP008",
+      "name": "Denial of Service (DoS)",
+      "description": "Attempts to make services unavailable to legitimate users",
+      "category": "Impact",
+      "severity": "MEDIUM",
+      "likelihood": "MEDIUM",
+      "impact": "HIGH",
+      "commonTargets": [
+        "web-application",
+        "network",
+        "server"
+      ],
+      "mitreTechniques": [
+        "T1499"
+      ],
+      "owaspCategories": [
+        "A06"
+      ],
+      "indicators": [
+        "Service unavailability",
+        "High resource consumption",
+        "Traffic spikes"
+      ],
+      "mitigations": [
+        "Rate limiting",
+        "Load balancing",
+        "DDoS protection",
+        "Resource monitoring"
+      ],
+      "detectionMethods": [
+        "Performance monitoring",
+        "Traffic analysis",
+        "Resource utilization tracking"
+      ]
+    }
+  ]
+}

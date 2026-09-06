@@ -17,6 +17,25 @@ export interface ReferenceGuidePageSection {
   note?: string;
 }
 
+/** Operator guidance for the converted security product; legacy guide remains available below. */
+export const SECURITY_WORKSPACE_GUIDE = {
+  title: 'Guardian Agent security workspace',
+  start: ['Run npm run build, npm run init, then npm start.', 'Open the displayed loopback URL. The local browser workspace opens without a code by default; Settings lets you require an access token. Configured Entra SSO requires sign-in.', 'Enroll a separate scoped credential in Settings for each external assistant.'],
+  pages: {
+    Protection: 'Review actual collector coverage and errors, check the workstation, or propose an antivirus scan.',
+    Findings: 'Review evidence, record a decision with a reason, and link observations to system assets.',
+    Systems: 'Create or import a system, open built-in examples, drag components onto the diagram, edit node and connection context, and use the analysis and GRC workspace. Save system records a revision; File → Save As and Export draft make portable copies and ask for a destination when the browser supports a save picker.',
+    Environments: 'Collect local or enrolled AWS observations, preview their coverage, and create an editable system from the recorded snapshot.',
+    Activity: 'Review pending approvals and recorded action outcomes. Requested scans are not completed clean scans.',
+    Integrations: 'Inspect native and machine interfaces, review Entra sign-in availability, and explicitly collect observations from an enrolled AWS account.',
+    Settings: 'Optionally enable Require an access token to open Guardian. Create and revoke assistant credentials with minimum required scopes. Keep administrator credentials private.',
+  },
+  securityAi: 'In the Systems editor settings, choose an AI provider, enter its API key, load available models and select a model, then save the AI configuration. Test the configured model before analysis. The key stays only in Guardian memory: enter it again after a backend restart. Provider and model preferences remain saved.',
+  workspace: 'Use Collapse sidebar or Expand sidebar on desktop; the browser remembers your choice. Portable file exports use the native save picker where supported. Other browsers offer a browser-download choice, whose destination follows browser settings.',
+  autosave: 'Enable Autosave and choose its interval in Systems editor Settings → General. Changed projects save as Guardian revisions without file dialogs. Failures pause autosave while keeping your draft editable and exportable; a successful manual Save system resumes it. Export your draft before loading a newer revision to resolve a conflict.',
+  limits: 'Local observations and governed operations only. Actions taken outside Guardian remain outside its control. Optional SSO requires your Entra tenant configuration.',
+} as const;
+
 export interface ReferenceGuidePage {
   id: string;
   title: string;

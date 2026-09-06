@@ -88,7 +88,7 @@ Implemented today:
 - `tool.search`
 - `tool.call`
 - `approval.status`
-- `approval.decide`
+- `approval.decide` — explicitly denied; decisions must enter through the authenticated supervisor/control plane
 - `approval.result`
 - `job.list`
 - `llm.chat` — **LLM calls are proxied through the broker**. The worker sends chat messages and options via RPC; the supervisor resolves the provider and makes the API call. This eliminates worker network egress requirements for LLM access.
@@ -149,14 +149,25 @@ Implemented validation:
 - token is bound to the worker
 - token is not expired
 - optional tool-call budget is not exceeded
+- category narrowing applies to discovery and dispatch (an empty category list denies all tools)
+- action capability grants are checked through the existing `CapabilityController` before guarded side effects, followed by the complete Guardian admission pipeline
+- principal, role, user, channel, workspace, request identity, active skills and memory authorization come from supervisor-issued context, never worker RPC arguments
+- absent principal roles default to `viewer`
+- approval and job reads require matching user, principal, channel, agent and code-session ownership
+- worker approval decisions are always denied, including owner-role tokens
 
 Implemented lifecycle:
 - mint on worker spawn
+- rotate at the start of each serialized dispatch with that turn's supervisor context
 - revoke on worker cleanup/crash
 - pass token ID string to worker via environment
 
-Current limitation:
-- the current implementation does not yet enforce fine-grained capability scopes or per-category token narrowing at the broker layer
+Current boundaries:
+- Action capability enforcement depends on tool implementations calling their existing shared action guard before side effects. Tools with no guarded action remain subject to their category grant and ToolExecutor policy/approval checks; adding a tool must include the proper action guard.
+- The broker retains supervisor-observed output taint within a token lifetime; a worker cannot clear it through later RPC metadata. This is not a complete cross-turn information-flow proof.
+- Legacy worker-side memory-intent inference no longer grants write authority. WorkerManager currently mints no durable-memory mutation grant; authorized memory mutations must use the supervisor path until structured gateway permission is passed explicitly.
+- Supervisor authentication remains the source of principal identity. These checks do not repair a channel that incorrectly authenticates every caller as owner.
+- LLM provider selection remains the configured supervisor provider surface, not a per-provider token allowlist.
 
 ## Worker Lifecycle
 

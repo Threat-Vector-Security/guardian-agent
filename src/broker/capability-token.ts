@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { CapabilityToken } from './types.js';
+import type { BrokerExecutionContext, CapabilityToken } from './types.js';
 
 export interface TokenMintOptions {
   workerId: string;
@@ -9,6 +9,7 @@ export interface TokenMintOptions {
   authorizedChannel: string;
   grantedCapabilities: readonly string[];
   allowedToolCategories?: string[];
+  executionContext?: BrokerExecutionContext;
   ttlMs?: number;
   maxToolCalls?: number;
 }
@@ -35,6 +36,7 @@ export class CapabilityTokenManager {
       authorizedChannel: options.authorizedChannel,
       grantedCapabilities: [...options.grantedCapabilities],
       allowedToolCategories: options.allowedToolCategories ? [...options.allowedToolCategories] : undefined,
+      executionContext: options.executionContext ? structuredClone(options.executionContext) : undefined,
       issuedAt: now,
       expiresAt: now + ttl,
       maxToolCalls: options.maxToolCalls && options.maxToolCalls > 0 ? options.maxToolCalls : undefined,
@@ -42,14 +44,15 @@ export class CapabilityTokenManager {
     };
     
     this.tokens.set(token.id, token);
-    return token;
+    return structuredClone(token);
   }
 
   /**
    * Get a token if it exists and is valid.
    */
   get(tokenId: string): CapabilityToken | undefined {
-    return this.tokens.get(tokenId);
+    const token = this.tokens.get(tokenId);
+    return token ? structuredClone(token) : undefined;
   }
 
   /**
@@ -66,7 +69,7 @@ export class CapabilityTokenManager {
       return 'Token not bound to this worker';
     }
 
-    if (now > token.expiresAt) {
+    if (now >= token.expiresAt) {
       this.tokens.delete(tokenId);
       return 'Capability token expired';
     }

@@ -24,6 +24,12 @@ export interface JsonRpcNotification {
 
 // ─── Capability Tokens ────────────────────────────────────────
 
+/** Authority resolved by the supervisor; never copied from worker RPC arguments. */
+export type BrokerExecutionContext = Pick<ToolExecutionRequest,
+  'principalId' | 'principalRole' | 'surfaceId' | 'requestId' | 'requestText'
+  | 'codeContext' | 'allowModelMemoryMutation' | 'scheduleId' | 'activeSkills'
+  | 'contentTrustLevel' | 'taintReasons' | 'derivedFromTaintedContent'>;
+
 export interface CapabilityToken {
   id: string;                           // Unique token ID (UUID v4)
   workerId: string;                     // Bound to specific worker
@@ -33,6 +39,7 @@ export interface CapabilityToken {
   authorizedChannel: string;            // Channel that authorized the session (e.g. 'web', 'cli')
   grantedCapabilities: readonly string[]; // Subset of agent's registered capabilities
   allowedToolCategories?: string[];     // Optional narrower tool category filter
+  executionContext?: BrokerExecutionContext;
   issuedAt: number;                     // Unix ms
   expiresAt: number;                    // Unix ms — short-lived (default 10 min)
   maxToolCalls?: number;                // Optional call budget

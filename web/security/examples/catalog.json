@@ -1,0 +1,391 @@
+[
+  {
+    "id": "aws-cloud-exposed-workloads",
+    "name": "AWS Production SaaS with Drifted Controls",
+    "description": "Customer-facing AWS SaaS footprint with misaligned identity controls, exposed storage, and noisy operations perimeter.",
+    "categories": [
+      "Cloud Vendor Architectures"
+    ],
+    "nodes": 26,
+    "edges": 21,
+    "sha256": "40209fd619714592ac943761d0481ce22ad3ac89f958e4086eca613be8b4ebb9"
+  },
+  {
+    "id": "azure-cloud-identity-gaps",
+    "name": "Azure Customer Hub with Identity Drift",
+    "description": "Multi-tenant Azure environment where identity, storage, and monitoring controls have quietly drifted from best practice.",
+    "categories": [
+      "Cloud Vendor Architectures"
+    ],
+    "nodes": 26,
+    "edges": 21,
+    "sha256": "70b8b589eb7dad9d47e44a1cb5a67faf6d7510eadddd1e9e5cca19a755151613"
+  },
+  {
+    "id": "gcp-cloud-data-leak",
+    "name": "GCP Analytics Platform with Open Data Paths",
+    "description": "Customer analytics stack on Google Cloud where IAM shortcuts and logging gaps expose sensitive telemetry.",
+    "categories": [
+      "Cloud Vendor Architectures"
+    ],
+    "nodes": 26,
+    "edges": 23,
+    "sha256": "48edf32a1762b3e00d3a144669deac580f1d2d0c027190626c10de3d181b607c"
+  },
+  {
+    "id": "ibm-cloud-shared-hub",
+    "name": "IBM Cloud Shared Services Hub",
+    "description": "Regional IBM Cloud deployment hosting shared services where network ACLs, storage policies, and monitoring have drifted.",
+    "categories": [
+      "Cloud Vendor Architectures"
+    ],
+    "nodes": 23,
+    "edges": 20,
+    "sha256": "76eeeff94e2fe56cf66f71f4b4198670e51c0ad1e76e6bf0a956d737ef62bcfa"
+  },
+  {
+    "id": "vulnerable-web-app",
+    "name": "E-Commerce Platform",
+    "description": "Multi-tier web application for online retail with cloud integration and an end-to-end GRC workflow baseline",
+    "categories": [
+      "Web Applications"
+    ],
+    "nodes": 37,
+    "edges": 49,
+    "sha256": "9d5c2e2bc19a4dbeed176190fa16d22c63f734d9b32bb5d51b64435c67204514"
+  },
+  {
+    "id": "quick-vuln-example",
+    "name": "Quick Vulnerable Web App",
+    "description": "Tiny 3-tier example intentionally misconfigured for rapid testing.",
+    "categories": [
+      "Web Applications"
+    ],
+    "nodes": 5,
+    "edges": 2,
+    "sha256": "c97fdb28bb6b0ec2d713bb781d6fff96216843d9ec9075dae247d133ad14ded8"
+  },
+  {
+    "id": "small-vulnerable-system",
+    "name": "Small Business Web Application",
+    "description": "Basic web application for small business with simple three-tier architecture",
+    "categories": [
+      "Web Applications"
+    ],
+    "nodes": 8,
+    "edges": 7,
+    "sha256": "29918697193ce58a87a6cdc020dbd06902d6c001bedccc22e5cf2fb3b3e4f2c9"
+  },
+  {
+    "id": "public-apis-threat-modeler",
+    "name": "Public APIs Platform",
+    "description": "Large-scale public API platform with multiple API products, developer portal, and monetization",
+    "categories": [
+      "Web Applications"
+    ],
+    "nodes": 31,
+    "edges": 26,
+    "sha256": "57b04c20e3a7f92f59eca184b30c81b49808bb93cfcf75df43e6e3350882a38e"
+  },
+  {
+    "id": "stress-test-system",
+    "name": "High-Density Stress Test System",
+    "description": "Ultra-high scale e-commerce platform with maximum architectural complexity",
+    "categories": [
+      "Web Applications"
+    ],
+    "nodes": 73,
+    "edges": 60,
+    "sha256": "dc1e1d9ccb2ebf03242e895e99fd1765ce472bb3b45fc2b89b2b73cc7eaf6cfa"
+  },
+  {
+    "id": "vulnerable-network",
+    "name": "Enterprise Network Architecture",
+    "description": "Modern enterprise network with multi-tier security, cloud integration, and operational zones",
+    "categories": [
+      "Network Infrastructure"
+    ],
+    "nodes": 37,
+    "edges": 28,
+    "sha256": "0619f46ad486ab5056123f173046b74a04afda89d8b454e3085f8c0507a445c3"
+  },
+  {
+    "id": "vulnerable-iot",
+    "name": "Smart Building IoT Ecosystem",
+    "description": "Comprehensive smart building with IoT devices, safety systems, guest access, and cloud integration",
+    "categories": [
+      "IoT Systems"
+    ],
+    "nodes": 34,
+    "edges": 27,
+    "sha256": "e9314fcc531302df73b4e01a26bdab0b9e426e067972d27cceefafb4add4b29c"
+  },
+  {
+    "id": "vulnerable-cloud",
+    "name": "Enterprise Multi-Cloud Platform",
+    "description": "Modern multi-cloud architecture with edge computing, hybrid connectivity, and comprehensive security zones",
+    "categories": [
+      "Cloud Infrastructure"
+    ],
+    "nodes": 39,
+    "edges": 31,
+    "sha256": "8515b706fe94bafe8b38354e4ffdf30444e1d9a6fb8c8fab621670854e4222ae"
+  },
+  {
+    "id": "micro-secure-system",
+    "name": "Microservices Service Mesh Architecture",
+    "description": "Modern service mesh architecture with sidecar proxies, observability, and zero-trust networking",
+    "categories": [
+      "Cloud Infrastructure",
+      "Secure Systems"
+    ],
+    "nodes": 27,
+    "edges": 25,
+    "sha256": "d04adfc8bc753b9a21dc9a2d8aae0ceb87ce15ebd9818d4e1848509bb2f0a8ca"
+  },
+  {
+    "id": "industrial-scada",
+    "name": "Advanced Manufacturing Control System",
+    "description": "Multi-tier industrial SCADA system with safety-critical controls and modern IIoT integration",
+    "categories": [
+      "Industrial Control Systems"
+    ],
+    "nodes": 32,
+    "edges": 31,
+    "sha256": "5205e265c8f9d298b181564a6e66045cd20b302a569dfb920d1efb6ad75a0d57"
+  },
+  {
+    "id": "electric-grid-system",
+    "name": "Regional Electric Grid Control System",
+    "description": "Multi-substation electrical grid with SCADA control and monitoring systems",
+    "categories": [
+      "Industrial Control Systems"
+    ],
+    "nodes": 27,
+    "edges": 21,
+    "sha256": "0f3f3fc745254fb5a11230b7268124d98fcc23e303b297c8a99cb7c693cb66ee"
+  },
+  {
+    "id": "railway-transport-system",
+    "name": "Metropolitan Railway Network",
+    "description": "Integrated railway system with stations, ticketing, operations control, and passenger services",
+    "categories": [
+      "Industrial Control Systems"
+    ],
+    "nodes": 34,
+    "edges": 26,
+    "sha256": "b01d6a771b30cbba062e273ac6e15b6ddf2b2c1e326930fd287f2234de38c8c3"
+  },
+  {
+    "id": "enterprise-data-center",
+    "name": "Enterprise Data Center Infrastructure",
+    "description": "Traditional enterprise data center with multiple security zones and cloud integration",
+    "categories": [
+      "Enterprise Systems"
+    ],
+    "nodes": 30,
+    "edges": 26,
+    "sha256": "9386995d16eeb11b77e3ce89d0e267dae9bfb21333c4dd2eff147c8746d7ce9b"
+  },
+  {
+    "id": "large-enterprise-system",
+    "name": "Large Enterprise Hybrid Cloud System",
+    "description": "Global enterprise infrastructure with multi-cloud presence and 100K+ employees",
+    "categories": [
+      "Enterprise Systems"
+    ],
+    "nodes": 37,
+    "edges": 24,
+    "sha256": "887d3b4b99d1b4f1e5f01ead5842c8e6e5514443570999e73e9aba256511316c"
+  },
+  {
+    "id": "medium-complex-system",
+    "name": "Medium Complex DevOps Platform",
+    "description": "Comprehensive DevOps platform with CI/CD pipeline, multiple environments, and cloud integration",
+    "categories": [
+      "Enterprise Systems"
+    ],
+    "nodes": 30,
+    "edges": 27,
+    "sha256": "6139a48098d141623ca645f9ce6406991c16e70bf1028ee771a285bb6dcea6b3"
+  },
+  {
+    "id": "supply-chain-dev",
+    "name": "Software Supply Chain & Development - APT29",
+    "description": "Enterprise software development pipeline with CI/CD, artifact management, and cloud integration",
+    "categories": [
+      "Enterprise Systems",
+      "Targeted Threat Scenarios"
+    ],
+    "nodes": 21,
+    "edges": 19,
+    "sha256": "c8bfbb99b3136c9e221e462945140109bf0c87b0694bf9d6355c539ca037af13"
+  },
+  {
+    "id": "healthcare-ransomware",
+    "name": "Healthcare System - Ransomware Groups",
+    "description": "Hospital IT infrastructure with multiple internet-facing services and virtualization",
+    "categories": [
+      "Enterprise Systems",
+      "Targeted Threat Scenarios"
+    ],
+    "nodes": 22,
+    "edges": 18,
+    "sha256": "233cf3fceec37251e98e0db2a5c3c082d8a369c6758c3c3956c03f4cb1275a2c"
+  },
+  {
+    "id": "finance-identity",
+    "name": "Financial Services Identity Infrastructure - Scattered Spider",
+    "description": "Enterprise financial services with cloud identity and privileged access management",
+    "categories": [
+      "Enterprise Systems",
+      "Targeted Threat Scenarios"
+    ],
+    "nodes": 23,
+    "edges": 21,
+    "sha256": "2c570392dacc69e129e0b0c8fc2f4bd7d7d82969651679d2df9bda88f7a678eb"
+  },
+  {
+    "id": "ai-ml-platform",
+    "name": "Enterprise AI/ML Platform",
+    "description": "Global-scale machine learning platform supporting 500+ models across computer vision, NLP, and predictive analytics",
+    "categories": [
+      "AI Systems"
+    ],
+    "nodes": 31,
+    "edges": 26,
+    "sha256": "4e7b1f9e76d96df594816fb22313ffc461c53f86b3ae7adf90dd545d05767f7b"
+  },
+  {
+    "id": "vulnerable-fraud-detection",
+    "name": "Online Banking Fraud Detection System",
+    "description": "Comprehensive fraud detection and prevention system for financial institutions with real-time monitoring",
+    "categories": [
+      "Cybercrime & Fraud"
+    ],
+    "nodes": 29,
+    "edges": 26,
+    "sha256": "34d448f3fd818f55e9b14a5e764ab9fb3f6c3842525ab4eec2ee86a4c90d6535"
+  },
+  {
+    "id": "healthcare-privacy-platform",
+    "name": "Healthcare Privacy Management Platform",
+    "description": "GDPR compliance system for patient data management",
+    "categories": [
+      "Privacy & Data Protection"
+    ],
+    "nodes": 25,
+    "edges": 23,
+    "sha256": "de99663c9c240abe01e1b34a175a2a27cf0088187bb7e72338653bdfe06d77dc"
+  },
+  {
+    "id": "vulnerable-app-architecture",
+    "name": "E-Commerce Application Internal Architecture",
+    "description": "Microservices e-commerce platform with internal component vulnerabilities",
+    "categories": [
+      "Application Architecture"
+    ],
+    "nodes": 25,
+    "edges": 28,
+    "sha256": "7fc7242586698119d32cb32993cb92eb2e2d4d1e2d41483c40f15582a04ac7a8"
+  },
+  {
+    "id": "vulnerable-red-team-scenario",
+    "name": "Multi-Vector Red Team Attack Scenario",
+    "description": "Comprehensive red team simulation environment demonstrating advanced persistent threat techniques",
+    "categories": [
+      "Red Teaming"
+    ],
+    "nodes": 28,
+    "edges": 23,
+    "sha256": "5ea349a045e713ce8ec9f6d4b1f93738d89ebb34556ab3ccb576ddfee2d898a0"
+  },
+  {
+    "id": "small-secure-system",
+    "name": "Small Secure Zero Trust System",
+    "description": "Modern zero trust architecture for healthcare technology with complete security stack",
+    "categories": [
+      "Secure Systems"
+    ],
+    "nodes": 21,
+    "edges": 21,
+    "sha256": "00c0b79fffb6614cb2999e382a25855508ce2b790886d745ce885c4841cc02b3"
+  },
+  {
+    "id": "local-llm-threat-modeler",
+    "name": "AI Threat Modeler - Local LLM Mode",
+    "description": "Secure offline-first threat modeling with local AI processing demonstrating best practices",
+    "categories": [
+      "Secure Systems"
+    ],
+    "nodes": 20,
+    "edges": 19,
+    "sha256": "bedcc5c52f28abbfcabe746767d1107009bfa1b4d8e1c21583cfd275fc6b2e86"
+  },
+  {
+    "id": "azure-openai-threat-modeler",
+    "name": "Secure Azure OpenAI Enterprise",
+    "description": "Zero Trust architecture for enterprise AI with Azure OpenAI private endpoints",
+    "categories": [
+      "Secure Systems"
+    ],
+    "nodes": 24,
+    "edges": 25,
+    "sha256": "3e522baf9144e98ed3458217cee17ba941010bedcc7663770393824c39e1d36c"
+  },
+  {
+    "id": "dfd-web-application",
+    "name": "DFD: E-Commerce Web Application",
+    "description": "Basic DFD threat model for a typical web application with external users, API, and database",
+    "categories": [
+      "DFD Threat Models"
+    ],
+    "nodes": 14,
+    "edges": 8,
+    "sha256": "31d382f2603cc8add1c42217e025f51b2c0432280ac455833b9e575ad0e6ddc0"
+  },
+  {
+    "id": "dfd-microservices",
+    "name": "DFD: Microservices Architecture",
+    "description": "DFD model showing microservices with API gateway, service mesh, and multiple data stores",
+    "categories": [
+      "DFD Threat Models"
+    ],
+    "nodes": 18,
+    "edges": 11,
+    "sha256": "6fe0c0c6880dc5181e7064eb7fa7d55c00e4d4d24364e2ed27b051708978e0a0"
+  },
+  {
+    "id": "dfd-iot-system",
+    "name": "DFD: Smart Home IoT System",
+    "description": "DFD model for IoT ecosystem showing device communication, cloud services, and mobile control",
+    "categories": [
+      "DFD Threat Models"
+    ],
+    "nodes": 19,
+    "edges": 14,
+    "sha256": "fe4636b60120387936914daa533de57758dfe5e3029a35b78c7024fc85251dc1"
+  },
+  {
+    "id": "hybrid-banking-system",
+    "name": "Hybrid DFD: Digital Banking Platform",
+    "description": "Banking system mixing DFD notation for high-level architecture with detailed security components",
+    "categories": [
+      "DFD Threat Models"
+    ],
+    "nodes": 18,
+    "edges": 13,
+    "sha256": "c479c927c98e09f436b79d7c6d6c2e730d0e3668bae7845e0203f42312dc49a8"
+  },
+  {
+    "id": "hybrid-cloud-migration",
+    "name": "Hybrid DFD: Cloud Migration in Progress",
+    "description": "Enterprise system mid-migration showing both legacy on-premise components and modern cloud architecture",
+    "categories": [
+      "DFD Threat Models"
+    ],
+    "nodes": 24,
+    "edges": 15,
+    "sha256": "925d88e157da3bbb792763baf6eaf1ba3bac4b339bb913a7332dd23a36a493e4"
+  }
+]

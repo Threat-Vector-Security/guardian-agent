@@ -150,20 +150,14 @@ export class AnthropicProvider implements LLMProvider {
     }
   }
 
-  async listModels(): Promise<ModelInfo[]> {
-    // Anthropic doesn't have a model list API — return known models
-    return [
-      // Latest generation
-      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', provider: 'anthropic', contextWindow: 200_000 },
-      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', contextWindow: 200_000 },
-      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', provider: 'anthropic', contextWindow: 200_000 },
-      // Previous generation
-      { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', provider: 'anthropic', contextWindow: 200_000 },
-      { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', provider: 'anthropic', contextWindow: 200_000 },
-      { id: 'claude-opus-4-1-20250805', name: 'Claude Opus 4.1', provider: 'anthropic', contextWindow: 200_000 },
-      { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', provider: 'anthropic', contextWindow: 200_000 },
-      { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', provider: 'anthropic', contextWindow: 200_000 },
-    ];
+  async listModels(options?: { signal?: AbortSignal; limit?: number }): Promise<ModelInfo[]> {
+    const models: ModelInfo[] = [];
+    const list = await this.client.models.list({ limit: 100 }, { signal: options?.signal });
+    for await (const model of list) {
+      models.push({ id: model.id, name: model.display_name, provider: this.name });
+      if (models.length >= (options?.limit ?? 1000)) break;
+    }
+    return models;
   }
 }
 

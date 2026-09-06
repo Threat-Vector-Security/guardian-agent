@@ -205,9 +205,9 @@ export class OpenAIProvider implements LLMProvider {
     }
   }
 
-  async listModels(): Promise<ModelInfo[]> {
+  async listModels(options?: { signal?: AbortSignal; limit?: number }): Promise<ModelInfo[]> {
     try {
-      const list = await this.client.models.list();
+      const list = await this.client.models.list(options?.signal ? { signal: options.signal } : undefined);
       const models: ModelInfo[] = [];
       for await (const model of list) {
         const record = model as unknown as Record<string, unknown>;
@@ -222,6 +222,7 @@ export class OpenAIProvider implements LLMProvider {
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(Object.prototype.hasOwnProperty.call(record, 'supported_parameters') ? { supportedParameters } : {}),
         });
+        if (models.length >= (options?.limit ?? 1000)) break;
       }
       return models;
     } catch (err) {
@@ -439,6 +440,16 @@ function stripOptionalCapabilityParams<T extends object>(
 ): T | null {
   const status = (err as { status?: number })?.status ?? 0;
   if (status !== 400) return null;
+  const structured = err && typeof err === 'object' ? err as Record<string, unknown> : {};
+  const detail = structured.error && typeof structured.error === 'object' ? structured.error as Record<string, unknown> : {};
+  const parameter = structured.param ?? detail.param;
+  const code = structured.code ?? detail.code;
+  if (parameter === 'temperature' || parameter === 'top_p') {
+    if (!['unsupported_parameter', 'unsupported_value'].includes(String(code)) || !Object.hasOwn(params, parameter)) return null;
+    const next = { ...params } as Record<string, unknown>;
+    delete next[parameter];
+    return next as T;
+  }
   const raw = err instanceof Error ? err.message : String(err);
   if (!/unsupported|unknown|invalid/i.test(raw)) return null;
   const paramsRecord = params as Record<string, unknown>;
@@ -477,6 +488,14 @@ function wrapOpenAIError(err: unknown, context: {
   const provider = context.providerLabel;
   const operationLabel = context.operation === 'models' ? 'load models from' : 'reach';
   const providerLocation = context.baseUrl ? ` at ${context.baseUrl}` : '';
+  const structured = err && typeof err === 'object' ? err as Record<string, unknown> : {};
+  const detail = structured.error && typeof structured.error === 'object' ? structured.error as Record<string, unknown> : {};
+  const cause = structured.cause && typeof structured.cause === 'object' ? structured.cause as Record<string, unknown> : {};
+  const code = structured.code ?? detail.code ?? cause.code;
+  const param = structured.param ?? detail.param;
+  const safeCodes = ['insufficient_quota', 'rate_limit_exceeded', 'unsupported_parameter', 'unsupported_value', 'context_length_exceeded', 'model_not_found', 'invalid_api_key', 'billing_hard_limit_reached', 'usage_limit_reached', 'invalid_request_error', 'permission_denied', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_SOCKET'];
+  const safeParams = ['temperature', 'max_tokens', 'max_completion_tokens', 'max_output_tokens', 'response_format', 'reasoning_effort', 'top_p', 'model', 'messages', 'tools', 'stream'];
+  const metadata = { status, ...(typeof code === 'string' && safeCodes.includes(code) ? { code } : {}), ...(typeof param === 'string' && safeParams.includes(param) ? { param } : {}), ...(['APIConnectionError', 'APIConnectionTimeoutError'].includes(String(structured.name)) ? { name: structured.name } : {}) };
 
   if (
     status === 404
@@ -490,13 +509,13 @@ function wrapOpenAIError(err: unknown, context: {
           ? `Model "${context.model}" is not available on ${provider}. Choose a different model in Configuration > Providers.`
           : `Could not load models from ${provider}. Check the configured model family and API access.`,
       ),
-      { status },
+      metadata,
     );
   }
   if (status === 401) {
     return Object.assign(
       new Error(`${provider} API key is invalid or expired. Update it in Configuration > Providers.`),
-      { status },
+      metadata,
     );
   }
   if (status === 403) {
@@ -506,25 +525,25 @@ function wrapOpenAIError(err: unknown, context: {
           ? `Access denied for model "${context.model}" on ${provider}. Your account may not include this model.`
           : `Access denied while loading models from ${provider}. Check that the API key has access to this account.`,
       ),
-      { status },
+      metadata,
     );
   }
   if (status === 429) {
     return Object.assign(
       new Error(`${provider} rate limit exceeded or quota depleted. Check the account limits for this provider.`),
-      { status },
+      metadata,
     );
   }
   if (status === 503 || raw.includes('overloaded')) {
     return Object.assign(
       new Error(`${provider} API is currently overloaded. Please try again shortly.`),
-      { status },
+      metadata,
     );
   }
   if (/fetch failed|connection error|ECONNREFUSED|ENOTFOUND|network/i.test(raw)) {
     return Object.assign(
       new Error(`Could not ${operationLabel} ${provider}${providerLocation}. Check the base URL, network access, and API status.`),
-      { status: status || 0 },
+      metadata,
     );
   }
   return err instanceof Error ? err : new Error(raw);

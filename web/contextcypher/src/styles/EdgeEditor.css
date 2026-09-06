@@ -1,0 +1,164 @@
+/* EdgeEditor Floating Panel Styles */
+
+/* Floating panel container */
+.edge-editor-floating {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  max-height: calc(100dvh - 100px);
+  background-color: var(--theme-surface);
+  color: var(--theme-textPrimary);
+  position: relative;
+  z-index: 1000; /* Lower than dropdowns */
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  border-radius: 12px;
+  border: 1px solid var(--theme-border);
+  box-sizing: border-box;
+  overflow: hidden; /* Prevent any overflow from the container itself */
+}
+
+/* Floating panel when dropdown is open - prevent dragging */
+.edge-editor-floating.dropdown-open {
+  cursor: not-allowed;
+}
+
+/* Action buttons container - prevent shrinking */
+.edge-editor-floating-actions {
+  padding: 12px 16px; /* More compact vertical padding */
+  border-bottom: 1px solid var(--theme-border);
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-shrink: 0;
+  background-color: var(--theme-surface);
+}
+
+/* Content area with proper scrolling */
+.edge-editor-floating-content {
+  flex: 1;
+  padding: 12px 16px; /* More compact vertical padding */
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Ensure content doesn't cause horizontal scroll */
+  box-sizing: border-box;
+}
+
+/* Custom scrollbar for floating panel */
+.edge-editor-floating-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.edge-editor-floating-content::-webkit-scrollbar-track {
+  background-color: var(--theme-surface);
+  border-radius: 4px;
+}
+
+.edge-editor-floating-content::-webkit-scrollbar-thumb {
+  background-color: var(--theme-border);
+  border-radius: 4px;
+}
+
+.edge-editor-floating-content::-webkit-scrollbar-thumb:hover {
+  background-color: var(--theme-textSecondary);
+}
+
+/* Form controls inside floating panel */
+.edge-editor-floating .MuiFormControl-root {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-bottom: 12px; /* Reduced from 16px for more compact layout */
+}
+
+/* Text fields inside floating panel */
+.edge-editor-floating .MuiTextField-root {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-bottom: 12px; /* Compact spacing */
+}
+
+/* Ensure input roots never exceed panel bounds */
+.edge-editor-floating .MuiInputBase-root,
+.edge-editor-floating .MuiOutlinedInput-root {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* Select components - ensure proper width */
+.edge-editor-floating .MuiSelect-root {
+  width: 100%;
+  min-width: 0; /* Prevent overflow */
+}
+
+/* Ensure multiline text fields don't cause overflow */
+.edge-editor-floating .MuiInputBase-multiline {
+  max-width: 100%;
+  overflow-wrap: break-word;
+}
+
+/* Prevent horizontal overflow in descriptions */
+.edge-editor-floating .MuiTypography-caption {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+/* Fix for MenuItem descriptions */
+.edge-editor-floating .MuiMenuItem-root {
+  white-space: normal;
+  max-width: 350px; /* Limit dropdown width */
+}
+
+/* CRITICAL: Ensure dropdowns have proper z-index layering */
+/* Material-UI Select dropdown paper - must be higher than floating panel (max 2000) */
+.MuiPaper-root.MuiMenu-paper {
+  z-index: 2100 !important; /* Higher than FloatingPanel max (2000) */
+  max-width: 400px;
+  max-height: 400px;
+  overflow: auto;
+}
+
+/* Material-UI Popper for Select dropdowns */
+.MuiPopper-root {
+  z-index: 2100 !important; /* Higher than FloatingPanel max (2000) */
+}
+
+/* Removed backdrop rule - it was affecting the entire app */
+
+/* Icon selector popover should also be above floating panel */
+.MuiPopover-root {
+  z-index: 2100 !important;
+}
+
+/* Ensure Menu List also has high z-index */
+.MuiMenu-list {
+  z-index: 2100 !important;
+}
+
+/* Ensure proper spacing for components - compact layout */
+.edge-editor-floating-content > * {
+  margin-bottom: 12px; /* Reduced from 16px */
+}
+
+.edge-editor-floating-content > *:last-child {
+  margin-bottom: 0;
+}
+
+/* Helper text styling */
+.edge-editor-floating .MuiFormHelperText-root {
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+
+/* Ensure chips don't overflow */
+.edge-editor-floating .MuiChip-root {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+} 

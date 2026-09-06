@@ -1,0 +1,123 @@
+:root {
+  /* Theme colors will be set dynamically via JavaScript */
+  --theme-primary: #00D4FF;
+  --theme-secondary: #FF00FF;
+  --theme-background: #0a0a0a;
+  --theme-surface: #1a1a1a;
+  --theme-border: #2a2a2a;
+  --theme-textPrimary: #ffffff;
+  --theme-textSecondary: #a0a0a0;
+  --theme-nodeBg: #1a1a1a;
+  --theme-surfaceHover: #2a2a2a;
+  --theme-info: #2196f3;
+  --theme-success: #4caf50;
+  --theme-warning: #ff9800;
+  --theme-error: #f44336;
+  
+  /* RGB values for alpha support */
+  --theme-primary-rgb: 0, 212, 255;
+  --theme-secondary-rgb: 255, 0, 255;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+/* Disable animations and transitions during streaming */
+body.streaming-active * {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+  transform: none !important;
+  will-change: auto !important;
+}
+
+/* Specific override for scrolling containers during streaming */
+body.streaming-active .MuiBox-root {
+  scroll-behavior: auto !important;
+}
+
+/* Prevent any layout shifts in the analysis panel during streaming */
+body.streaming-active .analysis-panel-container,
+body.streaming-active .analysis-panel-inner,
+body.streaming-active .MuiDrawer-root,
+body.streaming-active .MuiDrawer-paper {
+  transition: none !important;
+  transform: none !important;
+  animation: none !important;
+  will-change: auto !important;
+}
+
+/* Ensure chat messages don't cause layout jumps */
+body.streaming-active [class*="Message"] {
+  transition: none !important;
+  animation: none !important;
+  transform: none !important;
+}
+
+/* Prevent the main content from shifting when analysis panel scrollbar appears/disappears */
+.analysis-panel-container {
+  position: fixed !important;
+  right: 0 !important;
+  top: 0 !important;
+  bottom: 0 !important;
+}
+
+/* Force scrollbar to always be visible in the analysis panel to prevent width changes */
+.analysis-panel-inner textarea,
+.analysis-panel-inner [class*="MessagesContainer"] {
+  overflow-y: scroll !important;
+}
+
+/* React Flow Controls Theming - Using CSS Variables */
+.react-flow__controls {
+  background-color: var(--theme-surface) !important;
+  border: 1px solid var(--theme-border) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  transition: background-color 0.2s ease, border-color 0.2s ease !important;
+}
+
+.react-flow__controls-button {
+  background-color: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+  color: var(--theme-textPrimary) !important;
+  width: 36px !important;
+  height: 36px !important;
+  border: none !important;
+  transition: all 0.15s ease !important;
+}
+
+.react-flow__controls-button:hover {
+  background-color: var(--theme-surfaceHover) !important;
+  color: var(--theme-primary) !important;
+}
+
+.react-flow__controls-button svg {
+  fill: currentColor !important;
+  width: 18px !important;
+  height: 18px !important;
+}
+
+/* Background pattern controls */
+.react-flow__background {
+  background-color: var(--theme-background) !important;
+  transition: background-color 0.2s ease !important;
+}
+
+.react-flow__background pattern {
+  stroke: var(--theme-border) !important;
+  stroke-width: 0.5 !important;
+  transition: stroke 0.2s ease !important;
+}

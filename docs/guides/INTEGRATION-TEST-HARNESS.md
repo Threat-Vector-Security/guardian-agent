@@ -1,5 +1,11 @@
 # Integration Test Harness
 
+## Converted security workspace
+
+Run `npm run test:security-workspace` for the new product's SQLite, authorization, full-workspace migration, native adapter, HTTP, CLI, MCP and Entra verification. These tests use isolated state and never start real antivirus scans. `node --import tsx web/security/document.check.ts` verifies frontend field preservation.
+
+For browser QA, run the new service on a separate port with an isolated `GUARDIAN_SECURITY_HOME`. Set `GUARDIAN_UI_URL` and `GUARDIAN_UI_TOKEN_FILE`, then run `node scripts/test-security-ui.mjs`. The token is read only inside the test process. Screenshots stay under ignored `tmp/security-ui-qa`. The old integration harnesses below exercise legacy surfaces; keep their regression checks when shared retained components change.
+
 This guide covers deterministic harnesses, isolated real-model harnesses, and production-like validation against an already-running GuardianAgent app via its REST API.
 
 ## Always-On Debug Traces

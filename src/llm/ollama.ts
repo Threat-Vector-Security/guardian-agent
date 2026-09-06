@@ -107,33 +107,37 @@ export class OllamaProvider implements LLMProvider {
     }
   }
 
-  async listModels(): Promise<ModelInfo[]> {
-    const { client, cleanup } = this.createClient();
+  async listModels(options?: { signal?: AbortSignal; limit?: number }): Promise<ModelInfo[]> {
+    const { client, cleanup } = this.createClient(options?.signal);
     try {
       const list = await client.list();
-      const models = list.models.map((model) => ({
+      const models = list.models.slice(0, options?.limit ?? 1000).map((model) => ({
         id: model.name,
         name: model.name,
         provider: this.name,
       }));
-      return Promise.all(models.map(async (model) => {
+      const result: ModelInfo[] = [];
+      for (const model of models) {
         try {
           const show = await client.show({ model: model.id });
           const capabilities = Array.isArray(show.capabilities)
             ? show.capabilities.filter((capability): capability is string => typeof capability === 'string' && capability.trim().length > 0)
             : [];
           const contextWindow = readOllamaContextWindow(show);
-          return {
+          result.push({
             ...model,
             ...(contextWindow ? { contextWindow } : {}),
             ...(capabilities.length > 0 ? { capabilities } : {}),
-          };
+          });
         } catch (err) {
           log.debug({ err, provider: this.name, host: this.host, model: model.id }, 'Failed to load Ollama model metadata');
-          return model;
+          if (options?.signal?.aborted) throw err;
+          result.push(model);
         }
-      }));
+      }
+      return result;
     } catch (err) {
+      if (options) throw err;
       log.warn({ err, provider: this.name, host: this.host }, 'Failed to list Ollama models');
       return [];
     } finally {

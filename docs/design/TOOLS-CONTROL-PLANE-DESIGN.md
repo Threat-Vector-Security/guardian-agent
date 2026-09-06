@@ -1,5 +1,7 @@
 # Tools Control Plane Design
 
+> **Security conversion:** The new product's public contract is the versioned operation catalogue in `src/security-workspace/operations.ts`, governed by [SECURITY-CONVERSION.md](../architecture/SECURITY-CONVERSION.md). Structured operation dispatch does not perform natural-language intent classification. Administrative operations are excluded from assistant MCP; all transports use the same service authorization. The existing deferred tool catalogue below remains legacy-only and is not exposed by the new server.
+
 **Status:** Implemented current architecture  
 
 ## Goal

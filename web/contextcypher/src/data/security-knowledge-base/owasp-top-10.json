@@ -1,0 +1,270 @@
+{
+  "metadata": {
+    "version": "1.0.0",
+    "lastUpdated": "2025-03-09T00:00:00Z",
+    "source": "OWASP Top 10 - 2021",
+    "description": "OWASP Top 10 web application security risks for embedded AI guidance"
+  },
+  "risks": [
+    {
+      "rank": 1,
+      "id": "A01",
+      "title": "Broken Access Control",
+      "description": "Restrictions on what authenticated users are allowed to do are often not properly enforced.",
+      "commonWeaknesses": [
+        "Violation of the principle of least privilege",
+        "Bypassing access control checks",
+        "Acting as a user without being logged in",
+        "Acting as an admin when logged in as a user"
+      ],
+      "examples": [
+        "Accessing account info by changing URL parameter",
+        "Viewing or editing another user's account",
+        "Elevation of privilege",
+        "Metadata manipulation"
+      ],
+      "prevention": [
+        "Deny by default",
+        "Implement access control mechanisms once",
+        "Model access controls to enforce record ownership",
+        "Log access control failures"
+      ],
+      "mitreTechniques": ["T1078", "T1055"],
+      "nistControls": ["AC-3", "AC-6", "AC-2"]
+    },
+    {
+      "rank": 2,
+      "id": "A02",
+      "title": "Cryptographic Failures",
+      "description": "Failures related to cryptography which often leads to sensitive data exposure.",
+      "commonWeaknesses": [
+        "Transmitting data in clear text",
+        "Using old or weak cryptographic algorithms",
+        "Default crypto keys in use",
+        "Weak random number generation"
+      ],
+      "examples": [
+        "Credit card numbers displayed in clear text",
+        "Passwords stored using weak hashes",
+        "Backup files not encrypted",
+        "Certificates not properly validated"
+      ],
+      "prevention": [
+        "Classify data and apply controls",
+        "Don't store sensitive data unnecessarily",
+        "Encrypt all data at rest",
+        "Use strong standard algorithms"
+      ],
+      "mitreTechniques": ["T1552", "T1040"],
+      "nistControls": ["SC-13", "SC-8", "SC-28"]
+    },
+    {
+      "rank": 3,
+      "id": "A03",
+      "title": "Injection",
+      "description": "User-supplied data is not validated, filtered, or sanitized by the application.",
+      "commonWeaknesses": [
+        "User data not validated or sanitized",
+        "Dynamic queries without parameterization",
+        "Hostile data used in ORM search parameters",
+        "Hostile data directly used in SQL"
+      ],
+      "examples": [
+        "SQL injection attacks",
+        "NoSQL injection attacks",
+        "OS command injection",
+        "LDAP injection"
+      ],
+      "prevention": [
+        "Use parameterized queries",
+        "Validate all inputs",
+        "Escape special characters",
+        "Use LIMIT controls in SQL"
+      ],
+      "mitreTechniques": ["T1190", "T1059"],
+      "nistControls": ["SI-10", "SI-3", "AC-3"]
+    },
+    {
+      "rank": 4,
+      "id": "A04",
+      "title": "Insecure Design",
+      "description": "Risks related to design and architectural flaws calling for more use of threat modeling.",
+      "commonWeaknesses": [
+        "Missing or ineffective control design",
+        "Architecture without security considerations",
+        "Insecure design patterns",
+        "Insufficient threat modeling"
+      ],
+      "examples": [
+        "Credential recovery without security questions",
+        "E-commerce allowing fake reviews",
+        "Cinema booking without rate limiting",
+        "Retail chain not validating inventory"
+      ],
+      "prevention": [
+        "Establish secure development lifecycle",
+        "Use threat modeling",
+        "Integrate security language into user stories",
+        "Validate all assumptions"
+      ],
+      "mitreTechniques": ["T1190", "T1078"],
+      "nistControls": ["SA-8", "SA-15", "SA-17"]
+    },
+    {
+      "rank": 5,
+      "id": "A05",
+      "title": "Security Misconfiguration",
+      "description": "Missing appropriate security hardening across any part of the application stack.",
+      "commonWeaknesses": [
+        "Missing security hardening",
+        "Improperly configured permissions",
+        "Unnecessary features enabled",
+        "Default accounts and passwords"
+      ],
+      "examples": [
+        "Cloud storage publicly accessible",
+        "Directory listing enabled",
+        "Error messages containing sensitive info",
+        "Security features disabled"
+      ],
+      "prevention": [
+        "Repeatable hardening process",
+        "Minimal platform without unnecessary features",
+        "Review and update configurations",
+        "Automated process to verify configurations"
+      ],
+      "mitreTechniques": ["T1190", "T1068"],
+      "nistControls": ["CM-7", "CM-6", "SI-2"]
+    },
+    {
+      "rank": 6,
+      "id": "A06",
+      "title": "Vulnerable and Outdated Components",
+      "description": "Using components with known vulnerabilities or that are out of date or unsupported.",
+      "commonWeaknesses": [
+        "Unknown component versions",
+        "Vulnerable or unsupported software",
+        "Irregular vulnerability scanning",
+        "Untimely security updates"
+      ],
+      "examples": [
+        "Components with known CVEs",
+        "Outdated libraries and frameworks",
+        "Unsupported operating systems",
+        "Vulnerable third-party components"
+      ],
+      "prevention": [
+        "Remove unused dependencies",
+        "Inventory client and server components",
+        "Monitor for vulnerabilities",
+        "Obtain components from official sources"
+      ],
+      "mitreTechniques": ["T1190", "T1068"],
+      "nistControls": ["SI-2", "SA-15", "RA-5"]
+    },
+    {
+      "rank": 7,
+      "id": "A07",
+      "title": "Identification and Authentication Failures",
+      "description": "Confirmation of user identity, authentication, and session management is critical.",
+      "commonWeaknesses": [
+        "Permits brute force attacks",
+        "Weak or well-known passwords",
+        "Weak credential recovery processes",
+        "Session IDs exposed in URL"
+      ],
+      "examples": [
+        "Brute force attacks not prevented",
+        "Default passwords allowed",
+        "Credential stuffing attacks",
+        "Session fixation attacks"
+      ],
+      "prevention": [
+        "Implement multi-factor authentication",
+        "Do not ship with default credentials",
+        "Implement weak password checks",
+        "Limit failed login attempts"
+      ],
+      "mitreTechniques": ["T1110", "T1078"],
+      "nistControls": ["IA-2", "IA-5", "AC-7"]
+    },
+    {
+      "rank": 8,
+      "id": "A08",
+      "title": "Software and Data Integrity Failures",
+      "description": "Code and infrastructure that does not protect against integrity violations.",
+      "commonWeaknesses": [
+        "Unsigned software updates",
+        "Insecure CI/CD pipelines",
+        "Auto-update without integrity verification",
+        "Untrusted sources for updates"
+      ],
+      "examples": [
+        "SolarWinds supply chain attack",
+        "Unsigned firmware updates",
+        "Malicious npm packages",
+        "Compromised CDN resources"
+      ],
+      "prevention": [
+        "Digital signatures for software",
+        "Ensure integrity of repositories",
+        "Implement proper CI/CD security",
+        "Review code and configuration changes"
+      ],
+      "mitreTechniques": ["T1195", "T1574"],
+      "nistControls": ["SI-7", "SA-12", "SA-15"]
+    },
+    {
+      "rank": 9,
+      "id": "A09",
+      "title": "Security Logging and Monitoring Failures",
+      "description": "Without logging and monitoring, breaches cannot be detected.",
+      "commonWeaknesses": [
+        "Auditable events not logged",
+        "Warnings and errors generate inadequate logs",
+        "Logs not monitored for suspicious activity",
+        "Penetration testing doesn't trigger alerts"
+      ],
+      "examples": [
+        "Login failures not logged",
+        "High-value transactions without logging",
+        "Logs only stored locally",
+        "No real-time monitoring"
+      ],
+      "prevention": [
+        "Ensure all failures are logged",
+        "Ensure logs are in consumable format",
+        "Establish monitoring and alerting",
+        "Establish incident response plan"
+      ],
+      "mitreTechniques": ["T1562", "T1070"],
+      "nistControls": ["AU-2", "AU-6", "SI-4"]
+    },
+    {
+      "rank": 10,
+      "id": "A10",
+      "title": "Server-Side Request Forgery (SSRF)",
+      "description": "SSRF flaws occur when a web application fetches a remote resource without validating the URL.",
+      "commonWeaknesses": [
+        "URL validation not implemented",
+        "Raw response returned to client",
+        "No network access controls",
+        "Unsafe HTTP redirects"
+      ],
+      "examples": [
+        "Accessing internal services",
+        "Reading local files",
+        "Port scanning internal networks",
+        "Accessing cloud metadata services"
+      ],
+      "prevention": [
+        "Sanitize and validate all client-supplied input",
+        "Enforce URL schema and destination",
+        "Do not send raw responses to clients",
+        "Disable HTTP redirections"
+      ],
+      "mitreTechniques": ["T1190", "T1071"],
+      "nistControls": ["SI-10", "SC-7", "AC-4"]
+    }
+  ]
+} 

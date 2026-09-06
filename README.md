@@ -1,516 +1,59 @@
-<p align="center">
-  <img src="docs/images/guardian agent banner.png" alt="GuardianAgent banner" width="100%"/>
-</p>
+# Guardian Agent
 
-<h1 align="center">GuardianAgent</h1>
+A local security workspace that connects workstation and network observations to architecture, threats, and controls. Operate it yourself or through a scoped AI assistant connection.
 
-<h3 align="center">Security-first AI agent platform for local LLMs, governed tool use, coding workflows, automations, and personal assistant work.</h3>
+**2.0 alpha — the security conversion is under active verification. Apache-2.0 application code.** This uses the existing Guardian Agent repository and restores the ContextCypher diagram editor, examples, standalone security AI and GRC workflows inside the local security workspace.
 
-<p align="center">
-  GuardianAgent is a self-hosted AI assistant and agent orchestration runtime for local AI, managed-cloud, and frontier LLMs. It combines a daily-use Second Brain with guarded power-user surfaces for coding, workstation operations, workflow automation, security, network, and cloud operations. The same assistant is available in web, CLI, Telegram, and trusted voice-device channels, with tool approvals, sandboxing, prompt-injection defenses, audit trails, and policy boundaries enforced by the runtime.
-</p>
+For the original general-purpose Guardian Agent, use the [archived 1.0.0 release](https://github.com/Threat-Vector-Security/guardian-agent/releases/tag/v1.0.0). It preserves the code immediately before the security conversion.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/v1.0.0-release-brightgreen?style=for-the-badge" alt="Version 1.0.0"/>
-  <img src="https://img.shields.io/badge/LICENSE-Apache--2.0-blue?style=for-the-badge" alt="Apache 2.0 License"/>
-  <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node.js >= 20"/>
-  <br/>
-  <img src="https://img.shields.io/badge/SECURITY-FOUR--LAYER%20DEFENSE-critical?style=for-the-badge" alt="Four-Layer Defense"/>
-  <img src="https://img.shields.io/badge/LLM-Local%20%7C%20Managed%20Cloud%20%7C%20Frontier-blueviolet?style=for-the-badge" alt="Multi-LLM"/>
-  <img src="https://img.shields.io/badge/CHANNELS-CLI%20%7C%20Web%20%7C%20Telegram%20%7C%20Voice-2496ED?style=for-the-badge" alt="Multi-Channel"/>
-</p>
+## Run
 
-## Table of Contents
+Requires Node.js 24.14 or later with built-in SQLite.
 
-- [Product Overview](#product-overview)
-- [Core Capabilities](#core-capabilities)
-- [Repository Status](#repository-status)
-- [Project Layout](#project-layout)
-- [Documentation](#documentation)
-- [Security at a Glance](#security-at-a-glance)
-- [Getting Started](#getting-started)
-- [LLM Providers](#llm-providers)
-- [Configuration](#configuration)
-- [Development and Verification](#development-and-verification)
-- [Contributing](#contributing)
-- [Troubleshooting](#troubleshooting)
-- [License](#license)
-
-## Product Overview
-
-GuardianAgent is built for people who want a local AI agent that can do real work without handing unchecked tool access to an LLM. It supports local LLM assistants through Ollama, hosted models through providers such as OpenAI, Anthropic, OpenRouter, NVIDIA Cloud, and Google Gemini, and a governed tool layer for search, coding, automation, integrations, shell-adjacent workflows, and operator tasks.
-
-Unlike a simple chatbot wrapper, GuardianAgent treats tool use as a controlled security boundary. The runtime routes intent through a shared gateway, gates non-read-only actions with approvals, applies sandbox and allowed-path policies, scans for prompt injection and secret leakage, and keeps MCP tools, package installs, browser actions, workspace access, and automations behind explicit guardrails.
-
-### Second Brain
-
-Second Brain (`#/`) is the default web home.
-
-- `Today` centers the day around agenda, quick capture, priority tasks, briefs, notes, and routines
-- `Calendar` combines synced and local events with assistant-aware planning and follow-up
-- `Tasks` provides a lightweight board for priorities, due dates, and status tracking
-- `Notes` keeps searchable, pinnable, and archivable notes in one place
-- `Contacts`, `Library`, `Briefs`, and `Routines` round out the daily-use memory and upkeep workflow
-- Keep daily context separate from the operator and workstation consoles
-- Further reading: [Second Brain As-Built Design](docs/design/SECOND-BRAIN-AS-BUILT.md)
-
-<p align="center">
-  <a href="docs/images/secondbrain/today-2026-05-01.png">
-    <img src="docs/images/secondbrain/today-2026-05-01.png" alt="GuardianAgent Second Brain Today view" width="100%"/>
-  </a>
-</p>
-
-<p align="center">
-  <em>Today is the default Second Brain landing view for agenda, capture, tasks, briefs, notes, and routines.</em>
-</p>
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <a href="docs/images/secondbrain/calendar-2026-05-01.png">
-        <img src="docs/images/secondbrain/calendar-2026-05-01.png" alt="GuardianAgent Second Brain Calendar view" width="100%"/>
-      </a>
-      <br/>
-      <strong>Calendar</strong>
-    </td>
-    <td align="center" width="50%">
-      <a href="docs/images/secondbrain/Screenshot%202026-04-08%20134510.png">
-        <img src="docs/images/secondbrain/Screenshot%202026-04-08%20134510.png" alt="GuardianAgent Second Brain Tasks view" width="100%"/>
-      </a>
-      <br/>
-      <strong>Tasks</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <a href="docs/images/secondbrain/Screenshot%202026-04-08%20134540.png">
-        <img src="docs/images/secondbrain/Screenshot%202026-04-08%20134540.png" alt="GuardianAgent Second Brain Notes view" width="100%"/>
-      </a>
-      <br/>
-      <strong>Notes</strong>
-    </td>
-    <td align="center" width="50%">
-      <a href="docs/images/secondbrain/Screenshot%202026-04-08%20134604.png">
-        <img src="docs/images/secondbrain/Screenshot%202026-04-08%20134604.png" alt="GuardianAgent Second Brain Routines view" width="100%"/>
-      </a>
-      <br/>
-      <strong>Routines</strong>
-    </td>
-  </tr>
-</table>
-
-### Power User Capabilities
-
-- `Performance` (`#/performance`) for workstation health, editable profiles, live processes, and reviewed cleanup. See [Performance Management Spec](docs/design/PERFORMANCE-MANAGEMENT-DESIGN.md).
-- `Code` (`#/code`) for repo-scoped coding sessions with chat, Monaco editor, diffing, approvals, trust review, session-bound terminals, and workspace-scoped execution. See [Coding Workspace Spec](docs/design/CODING-WORKSPACE-DESIGN.md).
-- `Automations` (`#/automations`) for saved and scheduled Guardian workflows and assistant tasks. See [Automation Framework Spec](docs/design/AUTOMATION-FRAMEWORK-DESIGN.md).
-- `Security`, `Network`, and `Cloud` for alerts, posture, diagnostics, and infrastructure oversight. Start with [WebUI Design](docs/design/WEBUI-DESIGN.md) and [SECURITY.md](SECURITY.md).
-- `Configuration` and `Reference Guide` for setup, integrations, policy, and operator guidance.
-
-### Shared Assistant
-
-- Web, CLI, Telegram, and Voice all use the same guarded assistant model
-- Local, managed-cloud, and frontier LLM providers are supported, including Ollama, Ollama Cloud, OpenRouter, NVIDIA Cloud, Anthropic, OpenAI, and other OpenAI-compatible providers
-- Built-in tools, integrations, memory, and automations stay behind approval and policy controls
-- More detail: [WebUI Design](docs/design/WEBUI-DESIGN.md), [Tools Control Plane Design](docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
-
-## Screenshots
-
-Second Brain screenshots are shown above in Product Overview. The gallery below covers the remaining major Guardian surfaces.
-
-<details>
-  <summary>Open the full application gallery</summary>
-
-  <p><em>Security, Network, Cloud, Automations, Configuration, Coding Workspace, and Reference Guide.</em></p>
-
-  <table>
-    <tr>
-      <td align="center" width="50%">
-        <a href="docs/images/security.png">
-          <img src="docs/images/security.png" alt="GuardianAgent security view" width="100%"/>
-        </a>
-        <br/>
-        <strong>Security</strong>
-      </td>
-      <td align="center" width="50%">
-        <a href="docs/images/network.png">
-          <img src="docs/images/network.png" alt="GuardianAgent network view" width="100%"/>
-        </a>
-        <br/>
-        <strong>Network</strong>
-      </td>
-    </tr>
-    <tr>
-      <td align="center" width="50%">
-        <a href="docs/images/cloud.png">
-          <img src="docs/images/cloud.png" alt="GuardianAgent cloud view" width="100%"/>
-        </a>
-        <br/>
-        <strong>Cloud</strong>
-      </td>
-      <td align="center" width="50%">
-        <a href="docs/images/automations.png">
-          <img src="docs/images/automations.png" alt="GuardianAgent automations view" width="100%"/>
-        </a>
-        <br/>
-        <strong>Automations</strong>
-      </td>
-    </tr>
-    <tr>
-      <td align="center" width="50%">
-        <a href="docs/images/configuration-providers-2026-05-01.png">
-          <img src="docs/images/configuration-providers-2026-05-01.png" alt="GuardianAgent configuration provider routing view" width="100%"/>
-        </a>
-        <br/>
-        <strong>Configuration / Providers</strong>
-      </td>
-      <td align="center" width="50%">
-        <a href="docs/images/coding-workspace-2026-05-01.png">
-          <img src="docs/images/coding-workspace-2026-05-01.png" alt="GuardianAgent coding workspace view" width="100%"/>
-        </a>
-        <br/>
-        <strong>Coding Workspace</strong>
-      </td>
-    </tr>
-    <tr>
-      <td align="center" colspan="2">
-        <a href="docs/images/reference-guide.png">
-          <img src="docs/images/reference-guide.png" alt="GuardianAgent reference guide view" width="100%"/>
-        </a>
-        <br/>
-        <strong>Reference Guide</strong>
-      </td>
-    </tr>
-  </table>
-</details>
-
----
-
-## Core Capabilities
-
-- Security-first AI agent platform for local, self-hosted, and hybrid LLM workflows
-- Local AI and Ollama support alongside OpenAI, Anthropic, OpenRouter, NVIDIA Cloud, Gemini, and other hosted providers
-- Governed tool use with approvals, sandboxing, allowed paths, command policy, and audit trails
-- Prompt-injection defenses, output scanning, secret redaction, trust-aware memory, and quarantined tool-result reinjection
-- AI coding assistant and repo-scoped Coding Workspace with editor, diffs, session-bound terminals, trust review, and verification surfaces
-- Daily-use Second Brain for planning, capture, retrieval, calendar-aware context, tasks, notes, people, routines, and briefs
-- Workflow automation and scheduled agent runs with bounded authority, run history, and approval-aware execution
-- MCP tool security, native integrations, search, browser/workspace tooling, and provider connectors behind the same runtime guardrails
-- Shared assistant across Web, CLI, Telegram, and Voice
-- Specs and architecture docs for deeper implementation detail when you need it
-
-## Repository Status
-
-GuardianAgent is a security-focused local-first assistant runtime with several mature product surfaces and several actively evolving control-plane areas.
-
-| Area | Status |
-|------|--------|
-| Second Brain, Coding Workspace, Security dashboard, Configuration Center | Actively implemented product surfaces |
-| Web, CLI, Telegram, and Voice channels | Supported first-party channels |
-| Local, managed-cloud, and frontier LLM providers | Supported through configurable provider profiles |
-| Brokered worker isolation, approvals, output scanning, audit trail | Core runtime security model |
-| Some cloud, hosted, federation, and enterprise proposals | Design-stage or roadmap material under `docs/proposals/` and `docs/plans/` |
-
-Historical proposals that have shipped live in `docs/implemented/`. Completed one-time plans live in `docs/archive/`. Active specifications live primarily in `docs/design/` and `docs/architecture/`.
-
-## Project Layout
-
-```text
-GuardianAgent/
-├─ src/                    TypeScript runtime, channels, tools, prompts, memory, and orchestration
-│  ├─ channels/            Web, CLI, Telegram, Voice, and runtime route adapters
-│  ├─ runtime/             Intent gateway, orchestration, code sessions, memory, security, automations
-│  ├─ tools/               Built-in tools, executor, registry, MCP client, and tool policy surfaces
-│  ├─ llm/                 Provider clients, routing, failover, and guarded LLM access
-│  ├─ guardian/            Admission, policy, output, and audit security controls
-│  └─ search/              Local and provider-backed search integration
-├─ web/public/             Browser UI, page modules, chat panel, styles, assets, and vendored UI code
-├─ scripts/                Setup scripts, smoke tests, integration harnesses, and packaging helpers
-├─ docs/
-│  ├─ architecture/        Current architecture and module-boundary guidance
-│  ├─ design/              Current product and runtime specifications
-│  ├─ guides/              Operator and contributor guides
-│  ├─ plans/               Active implementation plans
-│  ├─ proposals/           Unshipped or partially scoped future proposals
-│  ├─ implemented/         Historical proposals whose core scope has shipped
-│  └─ archive/             Retired designs and completed plans
-├─ policies/               Security and runtime policy files
-├─ skills/                 Bundled skill instructions and workflows
-├─ native/windows-helper/  Rust helper for Windows-native host integration and isolation support
-└─ build/                  Generated packaging artifacts
+```sh
+npm ci
+npm run build
+npm run init
+npm start
 ```
 
-## Documentation
+Open **http://127.0.0.1:3000**. The local browser workspace opens without an access code by default. To require one, enable **Settings → Require an access token to open Guardian**; initialization reports the administrator token file for sign-in and recovery. Configured Entra SSO always requires sign-in. External assistants still need scoped credentials. The service requires no LLM account. Native monitoring runs every minute, with explicit coverage and error reporting.
 
-Start with these documents instead of browsing every file under `docs/`:
+## Included
 
-| Topic | Document |
-|-------|----------|
-| Architecture overview | [docs/architecture/OVERVIEW.md](docs/architecture/OVERVIEW.md) |
-| Forward module boundaries | [docs/architecture/FORWARD-ARCHITECTURE.md](docs/architecture/FORWARD-ARCHITECTURE.md) |
-| Security model | [SECURITY.md](SECURITY.md) |
-| Web UI information architecture | [docs/design/WEBUI-DESIGN.md](docs/design/WEBUI-DESIGN.md) |
-| Second Brain product surface | [docs/design/SECOND-BRAIN-AS-BUILT.md](docs/design/SECOND-BRAIN-AS-BUILT.md) |
-| Coding workspace | [docs/design/CODING-WORKSPACE-DESIGN.md](docs/design/CODING-WORKSPACE-DESIGN.md) |
-| Tools control plane | [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](docs/design/TOOLS-CONTROL-PLANE-DESIGN.md) |
-| Capability authoring | [docs/guides/CAPABILITY-AUTHORING-GUIDE.md](docs/guides/CAPABILITY-AUTHORING-GUIDE.md) |
-| Integration testing | [docs/guides/INTEGRATION-TEST-HARNESS.md](docs/guides/INTEGRATION-TEST-HARNESS.md) |
-| Installation and packaging | [INSTALLATION.md](INSTALLATION.md) |
+- Codex-inspired React workbench with a collapsible sidebar: Protection, Findings, Systems, Environments, Activity, Integrations, Settings.
+- Local host posture checks, passive network neighbors/connections, Microsoft Defender status and approved scan requests, and third-party AV inventory.
+- ContextCypher JSON import/export with exact original preservation, stable IDs, graph validation, revision conflicts, diagrams, threats and controls, and retained GRC records.
+- One authenticated operations service behind HTTP, a JSON CLI, and standard MCP over stdio.
+- Scoped, expiring, revocable assistant credentials; separate administrator sessions; durable action proposals and audit records.
+- Optional Microsoft Entra ID sign-in with PKCE, signature/tenant validation and explicit group roles.
+- Native macOS posture and passive network observations; explicit read-only AWS account collection for EC2, Security Hub and GuardDuty.
 
-## Security at a Glance
+Read the [operator and integration guide](docs/guides/SECURITY-WORKSPACE.md) for MCP setup, CLI examples, Entra configuration, data migration, and current limits. The [conversion architecture](docs/architecture/SECURITY-CONVERSION.md) explains implementation ownership; the [decision report](docs/research/GUARDIAN-SECURITY-REPURPOSING-REPORT-2026-09-06.md) records the rationale and longer-term roadmap.
 
-GuardianAgent enforces security at the Runtime level — agents cannot bypass it. Every message, LLM call, tool action, and response passes through mandatory chokepoints.
+## Verify
 
-| Layer | When | What It Does |
-|-------|------|--------------|
-| **1 — Admission** | Before the agent sees input | Prompt injection detection, rate limiting, capability checks, secret/PII scanning, path blocking, SSRF protection |
-| **1.5 — Process Sandbox** | During tool execution | OS-level isolation via bwrap namespaces (Linux), native helper (Windows), or ulimit/env hardening fallback |
-| **2 — Guardian Agent** | Before tool execution | Inline LLM evaluates every non-read-only tool action; blocks high/critical risk. Fail-closed by default |
-| **3 — Output Guardian** | After execution, before delivery or reinjection | Scans LLM responses and tool results, classifies trust (`trusted` / `low_trust` / `quarantined`), redacts secrets/PII, and can suppress raw reinjection |
-| **4 — Sentinel Audit** | Retrospective (scheduled or on-demand) | Analyzes audit log for anomaly patterns: capability probing, volume spikes, repeated secret detections, error storms |
-
-The built-in chat/planner loop runs in a **brokered worker process** with no network access. Tools, approvals, trust metadata, and LLM API calls are mediated through broker RPC.
-
-Install-like public package-manager actions are also routed through a dedicated managed path. Guardian uses `package_install` to stage the requested top-level package artifacts, review them before execution, resolve the install working directory through the active workspace or configured allowed paths, and surface caution or blocked findings in the unified security workflow instead of treating package installs as ordinary shell commands.
-
-For the full security architecture, threat model, and configuration details, see [SECURITY.md](SECURITY.md).
-
----
-
-## Getting Started
-
-### Requirements
-
-- **Node.js 20** or newer
-- A local, managed-cloud, or frontier **LLM provider** (Ollama, Ollama Cloud, OpenRouter, NVIDIA Cloud, Anthropic, OpenAI, etc.)
-
-SQLite-backed persistence and monitoring are enabled when the Node build includes `node:sqlite`. Otherwise, assistant memory and analytics run in-memory automatically.
-
-### Quick Start
-
-Clone the repository and use the platform start script:
-
-**Windows:**
-```powershell
-.\scripts\start-dev-windows.ps1
-```
-
-**Linux / macOS:**
-```bash
-bash scripts/start-dev-unix.sh
-```
-
-These scripts handle dependency installation, build, startup, and the initial configuration bootstrap.
-
-For a manual development loop:
-
-```bash
-npm install
+```sh
 npm run check
+npm run test:security-workspace
 npm test
-npm run dev
+node --import tsx web/security/document.check.ts
+npm run build
+npm run validate:dependency-contract
+npm run test:package
+npm run test:production
 ```
 
-### First Run
+Tests exercise real SQLite, HTTP and MCP transports with isolated state. Antivirus side effects are injected only in tests, so the test suite never starts a real malware scan. Browser checks run against the real local service; see the [test guide](docs/guides/INTEGRATION-TEST-HARNESS.md).
 
-After startup:
+## Coverage and migration
 
-1. **Open the web UI** and go to the **Configuration Center** (`#/config`, usually `http://localhost:3000`)
-2. **Add your LLM provider** — select Ollama for local models, or add an API key for Ollama Cloud, OpenRouter, NVIDIA Cloud, Anthropic, OpenAI, or another supported external provider.
-3. **Open Second Brain** at `#/` to confirm the default daily-home surface is live and the assistant is ready for task, note, calendar, and people workflows.
-4. **Connect Google Workspace or Microsoft 365 if needed** — use `Cloud > Connections` when you want provider-backed calendar and contacts synced into Second Brain.
-5. **Review tool policy** — defaults to `on-request` / `approve_each` for the main assistant, with a read-only shell allowlist. Mutating tools still require approval, and public package-manager installs should go through the managed `package_install` path instead of `shell_safe`.
-6. **Enable optional channels** — Telegram and Voice setup live under `Configuration > Integration System`
-7. **Set web auth** — web access defaults to bearer-protected mode; configure it in `Configuration > Integration System > Web Authentication` or with CLI `/auth ...`
-8. **Open the Coding Workspace if needed** — go to `#/code` for a project-scoped coding workspace with its own session history, trust review, terminals, approvals, and verification surfaces
+`npm run package:security` builds a production-only local distribution and tarball. See [packaging](docs/guides/SECURITY-PACKAGING.md) for Windows/macOS launchers and Node prerequisites. Native signed installers remain a release gate. Root `npm pack` is blocked so it cannot accidentally ship the retained legacy runtime.
 
-Most configuration is done through the **web UI** or **CLI commands** (`/config`, `/providers`, `/auth`, `/tools`). Manual `config.yaml` editing is optional and intended for advanced use.
+Guardian coordinates security observations and supported actions. It is not a kernel EDR, packet-inspection engine, or universal interceptor of actions taken outside its interfaces. A requested antivirus scan does not establish completion or a clean result. Optional Entra requires acceptance testing in the customer's tenant. Signed Windows service deployment, remote fleets, proprietary EDR response connectors and managed SIEM delivery remain separate release gates.
 
-### Using GuardianAgent
+Existing application profiles are not silently rewritten. The new service uses `~/.guardianagent/security-v2`; import ContextCypher exports through Systems. The former general assistant has no supported launch, package, container, or deployment path. Its remaining source is retained temporarily only for migration history and test-backed extraction of security modules; it is not part of the Guardian 2 build.
 
-GuardianAgent is accessible through four channels:
+## License and attribution
 
-| Channel | Access | Best For |
-|---------|--------|----------|
-| **Web** | Browser at the configured port | Second Brain, dashboard/operator surfaces, configuration, monitoring, chat, and coding workspace |
-| **CLI** | Terminal where GuardianAgent is running | Quick commands, scripting, and local development |
-| **Telegram** | Telegram bot (requires setup) | Mobile access and notifications |
-| **Voice** | Trusted device or bridge service over HTTP | Spoken commands from devices such as ESP32-S3-BOX-3B |
-
-**What you can do:**
-- Chat with the built-in AI assistant
-- Use Second Brain as the default daily home for tasks, notes, people, routines, and calendar-aware planning
-- Use Performance, Security, Network, Cloud, and Automations as dedicated operator surfaces instead of burying everything in chat
-- Use the Coding Workspace for repository-scoped work with editor, diffing, approvals, checks, trust review, and session-bound terminals
-- Run guarded tools, integrations, search, and automation workflows across the same assistant
-
-**Approvals and safety:** Actions may run automatically, wait for approval, or be denied depending on policy, trust level, and tool risk. For the detailed behavior, see [SECURITY.md](SECURITY.md) and [Tools Control Plane Design](docs/design/TOOLS-CONTROL-PLANE-DESIGN.md).
-
-### Coding Workspace
-
-The web `Code` page is a dedicated repo-scoped workspace backed by server-owned code sessions. It has its own session context, editor, diffing, approvals, checks, trust review, and session-bound terminals.
-
-Implementation detail and current limitations are documented in [docs/design/CODING-WORKSPACE-DESIGN.md](docs/design/CODING-WORKSPACE-DESIGN.md).
-
-### Telegram Setup
-
-1. Open Telegram, search for `@BotFather`, press **Start**, run `/newbot`
-2. Follow prompts for bot name and username (must end with `bot`), copy the bot token
-3. Add the token in `Configuration > Integration System > Telegram Channel` or through the CLI configuration flow
-4. Restrict access with allowed chat IDs
-5. Save the channel settings; Telegram changes hot-reload when the token or credential ref and allowlist are valid
-
-### Voice Device Setup
-
-1. Enable the Voice channel in `Configuration > Integration System`
-2. Configure bearer authentication and, when possible, allowed device IDs
-3. Choose transcription: ElevenLabs Scribe, OpenRouter STT, a local command such as Whisper/faster-whisper/whisper.cpp, or an OpenAI-compatible local transcription endpoint
-4. Configure the ESP32 firmware or bridge to send pre-transcribed text to Guardian, or send short audio clips for Guardian to transcribe before normal assistant routing
-5. Keep the voice listener on localhost or a trusted LAN address and restart Guardian after startup-channel config changes
-
-### Windows Portable Build (Optional)
-
-For additional native subprocess isolation on Windows:
-
-```powershell
-npm run portable:windows     # Portable zip with sandbox helper
-npm run installer:windows    # Traditional installer
-```
-
-See [INSTALLATION.md](INSTALLATION.md) for the full list of Windows packaging options.
-
----
-
-## LLM Providers
-
-GuardianAgent supports 12 built-in provider families across local, managed-cloud, and frontier tiers:
-
-| Provider | Type | Notes |
-|----------|------|-------|
-| **Ollama** | Local | Runs models locally through the native Ollama path |
-| **Ollama Cloud** | Managed cloud | Ollama-native remote tier between local and frontier providers |
-| **OpenRouter** | Managed cloud | OpenAI-compatible model gateway for many hosted models |
-| **NVIDIA Cloud** | Managed cloud | OpenAI-compatible NVIDIA-hosted inference endpoint |
-| **Anthropic** | Frontier hosted | Claude models with prompt caching |
-| **OpenAI** | Frontier hosted | GPT models |
-| **Groq** | Frontier hosted | Fast OpenAI-compatible inference |
-| **Mistral AI** | Frontier hosted | Mistral hosted models |
-| **DeepSeek** | Frontier hosted | DeepSeek hosted models |
-| **Together AI** | Frontier hosted | Open-source model hosting |
-| **xAI (Grok)** | Frontier hosted | Grok models |
-| **Google Gemini** | Frontier hosted | Gemini models through the OpenAI-compatible endpoint |
-
-### Smart Routing
-
-When both local and external providers are configured, tools automatically route by category:
-
-| Routes to **Local** model | Routes to **External** model |
-|---|---|
-| Filesystem, Shell, Network, System, Memory | Web, Browser, Workspace, Email, Contacts, Search, Automation |
-
-Single-provider setups work without configuration. Smart routing can be toggled off in Configuration > Tools. Per-tool and per-category overrides are available via the LLM column dropdowns.
-
-Inside the external tier, `Configuration > AI Providers` controls whether Guardian prefers managed-cloud profiles such as Ollama Cloud, OpenRouter, or NVIDIA Cloud, or frontier-hosted profiles. The Model Auto Selection Policy can bind named managed-cloud profiles to general, direct, tool-loop, and coding roles.
-
-**Quality-based fallback:** When the local model produces a degraded response (empty, refusal, or boilerplate), the system automatically retries through the fallback chain.
-
----
-
-## Configuration
-
-Most users configure GuardianAgent through the **web Configuration Center** (`#/config`) or **CLI commands**. The `config.yaml` file at `~/.guardianagent/config.yaml` is created and updated automatically by those flows.
-
-Three simplified top-level config aliases cover the most common settings:
-
-```yaml
-sandbox_mode: workspace-write  # off | workspace-write | strict
-approval_policy: on-request    # on-request | auto-approve | autonomous
-writable_roots:                # merged into allowedPaths + sandbox writePaths
-  - /home/user/projects
-```
-
-The default runtime stays brokered with a `workspace-write` sandbox profile and permissive enforcement. Set `sandbox_mode: strict` when you want risky subprocess-backed tools to fail closed unless a strong sandbox backend is available.
-
-For detailed configuration documentation:
-- [Configuration Center Spec](docs/design/CONFIG-CENTER-DESIGN.md)
-- [WebUI Design Spec](docs/design/WEBUI-DESIGN.md)
-
----
-
-## Development and Verification
-
-```bash
-npm test                              # Run all tests (vitest)
-npm run test:verbose                  # Verbose test output
-npm run test:coverage                 # Run with v8 coverage
-npx vitest run src/path/to.test.ts   # Run a single test file
-
-npm run check         # Type-check only (tsc --noEmit)
-npm run build         # TypeScript compilation → dist/
-npm run dev           # Run with tsx (starts CLI channel)
-```
-
-Focused harnesses for common regression surfaces:
-
-```bash
-node scripts/test-coding-assistant.mjs
-node scripts/test-code-ui-smoke.mjs
-node scripts/test-contextual-security-uplifts.mjs
-node scripts/test-security-verification.mjs
-```
-
-Use focused Vitest runs during iteration, then run the broader relevant harness before handing off changes that touch routing, approvals, coding, security, web UI, providers, or startup behavior. The integration testing guide has the full matrix: [docs/guides/INTEGRATION-TEST-HARNESS.md](docs/guides/INTEGRATION-TEST-HARNESS.md).
-
-## Contributing
-
-This repository is structured for architecture-sensitive changes. Before changing a subsystem, read the owning design document and keep implementation, tests, and docs in sync.
-
-- Keep code in the existing TypeScript style: strict ESM, 2-space indentation, semicolons, single quotes, and explicit `.js` extensions in relative imports.
-- Add or update colocated `*.test.ts` coverage for behavior changes.
-- Run `npm run check` and the relevant Vitest or harness commands before opening a PR.
-- Update `src/reference-guide.ts` for user/operator-facing workflow changes.
-- Update the relevant `docs/design/`, `docs/architecture/`, or guide document when changing architecture, routes, tool behavior, security boundaries, or web surfaces.
-- Do not commit secrets, local credentials, generated runtime state from `~/.guardianagent/`, or scratch output from `tmp/`.
-
-## Troubleshooting
-
-| Symptom | First Checks |
-|---------|--------------|
-| Web UI does not load | Confirm the dev script is still running, check the configured port, and look for startup errors in the terminal. |
-| Provider calls fail | Recheck the provider profile in `Configuration > AI Providers`, API key or credential ref, model name, and network access. |
-| Local Ollama model is unavailable | Confirm `ollama serve` is running and the configured model is pulled locally. |
-| Web API returns unauthorized | Configure or rotate web auth in `Configuration > Integration System > Web Authentication` or through CLI `/auth ...`. |
-| Tool execution is blocked | Review the pending approval, sandbox mode, allowed paths, allowed commands, and tool policy in Configuration. |
-| Coding Workspace cannot access files | Confirm the active code session points at the intended workspace and that the request is bound to that session. |
-
-### Reporting Intent Routing Problems
-
-If GuardianAgent chooses the wrong route, uses the wrong tool, asks for the wrong clarification, or gives a result that does not match the requested surface, open a GitHub issue with:
-
-- the exact user request and the response you saw
-- the channel or surface used, such as Web, CLI, Telegram, Voice, or Code
-- the model/provider profile shown in the response header, if available
-- the relevant intent routing trace from `~/.guardianagent/routing/intent-routing.jsonl`
-
-On Windows, the trace is usually at `C:\Users\<your-user>\.guardianagent\routing\intent-routing.jsonl`. Attach only the lines around the failed request if possible. The trace can include prompts, local file paths, provider names, and tool arguments, so review and redact sensitive data before sharing.
-
-GitHub issue comments support drag-and-drop file attachments for logs and JSON data. If GitHub rejects a `.jsonl` file extension, rename the excerpt to `.log` or place it in a `.zip` before attaching. See GitHub's attachment guide: https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/attaching-files.
-
----
-
-## Disclaimer
-
-This software is provided as-is, without warranty of any kind. GuardianAgent implements security controls designed to reduce risk in AI agent systems, but **no software can guarantee complete security**. The developers and contributors accept no liability for any damages, data loss, credential exposure, financial loss, or other harm arising from the use of this software.
-
-By using GuardianAgent, you acknowledge that:
-- AI systems are inherently unpredictable and may produce unexpected outputs
-- Security patterns (secret scanning, prompt injection detection) rely on known signatures and heuristics, and may not catch novel or obfuscated attack vectors
-- You are solely responsible for the configuration, deployment, and operation of this software in your environment
-- You should independently evaluate whether the security controls are sufficient for your use case
-- This software should not be used as a sole security control for systems handling sensitive data without additional safeguards
-
-This project is not affiliated with any security certification body and makes no compliance claims.
-
-## License
-
-Apache 2.0
+[Apache-2.0](LICENSE). ContextCypher domain attribution and preserved-format details are in [CONTEXT-MIGRATION.md](docs/architecture/CONTEXT-MIGRATION.md). No ContextCypher credentials, local provider configuration, generated user state or commercial-stream files are included.

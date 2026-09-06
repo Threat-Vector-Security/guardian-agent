@@ -25991,7 +25991,7 @@ For more information, see the [Python SDK](https://www.daytona.io/docs/en/python
 Authenticate by sending the token in the `x-daytona-preview-token` header:
 
 ```bash
-curl -H "x-daytona-preview-token: vg5c0ylmcimr8b_v1ne0u6mdnvit6gc0" \
+curl -H "x-daytona-preview-token: YOUR_PREVIEW_TOKEN" \
   https://3000-sandbox-123456.proxy.daytona.work
 ```
 

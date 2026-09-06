@@ -134,5 +134,5 @@ export interface LLMProvider {
   stream(messages: ChatMessage[], options?: ChatOptions): AsyncGenerator<ChatChunk>;
 
   /** List available models. */
-  listModels(): Promise<ModelInfo[]>;
+  listModels(options?: { signal?: AbortSignal; limit?: number }): Promise<ModelInfo[]>;
 }

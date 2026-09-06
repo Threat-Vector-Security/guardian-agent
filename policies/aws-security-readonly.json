@@ -1,0 +1,26 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "VerifyConfiguredAccount",
+      "Effect": "Allow",
+      "Action": ["sts:GetCallerIdentity"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ReadSecurityInventory",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:DescribeSecurityGroups",
+        "securityhub:DescribeHub",
+        "securityhub:GetFindings",
+        "guardduty:ListDetectors",
+        "guardduty:GetDetector",
+        "guardduty:ListFindings",
+        "guardduty:GetFindings"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

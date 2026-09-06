@@ -1,0 +1,892 @@
+/* DiagramEditor.css */
+/* ==================== Main Containers ==================== */
+.react-flow-container {
+  width: 100%;
+  height: 100%;
+}
+
+/* ==================== Controls Styles ==================== */
+.react-flow__controls .react-flow__controls-button-active {
+  background-color: var(--rf-controls-button-bg-active, #2196f3) !important;
+  color: white !important;
+  border-color: var(--rf-controls-button-bg-active, #2196f3) !important;
+}
+
+.react-flow__controls .react-flow__controls-button-active:hover {
+  background-color: var(--rf-controls-button-bg-active-hover, #1976d2) !important;
+  border-color: var(--rf-controls-button-bg-active-hover, #1976d2) !important;
+}
+
+.react-flow__controls .react-flow__controls-button-active svg {
+  fill: white !important;
+}
+
+/* react-flow__viewport: Removed contain: layout to allow proper scrolling */
+
+/* ==================== Node Styles ==================== */
+.react-flow__node {
+  pointer-events: all !important;
+}
+
+/* Non-selectable drawing nodes */
+.react-flow__node.non-selectable-drawing {
+  pointer-events: none !important;
+  cursor: default !important;
+}
+
+.react-flow__node.non-selectable-drawing * {
+  pointer-events: none !important;
+}
+
+/* Drawing nodes when not in edit mode */
+.react-flow__node-freehand:not(.selected),
+.react-flow__node-shape:not(.selected),
+.react-flow__node-textAnnotation:not(.selected) {
+  pointer-events: none !important;
+}
+
+/* Security Zone Specific - Removed contain properties to allow proper event propagation */
+
+/* ==================== MiniMap Styles ==================== */
+/* Hide drawing nodes on minimap */
+.react-flow__minimap .minimap-hidden {
+  display: none !important;
+}
+
+.security-zone-wrapper {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* Optimize zone dragging performance */
+.zone-selected {
+  will-change: transform !important;
+}
+
+.zone-selected * {
+  pointer-events: none !important;
+}
+
+.zone-selected .zone-select-button {
+  pointer-events: auto !important;
+}
+
+/* Allow resize handles to be interactive when zone is selected */
+.zone-selected .react-flow__resize-control {
+  pointer-events: auto !important;
+}
+
+.zone-selected .react-flow__resize-control .react-flow__resize-control-handle {
+  pointer-events: auto !important;
+  cursor: nw-resize !important;
+}
+
+.zone-selected .zone-resize-handle {
+  pointer-events: auto !important;
+}
+
+/* Disable animations during drag */
+.react-flow__node-securityZone.dragging {
+  transition: none !important;
+}
+
+.react-flow__node-securityZone.dragging * {
+  transition: none !important;
+}
+
+/* Inactive zone styles - completely disable interaction when not selected */
+.zone-inactive {
+  pointer-events: none !important;
+}
+
+/* Override ReactFlow's node selection behavior for inactive zones */
+.react-flow__node.non-selectable-zone,
+.react-flow__node:has(.zone-inactive) {
+  pointer-events: none !important;
+  cursor: default !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+}
+
+/* Ensure the select button remains clickable */
+.zone-inactive .zone-select-button,
+.non-selectable-zone .zone-select-button {
+  pointer-events: auto !important;
+  z-index: 1000 !important;
+  cursor: pointer !important;
+  position: relative !important;
+}
+
+/* Make the select button area larger for easier clicking */
+.zone-inactive .zone-select-button::before,
+.non-selectable-zone .zone-select-button::before {
+  content: '';
+  position: absolute;
+  top: -10px;
+  left: -10px;
+  right: -10px;
+  bottom: -10px;
+  z-index: -1;
+  pointer-events: auto !important;
+}
+
+.security-zone-content {
+  position: relative;
+  background-color: inherit !important;
+}
+
+/* Add this new style */
+.security-zone-content[class*="MuiBox-root"] {
+  background-color: inherit !important;
+}
+
+/* ==================== Handle Styles ==================== */
+.react-flow__handle {
+  width: 8px !important;
+  height: 8px !important;
+  min-width: 8px !important;
+  min-height: 8px !important;
+  pointer-events: all !important;
+  cursor: crosshair !important;
+  transform: none !important;
+  z-index: 1 !important;
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out !important;
+}
+
+/* Force remove any default React Flow handle styling */
+.react-flow__handle::before,
+.react-flow__handle::after {
+  display: none !important;
+}
+
+/* Create smaller hover area around handles to reduce interference with edge selection */
+.react-flow__handle::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  right: -4px;
+  bottom: -4px;
+  pointer-events: all;
+}
+
+/* Show handles on hover of the larger area */
+.react-flow__handle:hover,
+.react-flow__handle::before:hover + .react-flow__handle {
+  opacity: 1;
+}
+
+/* Show handles when node has connections */
+.react-flow__handle[data-handleid*="source-"] {
+  opacity: 0.5;
+}
+
+.react-flow__handle[data-handleid*="target-"] {
+  opacity: 0.5;
+}
+
+/* Show handles on node hover or selection */
+.react-flow__node:hover .react-flow__handle {
+  opacity: 1;
+}
+
+/* Security Zone specific handle styles */
+.security-zone-wrapper .react-flow__handle {
+  width: 8px !important;
+  height: 8px !important;
+  background: transparent !important;
+  border: 2px solid #969696 !important;
+  pointer-events: all !important;
+  cursor: crosshair !important;
+  z-index: 10 !important;
+  transform: translate(-50%, -50%) !important;
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out !important;
+}
+
+/* Create larger hover area for security zone handles */
+.security-zone-wrapper .react-flow__handle::before {
+  content: '';
+  position: absolute;
+  top: -12px;
+  left: -12px;
+  right: -12px;
+  bottom: -12px;
+  pointer-events: all;
+}
+
+/* Show handles on security zone hover */
+.security-zone-wrapper:hover .react-flow__handle,
+.security-zone-wrapper.selected .react-flow__handle {
+  opacity: 1;
+}
+
+/* Handle hover states */
+.react-flow__handle:hover,
+.security-zone-wrapper .react-flow__handle:hover {
+  background: transparent !important;
+  opacity: 1;
+}
+
+/* Always show handles that are part of a connection */
+.react-flow__handle.react-flow__handle-connecting,
+.react-flow__handle.react-flow__handle-valid {
+  opacity: 1;
+}
+
+/* Remove default handle transforms */
+.react-flow__handle-top,
+.react-flow__handle-right,
+.react-flow__handle-bottom,
+.react-flow__handle-left {
+  transform: none !important;
+}
+
+/* Handle States */
+.react-flow__handle:hover {
+  background: transparent !important;
+  opacity: 1;
+}
+
+.react-flow__handle-connecting {
+  background: #ff0072 !important;
+}
+
+.react-flow__handle-valid {
+  background: #43b883 !important;
+}
+
+/* Handle Connection Rules */
+.react-flow__handle[data-connecting] {
+  cursor: crosshair !important;
+}
+
+.react-flow__handle[data-connecting][data-self-connect]:hover {
+  cursor: not-allowed !important;
+}
+
+/* ==================== Edge Styles ==================== */
+.react-flow__edge {
+  pointer-events: all !important;
+  cursor: pointer;
+  z-index: 1000;
+}
+
+.react-flow__edge-path {
+  stroke: #8a8a8a;
+  stroke-width: 2;
+  transition: stroke 0.2s, stroke-width 0.2s;
+  cursor: pointer !important;
+  pointer-events: all;
+  fill: none;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #0078d4;
+  stroke-width: 3;
+}
+
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: #3794ff;
+  stroke-width: 3px !important;
+}
+
+/* Connection Lines */
+.react-flow__connection {
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.react-flow__connection-path {
+  stroke: #8a8a8a;
+  stroke-width: 2;
+  fill: none;
+  pointer-events: none;
+}
+
+/* Edge Labels */
+.edge-label-container {
+  pointer-events: all;
+  user-select: none;
+  background: rgba(37, 37, 38, 0.85);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #cccccc;
+  border: 1px solid #404040;
+}
+
+.react-flow__edge:hover .edge-label-container {
+  background: rgba(37, 37, 38, 0.95);
+  border-color: #0078d4;
+}
+
+.react-flow__edge.selected .edge-label-container {
+  background: rgba(37, 37, 38, 1);
+  border-color: #0078d4;
+}
+
+/* ==================== Controls Styles ==================== */
+.react-flow__controls {
+  background: var(--theme-surface, #252526);
+  border: 1px solid var(--theme-border, #404040);
+  border-radius: 4px;
+  padding: 4px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.react-flow__controls button {
+  background: var(--theme-surface, #252526);
+  color: var(--theme-textPrimary, #cccccc);
+  border: 1px solid var(--theme-border, #404040);
+  border-radius: 4px;
+  padding: 4px;
+  margin: 2px;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.react-flow__controls button:hover {
+  background: var(--theme-surfaceHover, #2d2d2d);
+  color: var(--theme-primary, #0078d4);
+}
+
+.react-flow__controls button svg {
+  fill: currentColor;
+}
+
+/* ==================== Selection Styles ==================== */
+.react-flow__selection {
+  background: rgba(0, 89, 220, 0.08) !important;
+  border: 1px solid #0059dc !important;
+  z-index: 4;
+}
+
+/* Selection pane (the selection box during drag) */
+.react-flow__selectionpane {
+  background: rgba(0, 89, 220, 0.08) !important;
+  border: 1px solid #0059dc !important;
+}
+
+/* ==================== Edge Animations ==================== */
+.security-edge-animated {
+  stroke-dasharray: 5,5;
+  animation: flowAnimationForward 1s linear infinite;
+}
+
+.security-edge-animated-reverse {
+  stroke-dasharray: 5,5;
+  animation: flowAnimationReverse 1s linear infinite;
+}
+
+@keyframes flowAnimationForward {
+  from {
+    stroke-dashoffset: 10;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes flowAnimationReverse {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 10;
+  }
+}
+
+/* ==================== General Utilities ==================== */
+/* Apply no-select only to diagram canvas elements, not globally */
+.react-flow__node .noselect,
+.react-flow__edge .noselect,
+.react-flow__controls .noselect {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+/* CRITICAL: Ensure analysis panel and its contents can have text selection */
+/* Override only the necessary restrictions */
+.analysis-panel-container,
+.analysis-panel-inner,
+.analysis-panel-content,
+.message-content {
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+  pointer-events: auto !important;
+}
+
+/* Apply text cursor only to actual message text, not buttons/controls */
+.message-content p,
+.message-content span,
+.message-content div:not([role="button"]):not(.MuiButton-root):not(.MuiIconButton-root),
+.analysis-panel-content .message-text,
+.analysis-panel-content .timestamp,
+.selectable-message .message-text,
+.selectable-message .timestamp-text {
+  cursor: text !important;
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+  pointer-events: auto !important;
+}
+
+/* Ensure buttons and interactive elements keep proper cursors */
+.analysis-panel-content button,
+.analysis-panel-content .MuiButton-root,
+.analysis-panel-content .MuiIconButton-root,
+.analysis-panel-content input,
+.analysis-panel-content textarea,
+.analysis-panel-content [role="button"] {
+  cursor: pointer !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+}
+
+/* Ensure analysis panel containers don't inherit canvas restrictions */
+.analysis-panel-container {
+  pointer-events: auto !important;
+}
+
+.analysis-panel-inner {
+  pointer-events: auto !important;
+}
+
+/* Override any global event handling that might interfere */
+.analysis-panel-content {
+  pointer-events: auto !important;
+}
+
+.message-content {
+  pointer-events: auto !important;
+}
+
+/* Force native text selection behavior */
+.selectable-message {
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important; 
+  -ms-user-select: text !important;
+  user-select: text !important;
+  pointer-events: auto !important;
+  /* Disable any React event capture */
+  -webkit-touch-callout: default !important;
+  -webkit-user-drag: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
+
+/* Ensure the message text div behaves like normal HTML text */
+.selectable-message div {
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+  pointer-events: auto !important;
+  cursor: text !important;
+  /* Enable text selection on all browsers */
+  -webkit-touch-callout: default !important;
+}
+
+/* CRITICAL: Override React event system interference */
+/* This is the most specific override for message text selection */
+.selectable-message,
+.selectable-timestamp,
+.message-text,
+.timestamp-text {
+  /* Force text selection to work */
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+  /* Ensure events can bubble normally */
+  pointer-events: auto !important;
+  /* Prevent any interference with selection */
+  -webkit-user-drag: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  /* Disable React synthetic events that might interfere */
+  -webkit-touch-callout: default !important;
+}
+
+/* Only apply text cursor to the actual text content */
+.message-text,
+.timestamp-text span:first-child {
+  cursor: text !important;
+}
+
+/* Specifically target text content areas */
+.selectable-message > div:first-child {
+  /* Message content should always be selectable */
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+  cursor: text !important;
+  /* Allow native text selection behavior */
+  -webkit-touch-callout: default !important;
+  -webkit-user-drag: none !important;
+}
+
+/* ==================== Floating Panel Improvements ==================== */
+.floating-panel-header {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* Improve scrolling in floating panels */
+.MuiDialogContent-root,
+.node-editor-content {
+  scrollbar-width: thin;
+  scrollbar-color: var(--theme-border) var(--theme-surface);
+}
+
+.MuiDialogContent-root::-webkit-scrollbar,
+.node-editor-content::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.MuiDialogContent-root::-webkit-scrollbar-track,
+.node-editor-content::-webkit-scrollbar-track {
+  background: var(--theme-surface);
+}
+
+.MuiDialogContent-root::-webkit-scrollbar-thumb,
+.node-editor-content::-webkit-scrollbar-thumb {
+  background: var(--theme-border);
+  border-radius: 4px;
+}
+
+.MuiDialogContent-root::-webkit-scrollbar-thumb:hover,
+.node-editor-content::-webkit-scrollbar-thumb:hover {
+  background: var(--theme-textSecondary);
+}
+
+/* ==================== Performance Optimizations ==================== */
+.react-flow__edge-path,
+.react-flow__connection-path {
+  will-change: stroke, stroke-width;
+}
+
+.react-flow__node {
+  will-change: transform;
+}
+
+.react-flow__handle {
+  will-change: transform, background-color;
+}
+
+/* ==================== Node Interaction ==================== */
+.react-flow__node:hover {
+  cursor: move;
+}
+
+.react-flow__node.selected {
+  cursor: move;
+  /* Prevent animation conflicts during multi-select */
+  animation: none !important;
+}
+
+/* Disable all animations on selected nodes to prevent flashing */
+.react-flow__node.selected::before,
+.react-flow__node.selected::after,
+.modern-node.selected,
+.security-zone-wrapper.selected {
+  animation: none !important;
+}
+
+/* Disable animations during selection box drag */
+.react-flow__selectionpane + .react-flow__nodes .react-flow__node {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* During active selection, disable animations but keep transforms */
+.react-flow__selectionpane.dragging ~ .react-flow__nodes .react-flow__node,
+.react-flow__selectionpane.dragging ~ .react-flow__nodes .modern-node {
+  animation: none !important;
+}
+
+/* Optimize transitions on selected nodes */
+.react-flow__node.selected,
+.modern-node.selected {
+  transition: box-shadow 0.15s ease, border-color 0.15s ease !important;
+  will-change: transform;
+}
+
+/* Ensure edge labels stay on top during selection */
+.react-flow__edge-label-container {
+  z-index: 1002 !important;
+  position: relative !important;
+}
+
+/* Fix flashing during selection */
+.react-flow__nodes,
+.react-flow__edges {
+  will-change: auto !important;
+}
+
+.react-flow__selectionpane ~ .react-flow__edges .react-flow__edge {
+  transition: none !important;
+}
+
+/* ==================== Node Content ==================== */
+.node-content {
+  padding: 12px;
+  font-size: 13px;
+}
+
+.node-label {
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.node-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-block;
+  margin-top: 4px;
+}
+
+/* ==================== CRITICAL TEXT SELECTION OVERRIDE ==================== */
+/* This is the most specific rule to override ALL global restrictions */
+/* Must be at the end of the file for highest specificity */
+
+/* Enable text selection on the analysis panel container */
+div[data-testid="analysis-panel"],
+.analysis-panel-content,
+.analysis-panel-container {
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+  pointer-events: auto !important;
+  -webkit-touch-callout: default !important;
+  -webkit-user-drag: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
+
+/* Apply text selection specifically to message content areas */
+.selectable-message,
+.message-text,
+.timestamp-text,
+.selectable-message .message-text,
+.selectable-message .timestamp-text {
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+  cursor: text !important;
+  pointer-events: auto !important;
+  -webkit-touch-callout: default !important;
+  -webkit-user-drag: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
+
+/* Keep buttons as non-selectable with proper cursors */
+div[data-testid="analysis-panel"] button,
+div[data-testid="analysis-panel"] .MuiButton-root,
+div[data-testid="analysis-panel"] .MuiIconButton-root,
+.analysis-panel-content button,
+.analysis-panel-content .MuiButton-root,
+.analysis-panel-content .MuiIconButton-root {
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+  cursor: pointer !important;
+  pointer-events: auto !important;
+}
+
+/* Input fields should allow text selection */
+div[data-testid="analysis-panel"] input,
+div[data-testid="analysis-panel"] textarea,
+.analysis-panel-content input,
+.analysis-panel-content textarea {
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+  cursor: text !important;
+  pointer-events: auto !important;
+}
+
+/* Provider badges and token info should not be selectable */
+.selectable-message span[style*="background-color: rgba(0,122,204,0.1)"],
+.timestamp-text span[style*="userSelect: none"] {
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+  cursor: default !important;
+}
+
+/* ==================== Zone Resize Handle Improvements ==================== */
+/* Larger resize handles and hover areas for security zones */
+.zone-resize-handle {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border: 2px solid currentColor !important;
+  width: 12px !important;
+  height: 12px !important;
+  border-radius: 2px !important;
+  cursor: nw-resize !important;
+  opacity: 0.8 !important;
+  transition: all 0.2s ease !important;
+  pointer-events: auto !important;
+}
+
+.zone-resize-handle:hover {
+  background: rgba(255, 255, 255, 1) !important;
+  transform: scale(1.2) !important;
+  opacity: 1 !important;
+  z-index: 1000 !important;
+}
+
+/* Specific cursor styles for each resize handle direction */
+.react-flow__resize-control-handle.top {
+  cursor: n-resize !important;
+}
+
+.react-flow__resize-control-handle.bottom {
+  cursor: s-resize !important;
+}
+
+.react-flow__resize-control-handle.left {
+  cursor: w-resize !important;
+}
+
+.react-flow__resize-control-handle.right {
+  cursor: e-resize !important;
+}
+
+.react-flow__resize-control-handle.top.left {
+  cursor: nw-resize !important;
+}
+
+.react-flow__resize-control-handle.top.right {
+  cursor: ne-resize !important;
+}
+
+.react-flow__resize-control-handle.bottom.left {
+  cursor: sw-resize !important;
+}
+
+.react-flow__resize-control-handle.bottom.right {
+  cursor: se-resize !important;
+}
+
+/* Ensure resize control lines are also interactive */
+.react-flow__resize-control-line {
+  pointer-events: auto !important;
+}
+
+.react-flow__resize-control-line.top {
+  cursor: n-resize !important;
+}
+
+.react-flow__resize-control-line.bottom {
+  cursor: s-resize !important;
+}
+
+.react-flow__resize-control-line.left {
+  cursor: w-resize !important;
+}
+
+.react-flow__resize-control-line.right {
+  cursor: e-resize !important;
+}
+
+/* Larger interaction area for resize handles */
+.zone-resize-handle::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  right: -8px;
+  bottom: -8px;
+  pointer-events: all;
+  background: transparent;
+}
+
+/* Make the resize border more prominent when zone is selected */
+.zone-selected .react-flow__resize-control {
+  border-width: 2px !important;
+  border-style: dashed !important;
+  opacity: 0.6 !important;
+  pointer-events: auto !important;
+}
+
+.zone-selected .react-flow__resize-control:hover {
+  opacity: 1 !important;
+}
+
+/* Ensure all resize elements are interactive */
+.zone-selected .react-flow__resize-control * {
+  pointer-events: auto !important;
+}
+
+/* ==================== Zone Resize Performance Optimizations ==================== */
+/* Prevent layout shifts during streaming */
+.analysis-panel-container {
+  contain: layout style paint;
+}
+
+.analysis-panel-inner {
+  contain: layout style paint;
+}
+
+/* Optimize zone resizing for smooth performance */
+.security-zone-wrapper {
+  will-change: transform, width, height;
+  transform: translateZ(0); /* Force GPU acceleration */
+}
+
+.security-zone-content {
+  will-change: width, height;
+  transform: translateZ(0); /* Force GPU acceleration */
+}
+
+/* Smooth resize transitions */
+.react-flow__resize-control {
+  transition: none !important; /* Remove transitions during resize */
+}
+
+.react-flow__node.react-flow__node-securityZone {
+  will-change: transform, width, height;
+  transform: translateZ(0); /* Force GPU acceleration */
+}
+
+/* Optimize resize handle rendering */
+.zone-resize-handle {
+  will-change: transform, opacity;
+  transform: translateZ(0); /* Force GPU acceleration */
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* Disable transitions during active resize */
+.react-flow__node.react-flow__node-resizing {
+  transition: none !important;
+}
+
+.react-flow__node.react-flow__node-resizing .security-zone-content {
+  transition: none !important;
+}
+
+.react-flow__node.react-flow__node-resizing .security-zone-wrapper {
+  transition: none !important;
+}

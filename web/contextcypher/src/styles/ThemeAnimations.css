@@ -1,0 +1,231 @@
+/* Theme Animation Styles */
+
+/* Neon Glow Keyframes */
+@keyframes neonGlow {
+  0%, 100% { 
+    text-shadow: 0 0 5px currentColor, 0 0 10px currentColor, 0 0 15px currentColor;
+    box-shadow: 0 0 5px currentColor, 0 0 10px currentColor, 0 0 15px currentColor;
+    filter: brightness(1);
+  }
+  50% { 
+    text-shadow: 0 0 10px currentColor, 0 0 20px currentColor, 0 0 30px currentColor;
+    box-shadow: 0 0 10px currentColor, 0 0 20px currentColor, 0 0 30px currentColor;
+    filter: brightness(1.2);
+  }
+}
+
+/* Glitch Effect Keyframes */
+@keyframes glitch {
+  0% { transform: translateX(0); }
+  10% { transform: translateX(-2px) scaleY(1.01); }
+  20% { transform: translateX(2px) scaleY(0.99); }
+  30% { transform: translateX(-1px) scaleY(1.01); }
+  40% { transform: translateX(1px) scaleY(0.98); }
+  50% { transform: translateX(-2px) scaleY(1.02); }
+  60% { transform: translateX(2px) scaleY(0.99); }
+  70% { transform: translateX(-1px) scaleY(1.01); }
+  80% { transform: translateX(1px) scaleY(0.98); }
+  90% { transform: translateX(0) scaleY(1); }
+  100% { transform: translateX(0); }
+}
+
+/* Matrix Rain Effect */
+@keyframes matrixRain {
+  0% { 
+    transform: translateY(-100vh); 
+    opacity: 1; 
+  }
+  100% { 
+    transform: translateY(100vh); 
+    opacity: 0; 
+  }
+}
+
+/* Synthwave Grid Animation */
+@keyframes synthwaveGrid {
+  0% { background-position: 0 0; }
+  100% { background-position: 40px 40px; }
+}
+
+/* Scanlines Effect */
+@keyframes scanlines {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+/* Pulse Animation - Removed to prevent selection flashing */
+/* @keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+} */
+
+/* Float Animation */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+/* Theme-specific Effect Classes */
+.theme-cyberpunk .neon-text {
+  animation: neonGlow 2s ease-in-out infinite alternate;
+}
+
+.theme-cyberpunk .neon-border {
+  animation: neonGlow 2s ease-in-out infinite alternate;
+  border: 1px solid currentColor;
+}
+
+.theme-cyberpunk button:hover,
+.theme-synthwave button:hover {
+  animation: neonGlow 1s ease-in-out infinite alternate;
+}
+
+.theme-hacker .glitch-text,
+.theme-cyberpunk .glitch-text {
+  animation: glitch 0.3s infinite;
+}
+
+.theme-hacker .glitch-container:hover,
+.theme-cyberpunk .glitch-container:hover {
+  animation: glitch 0.5s infinite;
+}
+
+/* Synthwave Grid Background */
+.theme-synthwave::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    linear-gradient(rgba(255, 0, 110, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 0, 110, 0.1) 1px, transparent 1px);
+  background-size: 40px 40px;
+  animation: synthwaveGrid 20s linear infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Matrix Background Pattern */
+.theme-matrix::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: 
+    radial-gradient(circle at 20% 20%, rgba(0, 255, 0, 0.03) 0%, transparent 50%),
+    radial-gradient(circle at 80% 80%, rgba(0, 255, 0, 0.03) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Terminal Scanlines - PERMANENTLY DISABLED */
+/*
+.theme-matrix::before,
+.theme-hacker::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, currentColor, transparent);
+  animation: scanlines 3s linear infinite;
+  z-index: 1000;
+  pointer-events: none;
+}
+*/
+
+/* Utility Classes */
+.float-animation {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* .pulse-animation {
+  animation: pulse 2s ease-in-out infinite;
+} */
+
+.neon-glow {
+  animation: neonGlow 2s ease-in-out infinite alternate;
+}
+
+.glitch-effect {
+  animation: glitch 0.3s infinite;
+}
+
+/* Smooth Theme Transitions */
+* {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+/* Node Hover Effects */
+.react-flow__node:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  transition: all 0.2s ease;
+}
+
+/* Disabled to prevent animation conflicts with multi-select
+.react-flow__node.selected {
+  animation: pulse 2s infinite;
+} */
+
+/* Edge Animations */
+.react-flow__edge.animated {
+  stroke-dasharray: 5;
+  animation: flow 1s linear infinite;
+}
+
+@keyframes flow {
+  0% { stroke-dashoffset: 10; }
+  100% { stroke-dashoffset: 0; }
+}
+
+/* Button Effects */
+button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s ease;
+}
+
+/* Loading Shimmer */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.1) 0%,
+    rgba(255, 255, 255, 0.2) 50%,
+    rgba(255, 255, 255, 0.1) 100%
+  );
+  background-size: 200px 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+
+/* Success Celebration */
+.celebration-particles {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Disable animations for users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

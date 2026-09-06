@@ -1,5 +1,17 @@
 # WebUI Design
 
+## Security conversion replacement — 6 September 2026
+
+The default production shell is now `web/security/`, a Codex-inspired graphite React workspace with a stable left sidebar, a central working area, and contextual evidence/approval inspectors. Its canonical navigation is **Protection, Findings, Systems, Environments, Activity, Integrations, Settings**. The original general-purpose assistant shell is retired from the default product. Systems retains ContextCypher's standalone security AI, full diagram editor, examples and GRC workspace. The older shell rules below apply only to retained legacy pages.
+
+Protection owns actual collector status and scope. Findings owns observation review and model links. Systems owns architecture/flows/threats/controls and preserved ContextCypher records. Activity owns durable jobs, approval decisions and administrator audit history. Integrations explains real adapter capability and availability. Settings owns client enrollment and grants. Forms and the canvas edit backend revisions; no second authoritative browser workspace is allowed. Preserve drafts on conflicts and guard navigation from unsaved data loss. Never render imported HTML/scripts or externally supplied styling as trusted UI.
+
+Use neutral status while unknown, explicit degradation when queries fail, and scan-request states without implied completion. Hide administrative controls from assistant sessions. Desktop and mobile layouts, keyboard access, primary form workflows and the actual HTTP contract must be browser-verified.
+
+Systems fills the available workspace without an outer padded frame. The Guardian sidebar can collapse to an accessible icon rail and remembers the preference in this browser. Its toolbar collapses to the compact menu when panels reduce available space; tab rows scroll within their panel and guide content wraps without clipping. Shell element defaults stay in a low-priority CSS layer so embedded component layouts remain authoritative. AI settings list live provider models before configuration is saved. Provider API keys remain in backend memory only and must be entered again after a restart; provider/model preferences may persist.
+
+The local browser opens the workspace without an access code by default. Settings owns the opt-in **Require an access token to open Guardian** control; configured Entra SSO requires sign-in. This preference does not remove scoped credentials from machine interfaces. **Save Settings and Close** in the editor must save pending provider changes before closing and retain the form on failure.
+
 **Status:** Source of truth
 **Date:** 2026-05-01
 **Owner:** WebUI uplift

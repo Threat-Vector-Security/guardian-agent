@@ -310,23 +310,82 @@ describe('OllamaProvider', () => {
 });
 
 describe('AnthropicProvider', () => {
-  it('should list known models', async () => {
+  it('lists current models from the SDK endpoint and obeys its result limit', async () => {
     const config: LLMConfig = {
       provider: 'anthropic',
       model: 'claude-sonnet-4-20250514',
       apiKey: 'sk-test',
     };
     const provider = createProvider(config);
-    const models = await provider.listModels();
-
-    expect(models.length).toBeGreaterThan(0);
-    expect(models[0].provider).toBe('anthropic');
+    const list = vi.fn().mockResolvedValue([{ id: 'server-model-one', display_name: 'Server model' }, { id: 'server-model-two', display_name: 'Second model' }]);
+    (provider as any).client = { models: { list } };
+    const controller = new AbortController();
+    await expect(provider.listModels({ signal: controller.signal, limit: 1 })).resolves.toEqual([{ id: 'server-model-one', name: 'Server model', provider: 'anthropic' }]);
+    expect(list).toHaveBeenCalledWith({ limit: 100 }, { signal: controller.signal });
+    list.mockRejectedValueOnce(new Error('Unavailable'));
+    await expect(provider.listModels()).rejects.toThrow('Unavailable');
   });
 });
 
 describe('OpenAIProvider compatibility', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('preserves recognized quota diagnostics through the wrapped SDK error', async () => {
+    const provider = new OpenAIProvider({ provider: 'openai', model: 'test', apiKey: 'test-key' });
+    (provider as any).client = { chat: { completions: { create: vi.fn().mockRejectedValue(Object.assign(new Error('secret-key and user context'), { status: 429, code: 'insufficient_quota', param: 'malicious-secret-param' })) } } };
+    try { await provider.chat([{ role: 'user', content: 'Test' }]); throw new Error('Expected provider failure'); }
+    catch (error) {
+      expect(error).toMatchObject({ status: 429, code: 'insufficient_quota' });
+      expect(error).not.toHaveProperty('param');
+      expect((error as Error).message).not.toContain('secret-key');
+    }
+  });
+
+  it.each(['chat', 'stream'] as const)('retries %s max-token then sampling incompatibility without weakening other controls', async mode => {
+    const provider = new OpenAIProvider({ provider: 'openai', model: 'test-model', apiKey: 'test-key', temperature: 0.2, topP: 0.9, maxTokens: 1234, parallelToolCalls: false, toolChoice: 'required' });
+    const completion = { choices: [{ message: { content: 'Complete' }, finish_reason: 'stop' }], model: 'test-model' };
+    const streamed = async function* () { yield { choices: [{ delta: { content: 'Complete' }, finish_reason: 'stop' }], model: 'test-model' }; };
+    const create = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens' instead."), { status: 400, code: 'unsupported_parameter', param: 'max_tokens' }))
+      .mockRejectedValueOnce(Object.assign(new Error('Unsupported sampling value'), { status: 400, code: 'unsupported_value', param: 'temperature' }))
+      .mockResolvedValueOnce(mode === 'chat' ? completion : streamed());
+    (provider as any).client = { chat: { completions: { create } } };
+    const options = { responseFormat: { type: 'json_schema' as const, name: 'review', schema: { type: 'object', properties: { result: { type: 'string' } }, required: ['result'], additionalProperties: false } }, tools: [{ name: 'inspect', description: 'Inspect', parameters: { type: 'object', properties: {} } }] };
+    if (mode === 'chat') expect((await provider.chat([{ role: 'user', content: 'Inspect' }], options)).content).toBe('Complete');
+    else { const chunks = []; for await (const chunk of provider.stream([{ role: 'user', content: 'Inspect' }], options)) chunks.push(chunk); expect(chunks[0]?.content).toBe('Complete'); }
+    expect(create).toHaveBeenCalledTimes(3);
+    const before = create.mock.calls[1][0];
+    const after = create.mock.calls[2][0];
+    const { temperature: _removed, ...unchanged } = before;
+    expect(after).toEqual(unchanged);
+    expect(after).toMatchObject({ model: 'test-model', max_completion_tokens: 1234, top_p: 0.9, tool_choice: 'required', parallel_tool_calls: false });
+    expect(after).toHaveProperty('response_format');
+    expect(after).toHaveProperty('tools');
+  });
+
+  it.each(['temperature', 'top_p'])('removes only explicitly unsupported %s and never retries an ordinary validation error', async parameter => {
+    const provider = new OpenAIProvider({ provider: 'openai', model: 'test-model', apiKey: 'test-key', temperature: 0.2, topP: 0.8 });
+    const create = vi.fn().mockRejectedValueOnce(Object.assign(new Error('Provider rejected request'), { status: 400, error: { code: 'unsupported_parameter', param: parameter } }))
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'Accepted' }, finish_reason: 'stop' }], model: 'test-model' });
+    (provider as any).client = { chat: { completions: { create } } };
+    await provider.chat([{ role: 'user', content: 'Test' }]);
+    const before = { ...create.mock.calls[0][0] };
+    delete before[parameter];
+    expect(create.mock.calls[1][0]).toEqual(before);
+    create.mockReset().mockRejectedValue(Object.assign(new Error('Invalid request with temperature and tool_choice'), { status: 400, code: 'invalid_request_error', param: parameter }));
+    await expect(provider.chat([{ role: 'user', content: 'Test' }])).rejects.toMatchObject({ status: 400 });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves sampling settings when a compatible provider accepts them', async () => {
+    const provider = new OpenAIProvider({ provider: 'openrouter', model: 'account-model', apiKey: 'test-key', temperature: 0.3, topP: 0.7 }, 'openrouter');
+    const create = vi.fn().mockResolvedValue({ choices: [{ message: { content: 'Accepted' }, finish_reason: 'stop' }], model: 'account-model' });
+    (provider as any).client = { chat: { completions: { create } } };
+    await provider.chat([{ role: 'user', content: 'Test' }]);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0]).toMatchObject({ temperature: 0.3, top_p: 0.7 });
   });
 
   it('retries with max_completion_tokens when max_tokens is rejected by newer OpenAI models', async () => {

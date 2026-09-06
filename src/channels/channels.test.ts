@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { CLIChannel } from './cli.js';
 import type { AgentInfo, RuntimeStatus } from './cli.js';
@@ -980,7 +981,7 @@ describe('CLIChannel', () => {
   it('should load only slash commands into CLI history with most recent first', async () => {
     const input = new PassThrough();
     const output = new PassThrough();
-    const historyDir = join('/tmp', `guardian-cli-history-${randomUUID()}`);
+    const historyDir = join(tmpdir(), `guardian-cli-history-${randomUUID()}`);
     const historyPath = join(historyDir, 'cli-history');
     mkdirSync(historyDir, { recursive: true });
     writeFileSync(historyPath, 'hello world\n/status\n/help\nplain text\n/agents\n');
@@ -998,7 +999,7 @@ describe('CLIChannel', () => {
   it('should persist only slash commands to CLI history', async () => {
     const input = new PassThrough();
     const output = new PassThrough();
-    const historyDir = join('/tmp', `guardian-cli-history-${randomUUID()}`);
+    const historyDir = join(tmpdir(), `guardian-cli-history-${randomUUID()}`);
     const historyPath = join(historyDir, 'cli-history');
 
     const cli = new CLIChannel({ input, output, historyPath, historyEnabled: true });

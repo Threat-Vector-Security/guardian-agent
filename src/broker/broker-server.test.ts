@@ -19,7 +19,8 @@ describe('BrokerServer', () => {
       agentId: 'agent-1',
       authorizedBy: 'owner',
       authorizedChannel: 'code-session',
-      grantedCapabilities: ['tool.call'],
+      grantedCapabilities: ['read_files'],
+      executionContext: { requestId: 'message-1' },
     });
     const runTool = vi.fn(async () => ({
       success: true,

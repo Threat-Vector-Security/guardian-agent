@@ -1,0 +1,247 @@
+/* Edge Updater Styles */
+.react-flow-custom .react-flow__edgeupdater {
+  background-color: #ff0000;
+  border: 2px solid #ff0000;
+  border-radius: 50%;
+  width: 12px;
+  height: 12px;
+}
+
+.react-flow-custom .react-flow__edgeupdater-line {
+  stroke: #ff0000;
+  stroke-width: 2;
+}
+
+/* Z-Index Layering */
+.react-flow__edge {
+  z-index: 1 !important;
+  pointer-events: all;
+}
+
+.react-flow__node:not(.security-zone-node) {
+  z-index: 2 !important;
+}
+
+.react-flow__handle {
+  z-index: 3 !important;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.react-flow__controls {
+  z-index: 4 !important;
+}
+
+/* Security Zone Nodes */
+.security-zone-wrapper {
+  pointer-events: none !important;
+}
+
+.security-zone-wrapper.selected {
+  pointer-events: all !important;
+}
+
+.security-zone-content {
+  pointer-events: none !important;
+}
+
+.zone-select-button {
+  pointer-events: auto !important;
+  z-index: 1000 !important;
+}
+
+/* Allow selection box to work properly */
+.react-flow__selectionbox {
+  pointer-events: none !important;
+}
+
+.react-flow__resize-control.handle {
+  pointer-events: auto !important;
+  z-index: 5;
+  width: 8px !important;
+  height: 8px !important;
+  opacity: 0;
+  transition: opacity 0.3s ease-in-out;
+}
+
+.react-flow__node:hover .react-flow__handle,
+.security-zone-node:hover .react-flow__resize-control.handle,
+.security-zone-node.selected .react-flow__resize-control.handle {
+  opacity: 1;
+}
+
+/* Resize Control Positions */
+.react-flow__resize-control.handle.left { left: -5px; }
+.react-flow__resize-control.handle.right { right: -5px; }
+.react-flow__resize-control.handle.top { top: -5px; }
+.react-flow__resize-control.handle.bottom { bottom: -5px; }
+
+/* Selection Styling */
+.security-zone-node.selected .security-zone-content {
+  outline: 2px solid #0078d4;
+  outline-offset: 2px;
+}
+
+/* Edge Interaction */
+.react-flow__edge:hover {
+  cursor: pointer;
+}
+
+.react-flow__edge.selected {
+  stroke: #0078d4;
+  stroke-width: 2;
+}
+
+.react-flow__node.security-zone-node {
+  z-index: -1 !important;
+}
+
+.react-flow__edge-path {
+  stroke-linecap: round;
+  pointer-events: stroke !important;
+  cursor: pointer;
+}
+
+/* Edge Label Interaction */
+.react-flow__edge-label {
+  pointer-events: all !important;
+}
+
+/* Only allow pointer events on specific interactive elements */
+.zone-select-button,
+.react-flow__resize-control.handle {
+  pointer-events: auto !important;
+}
+
+/* Prevent dragging on the zone itself */
+.nodrag {
+  pointer-events: none !important;
+}
+
+/* Allow drag selection to work */
+.react-flow__pane {
+  pointer-events: all !important;
+}
+
+/* Ensure nodes are selectable during multiselection */
+.react-flow__selectionpane ~ .react-flow__nodes .react-flow__node:not(.non-selectable-zone):not(.non-selectable-drawing) {
+  pointer-events: auto !important;
+}
+
+/* Edge animation styles */
+.security-edge-animated {
+  stroke-dasharray: 5,5;
+  animation: flowAnimationForward 1s linear infinite;
+}
+
+.security-edge-animated-reverse {
+  stroke-dasharray: 5,5;
+  animation: flowAnimationReverse 1s linear infinite;
+}
+
+@keyframes flowAnimationForward {
+  from {
+    stroke-dashoffset: 10;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes flowAnimationReverse {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 10;
+  }
+}
+
+/* Add to src/styles/CustomReactFlow.css */
+.react-flow__edge {
+  pointer-events: all !important;
+  z-index: 1 !important;
+}
+
+.react-flow__edge.selected {
+  z-index: 1000 !important;
+}
+
+.react-flow__edge-path {
+  pointer-events: stroke !important;
+  cursor: pointer !important;
+}
+
+.react-flow__edge-interaction {
+  pointer-events: all !important;
+}
+
+/* Ensure edges stay visible during node selection */
+.react-flow__node.selected {
+  z-index: 999 !important;
+}
+
+/* Prevent animations during multi-select operations */
+.react-flow__selectionpane ~ .react-flow__nodes .react-flow__node,
+.react-flow__selectionpane ~ .react-flow__nodes .react-flow__node * {
+  animation: none !important;
+}
+
+/* When selection box is dragging, disable transform transitions */
+.react-flow__selectionpane.dragging ~ .react-flow__nodes .react-flow__node {
+  transition: box-shadow 0.15s ease, border-color 0.15s ease !important;
+}
+
+/* Add will-change to optimize performance */
+.react-flow__node.selected {
+  will-change: transform;
+}
+
+/* Edge label container - ensures labels stay on top */
+.react-flow__edge-label-container {
+  position: relative;
+  z-index: 1002 !important;
+  pointer-events: all !important;
+}
+
+/* Ensure proper z-index hierarchy */
+.react-flow__edges {
+  z-index: 1 !important;
+}
+
+.react-flow__nodes {
+  z-index: 2 !important;
+}
+
+
+.react-flow__node.selected {
+  z-index: 999 !important;
+}
+
+.react-flow__selection {
+  z-index: 1001 !important;
+}
+
+/* Prevent selection box duplication */
+.react-flow__selectionpane {
+  pointer-events: none !important;
+}
+
+.react-flow__selectionpane.selecting {
+  pointer-events: auto !important;
+}
+
+/* Enhanced selection visual feedback */
+.react-flow__selectionpane {
+  transition: none !important; /* Remove transitions for instant feedback */
+}
+
+/* Highlight nodes during selection */
+.react-flow__node.selectable {
+  transition: transform 0.1s ease-out, box-shadow 0.1s ease-out !important;
+}
+
+.react-flow__node.selectable:hover {
+  transform: scale(1.02);
+  box-shadow: 0 0 0 2px rgba(0, 89, 220, 0.3);
+}

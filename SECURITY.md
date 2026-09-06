@@ -1,5 +1,13 @@
 # Security Policy
 
+## Guardian security conversion
+
+The default 2.0 alpha product follows [the security conversion architecture](docs/architecture/SECURITY-CONVERSION.md) and [operator guide](docs/guides/SECURITY-WORKSPACE.md). It uses a loopback security service, scoped assistant credentials, separate administrative sessions, durable jobs and ContextCypher workspace revisions. It does not start the legacy assistant runtime described below. The previous architecture is retained for shared-component regression coverage and explicit legacy migration use.
+
+Current release limits: same-account processes and administrators can bypass local user-space controls; signed service deployment, fleet management and proprietary EDR response are not yet verified. Native scans record requests, not fabricated clean outcomes. Entra protocol tests do not replace tenant acceptance tests. Do not present the local alpha as a tamper-resistant EDR or multi-tenant service.
+
+Local browser sign-in is optional and off by default. The browser obtains an administrative HttpOnly session through a same-origin bootstrap constrained to the loopback listener, exact Host/Origin and browser Fetch Metadata. API operations still require a session or scoped bearer credential. Enabling sign-in invalidates sessions opened without a code, and configured Entra always disables code-free bootstrap. This convenience mode intentionally trusts local access to the workstation; it is not an isolation boundary against local processes.
+
 ## Supported Versions
 
 | Version | Supported |

@@ -1,0 +1,510 @@
+/* ModernStyles.css - Slick, modern styling without Tailwind */
+
+/* ==================== Modern Variables ==================== */
+:root {
+  /* Spacing */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  
+  /* Border Radius */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-full: 9999px;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.1);
+  --shadow-glow: 0 0 20px rgba(var(--theme-primary-rgb), 0.3);
+  
+  /* Transitions */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ==================== Base Styles ==================== */
+* {
+  transition: background-color var(--transition-normal), 
+              color var(--transition-normal), 
+              border-color var(--transition-normal);
+}
+
+/* ==================== Modern Node Styles ==================== */
+.modern-node {
+  position: relative;
+  border-radius: var(--radius-lg);
+  transition: all var(--transition-normal);
+  cursor: move;
+  min-width: 160px;
+  padding: var(--space-md);
+  box-shadow: var(--shadow-sm);
+  border: 2px solid;
+}
+
+.modern-node:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: var(--shadow-lg);
+}
+
+.modern-node.selected {
+  /* Use will-change to optimize transform performance */
+  will-change: transform;
+  transform: scale(1.05);
+  box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.6), var(--shadow-glow);
+  /* No animations on selected state */
+}
+
+.manual-analysis-flag {
+  box-shadow: var(--shadow-sm);
+}
+
+.security-zone-wrapper.manual-analysis-zone-flag {
+  outline: 2px dashed rgba(245, 158, 11, 0.8);
+  outline-offset: 2px;
+}
+
+/* Node content styling */
+.modern-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.modern-node-label {
+  font-weight: 500;
+  font-size: 0.875rem;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #ffffff;
+}
+
+.modern-node-code {
+  font-size: 0.75rem;
+  color: #ffffff;
+  opacity: 0.6;
+  font-family: monospace;
+}
+
+.modern-node-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 500;
+  margin-top: var(--space-xs);
+  margin-left: auto;
+  margin-right: auto;
+  border: 1px solid;
+}
+
+/* Node icon */
+.modern-node-icon {
+  position: absolute;
+  top: var(--space-sm);
+  right: var(--space-sm);
+  width: 1.25rem;
+  height: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity var(--transition-fast);
+}
+
+.modern-node:hover .modern-node-icon {
+  opacity: 1;
+}
+
+/* ==================== Modern Handle Styles ==================== */
+.modern-handle {
+  width: 8px !important;
+  height: 8px !important;
+  background: transparent !important;
+  opacity: 0;
+  transition: all var(--transition-normal);
+  cursor: crosshair;
+  z-index: 10;
+}
+
+.modern-handle:hover,
+.modern-node:hover .modern-handle {
+  opacity: 1;
+  transform: scale(1.5);
+}
+
+.modern-handle:hover {
+  box-shadow: var(--shadow-glow);
+}
+
+/* ==================== Modern Panel Styles ==================== */
+.modern-panel {
+  background: var(--theme-surface);
+  border: 1px solid var(--theme-border);
+  box-shadow: var(--shadow-lg);
+  transition: all var(--transition-slow);
+}
+
+.modern-panel-header {
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--theme-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modern-panel-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--theme-textPrimary);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.modern-panel-content {
+  padding: var(--space-lg);
+  overflow: auto;
+}
+
+/* ==================== Modern Toolbox Styles ==================== */
+.modern-toolbox-search {
+  position: relative;
+  margin-bottom: var(--space-md);
+}
+
+.modern-toolbox-search input {
+  width: 100%;
+  padding: var(--space-sm) var(--space-md) var(--space-sm) 2.5rem;
+  background: var(--theme-background);
+  border: 1px solid var(--theme-border);
+  border-radius: var(--radius-lg);
+  color: var(--theme-textPrimary);
+  font-size: 0.875rem;
+  transition: all var(--transition-normal);
+}
+
+.modern-toolbox-search input:focus {
+  outline: none;
+  border-color: var(--theme-primary);
+  box-shadow: 0 0 0 3px rgba(var(--theme-primary-rgb), 0.2);
+}
+
+.modern-toolbox-search-icon {
+  position: absolute;
+  left: var(--space-md);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--theme-textSecondary);
+  pointer-events: none;
+}
+
+.modern-toolbox-category {
+  margin-bottom: var(--space-xs);
+  border-bottom: 1px solid var(--theme-border);
+}
+
+.modern-toolbox-category:last-child {
+  border-bottom: none;
+}
+
+.modern-toolbox-category-header {
+  padding: var(--space-sm) var(--space-md);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: background-color var(--transition-fast);
+}
+
+.modern-toolbox-category-header:hover {
+  background: var(--theme-surfaceHover);
+}
+
+.modern-toolbox-category-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--theme-textPrimary);
+}
+
+.modern-toolbox-item {
+  margin: var(--space-xs) var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+  cursor: move;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  transition: all var(--transition-fast);
+  border-left: 3px solid transparent;
+}
+
+.modern-toolbox-item:hover {
+  background: var(--theme-surfaceHover);
+  transform: translateX(2px);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ==================== Modern Button Styles ==================== */
+.modern-btn {
+  padding: var(--space-sm) var(--space-lg);
+  border-radius: var(--radius-md);
+  font-weight: 500;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.modern-btn-primary {
+  background: var(--theme-primary);
+  color: white;
+}
+
+.modern-btn-primary:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.modern-btn-primary:active {
+  transform: scale(0.98);
+}
+
+.modern-btn-secondary {
+  background: var(--theme-surfaceHover);
+  color: var(--theme-textPrimary);
+  border: 1px solid var(--theme-border);
+}
+
+.modern-btn-secondary:hover {
+  background: var(--theme-surface);
+  border-color: var(--theme-primary);
+}
+
+.modern-btn-icon {
+  padding: var(--space-sm);
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modern-btn-icon:hover {
+  background: var(--theme-surfaceHover);
+}
+
+/* ==================== Modern Form Styles ==================== */
+.modern-input,
+.modern-textarea {
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--theme-surface);
+  border: 1px solid var(--theme-border);
+  border-radius: var(--radius-md);
+  color: var(--theme-textPrimary);
+  font-size: 0.875rem;
+  transition: all var(--transition-normal);
+}
+
+.modern-input:focus,
+.modern-textarea:focus {
+  outline: none;
+  border-color: var(--theme-primary);
+  box-shadow: 0 0 0 3px rgba(var(--theme-primary-rgb), 0.2);
+}
+
+.modern-textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+/* ==================== Modern Message Styles ==================== */
+.modern-message {
+  margin-bottom: var(--space-md);
+  animation: fadeIn var(--transition-slow) ease-out;
+}
+
+.modern-message-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xs);
+  font-size: 0.75rem;
+  color: var(--theme-textSecondary);
+}
+
+.modern-message-bubble {
+  max-width: 85%;
+  padding: var(--space-md);
+  border-radius: 1rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.modern-message-user .modern-message-bubble {
+  background: rgba(var(--theme-primary-rgb), 0.2);
+  margin-left: auto;
+  border-bottom-right-radius: var(--radius-sm);
+}
+
+.modern-message-assistant .modern-message-bubble {
+  background: var(--theme-surfaceHover);
+  border-bottom-left-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ==================== Modern Scrollbar ==================== */
+.modern-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.modern-scrollbar::-webkit-scrollbar-track {
+  background: var(--theme-surface);
+  border-radius: var(--radius-sm);
+}
+
+.modern-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--theme-border);
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+
+.modern-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--theme-textSecondary);
+}
+
+/* ==================== Modern Animations ==================== */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Removed to prevent selection flashing
+@keyframes pulse-subtle {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 1;
+  }
+} */
+
+@keyframes slideIn {
+  from {
+    transform: translateX(-10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* ==================== Node Editor Styles ==================== */
+.node-editor-dialog {
+  background: var(--theme-surface) !important;
+  border: 1px solid var(--theme-border) !important;
+  border-radius: var(--radius-lg) !important;
+}
+
+.node-editor-header {
+  background: var(--theme-surfaceHover) !important;
+  padding: var(--space-lg) !important;
+  border-bottom: 1px solid var(--theme-border) !important;
+  cursor: move;
+}
+
+.node-editor-content {
+  padding: var(--space-lg) !important;
+  background: var(--theme-surface) !important;
+}
+
+.node-editor-field {
+  margin-bottom: var(--space-lg) !important;
+}
+
+.node-editor-icon-selector {
+  display: flex !important;
+  justify-content: center !important;
+  padding: 4px !important;
+  margin-bottom: var(--space-sm) !important;
+  background: var(--theme-background) !important;
+  border: 1px solid var(--theme-border) !important;
+  border-radius: var(--radius-md) !important;
+  transition: all var(--transition-normal);
+}
+
+.node-editor-icon-selector:hover {
+  border-color: var(--theme-primary) !important;
+  box-shadow: 0 0 0 2px rgba(var(--theme-primary-rgb), 0.1) !important;
+}
+
+.node-editor-actions {
+  padding: var(--space-lg) !important;
+  background: var(--theme-surface) !important;
+  border-top: 1px solid var(--theme-border) !important;
+  display: flex;
+  gap: var(--space-md);
+  justify-content: flex-end;
+}
+
+/* ==================== Modern Utility Classes ==================== */
+.glass-effect {
+  backdrop-filter: blur(8px);
+  background: rgba(var(--theme-surface-rgb), 0.8);
+}
+
+.no-select {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+.text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ==================== Responsive Design ==================== */
+@media (max-width: 768px) {
+  .modern-panel {
+    width: 100% !important;
+  }
+  
+  .modern-toolbox-item {
+    font-size: 0.8125rem;
+  }
+  
+  .modern-node {
+    min-width: 140px;
+  }
+}
