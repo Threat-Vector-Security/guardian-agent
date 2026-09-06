@@ -4,21 +4,9 @@ A local security agent for workstations and networks, combining Guardian's secur
 
 Use it as a standalone application or drive it through a scoped AI assistant connection. Review suspicious activity, connect observations to your system architecture, and approve supported security actions from one workspace.
 
-## Releases
-
-| Version | Status | Application | Source download |
-| --- | --- | --- | --- |
-| [v2.0.0-alpha.3](https://github.com/Threat-Vector-Security/guardian-agent/releases/tag/v2.0.0-alpha.3) | **Current security alpha** | Project navigation and reload fixes; local security workspace with ContextCypher | [ZIP](https://github.com/Threat-Vector-Security/guardian-agent/archive/refs/tags/v2.0.0-alpha.3.zip) |
-| [v2.0.0-alpha.2](https://github.com/Threat-Vector-Security/guardian-agent/releases/tag/v2.0.0-alpha.2) | Previous security alpha | First published security conversion | [ZIP](https://github.com/Threat-Vector-Security/guardian-agent/archive/refs/tags/v2.0.0-alpha.2.zip) |
-| [v1.0.0](https://github.com/Threat-Vector-Security/guardian-agent/releases/tag/v1.0.0) | Original application archive | General-purpose Guardian Agent, preserved immediately before the security conversion | [ZIP](https://github.com/Threat-Vector-Security/guardian-agent/archive/refs/tags/v1.0.0.zip) |
-
-[All releases](https://github.com/Threat-Vector-Security/guardian-agent/releases) · [Changelog](CHANGELOG.md) · [Operator guide](docs/guides/SECURITY-WORKSPACE.md) · [Security policy](SECURITY.md)
-
-These are source releases. The security version is an **alpha**, with no signed native installers. The original archive uses its own README and requirements. The earlier `v2.0.0-alpha.1` tag is an unpublished preflight snapshot; use `alpha.3` for the current security release.
-
 ## Run
 
-Requires **Node.js 24.14 or later**. Windows, macOS and Linux build/runtime checks run in CI; native security capabilities vary by operating system. Download and extract the security alpha above, then run these commands from its directory:
+Requires **Node.js 24.14 or later**. Windows, macOS and Linux build/runtime checks run in CI; native security capabilities vary by operating system. The security workspace is an **alpha**, with no signed native installers. Clone this repository or download and extract its source, then run these commands from its directory:
 
 ```sh
 npm ci
