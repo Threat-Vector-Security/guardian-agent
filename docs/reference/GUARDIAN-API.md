@@ -1,882 +1,160 @@
-# Guardian API Reference
+# Guardian Agent operation API
 
-Complete API reference for the Guardian four-layer defense system.
+This reference describes the current local security service. The CLI, browser and MCP transport share this API and its authorization rules. See [the operator guide](../guides/SECURITY-WORKSPACE.md) for setup and [SECURITY.md](../../SECURITY.md) for trust boundaries.
 
----
+The implementation sources are `src/security-workspace/server.ts`, `operations.ts`, `service.ts`, `client.ts` and `mcp.ts`. The live operation catalog is authoritative for the running build and credential. Package release versions come from `package.json`; health/MCP protocol version labels are not a substitute for the exact installed build version.
 
-## Guardian Pipeline
+## Service and HTTP envelope
 
-**File:** `src/guardian/guardian.ts`
+The default URL is `http://127.0.0.1:3000`. A different port can be supplied to `serve --port`. Both the listener and shipped client are restricted to IPv4 loopback; do not replace the hostname with a public address or assume remote HTTPS deployment support.
 
-### `Guardian`
+| Method and path | Purpose |
+| --- | --- |
+| `GET /health` | Basic service identity/health; does not establish collector or antivirus coverage |
+| `GET /api/v1/auth/providers` | Whether Entra and local browser bootstrap are available |
+| `POST /api/v1/session/local` | Same-origin browser-only bootstrap when local sign-in is optional |
+| `GET /api/v1/session` | Current authentication state and principal, if authenticated |
+| `POST /api/v1/session` | Exchange JSON `{ "token": "..." }` for an HttpOnly session |
+| `DELETE /api/v1/session` | End the current cookie session; requires the service Origin |
+| `GET /api/v1/auth/entra/start` | Start configured Entra sign-in |
+| `GET /api/v1/auth/entra/callback` | Entra redirect callback; not a general client operation |
+| `GET /api/v1/operations` | Return `{ "items": [...] }` containing permitted operation names, descriptions, scopes and JSON schemas |
+| `POST /api/v1/operations` | Execute a permitted structured operation |
 
-The main admission controller pipeline.
+POST operation bodies use `Content-Type: application/json`:
 
-```typescript
-import { Guardian } from './guardian/guardian.js';
-```
-
-#### Constructor
-
-```typescript
-new Guardian(options?: { logDenials?: boolean })
-```
-
-- `logDenials` — Log denied actions via pino (default: `true`)
-
-#### Static Methods
-
-**`Guardian.createDefault(options?)`**
-
-Create a Guardian with all built-in controllers in the correct pipeline order.
-
-```typescript
-static createDefault(options?: GuardianCreateOptions): Guardian
-```
-
-Options:
-```typescript
-interface GuardianCreateOptions {
-  logDenials?: boolean;
-  additionalSecretPatterns?: string[];
-  inputSanitization?: Partial<InputSanitizerConfig> & { enabled?: boolean };
-  rateLimit?: Partial<RateLimiterConfig>;
-  allowedCommands?: string[];
+```json
+{
+  "operation": "projects.get",
+  "input": { "id": "<project-id>" }
 }
 ```
 
-Default pipeline order:
-1. InputSanitizer (mutating)
-2. RateLimiter (validating)
-3. CapabilityController (validating)
-4. SecretScanController (validating)
-5. DeniedPathController (validating)
-6. ShellCommandController (validating) — when `allowedCommands` provided
+Success is `{ "result": ... }`. An error has an HTTP error status and `{ "error": { "message": "..." } }`. Do not treat an HTTP 200 operation response as proof that an asynchronous job completed successfully; inspect the returned job and its later state.
 
-#### Instance Methods
+Common errors include 400 invalid input, 401 unauthenticated/expired credential, 403 denied authority/origin/scope, 404 missing resource or operation, 409 revision or workflow conflict, 413 oversized body, 415 unsupported content type and 429 bounded capacity/rate exhaustion. Provider failures may also return 408, 502 or 504. There are no per-project REST mutation routes or AI streaming endpoints in this transport.
 
-**`guardian.use(controller)`**
+## Authentication and authority
 
-Add a controller to the pipeline. Controllers are auto-sorted: mutating first, then validating.
+Assistant clients send an enrolled non-administrator credential as `Authorization: Bearer <token>`. Credentials carry scopes, expiry and optionally `projectIds`. Revocation takes effect on subsequent authorization checks. Do not place credentials in URLs.
 
-```typescript
-use(controller: AdmissionController): this
-```
+Administrative operations require a session whose principal has role `admin`. A root token is deliberately rejected as a bearer credential for the operations endpoint. The CLI's explicit `--admin` option exchanges the configured administrator credential for a session. Do not supply that credential or option to an AI assistant.
 
-**`guardian.check(action)`**
+Browser cookie-authenticated operation POSTs require an exact same-origin header. Local browser bootstrap is constrained by Host, Origin and Fetch Metadata and is disabled when sign-in is required or Entra is configured. It is a local convenience flow, not an assistant authentication alternative. Viewer principals may call only operations marked read-only.
 
-Run an action through the admission pipeline.
+Scopes grant operation families; project restrictions further narrow access. Omitted `projectIds` means installation scope. Credentials restricted to existing projects cannot create/import projects or perform installation-wide status, collection, environment mapping or finding ingestion. Additional checks apply when linking findings and using AI project context. Do not infer access from a displayed UI button; the service authorizes every operation.
 
-```typescript
-check(action: AgentAction): AdmissionResult
-```
+## Operation catalog
 
-Returns:
-- `{ allowed: true, controller: 'guardian' }` — action permitted
-- `{ allowed: true, controller: 'guardian', mutatedAction }` — action permitted with modifications
-- `{ allowed: false, reason, controller }` — action denied
+The catalog below summarizes current families. Query `GET /api/v1/operations` or `guardianagent operations` for exact schemas and credential visibility.
 
-**`guardian.getControllers()`**
+| Operations | Required scope | Behavior |
+| --- | --- | --- |
+| `status.get`, `integrations.list` | `security:read` | Observed posture/coverage and actual integration capability status |
+| `environments.preview` | `security:read` | `source: "local"\|"aws"`; preview observed inventory as architecture context |
+| `findings.list`, `jobs.list` | `security:read` | Authorized evidence and job records |
+| `findings.update` | `findings:write` | `id`, review `status`, `reason`; optional project/asset link |
+| `findings.ingest` | `findings:ingest` | Bounded connector finding batch; source identity comes from credential |
+| `projects.list`, `projects.get`, `projects.export` | `projects:read` | Authorized workspace summaries, complete documents and export representations |
+| `projects.create`, `projects.import`, `projects.update` | `projects:write` | Create/import or commit a complete document with expected revision |
+| `host.check.start` | `security:collect` | Start bounded local posture/network/native collection |
+| `aws.status.get` | `cloud:read` | Configured account/region collection status |
+| `aws.check.start` | `cloud:collect` | Start read-only collection for that configured AWS target |
+| `native.scan.propose` | `response:propose` | Propose `scanType: "quick"\|"full"` for separate approval |
+| `ai.providers.list`, `ai.models.list`, `ai.run`, `ai.cancel` | `ai:invoke` | Sanitized provider metadata, live models and bounded AI workflows |
+| `browser-auth.get`, `browser-auth.update` | Administrator session | Inspect/update local browser sign-in requirement |
+| `ai.models.discover`, `ai.configure`, `ai.test` | Administrator session | Discover draft-provider models, configure provider and test inference |
+| `jobs.approve`, `jobs.reject` | Administrator session | Decide a pending response job with `id` and `reason` |
+| `clients.list`, `clients.create`, `clients.revoke` | Administrator session | Enroll, inspect and revoke assistant credentials |
+| `audit.list` | Administrator session | Read local audit records |
 
-Get all registered controllers (read-only).
+Finding/audit pagination accepts optional numeric `cursor` and `limit` (1–100). Use returned pagination metadata; do not assume list order or that one page contains every record.
 
-```typescript
-getControllers(): readonly AdmissionController[]
-```
+`clients.create` takes `name`, `scopes`, optional `projectIds` and `expiresInDays` (1–90, default 30). It returns `{ client, token }`; the secret is returned once. Store it in a private file outside the repository and pass only that file path to the intended assistant. Unknown/administrative scopes are rejected.
 
-### Types
+## Projects, preservation and revisions
 
-```typescript
-/** An action an agent wants to perform. */
-interface AgentAction {
-  type: string;                       // e.g. 'write_file', 'message_dispatch'
-  agentId: string;                    // requesting agent
-  capabilities: readonly string[];    // agent's granted capabilities
-  params: Record<string, unknown>;    // action parameters
-}
+`projects.create` takes `{ name }`. `projects.import` takes `{ name, content }`, where `content` is a JSON string containing a complete ContextCypher or Guardian document. Creation, import, get and update return `{ project }`; a project includes its `id`, `name`, `revision`, timestamps and editable `document`. Do not mistake the response wrapper for the project itself.
 
-/** Result of an admission check. */
-interface AdmissionResult {
-  allowed: boolean;
-  reason?: string;                    // denial reason
-  controller: string;                 // controller that decided
-  mutatedAction?: AgentAction;        // modified action (mutating controllers)
-}
+To update, first read the authorized project, preserve all fields, then submit:
 
-/** Phase of the admission pipeline. */
-type AdmissionPhase = 'mutating' | 'validating';
-
-/** An admission controller. */
-interface AdmissionController {
-  name: string;
-  phase: AdmissionPhase;
-  check(action: AgentAction): AdmissionResult | null;  // null = pass through
+```json
+{
+  "operation": "projects.update",
+  "input": {
+    "id": "<project-id>",
+    "revision": 7,
+    "document": { "nodes": [], "edges": [], "systemName": "<name>" }
+  }
 }
 ```
 
----
+The document above illustrates the shape only. A real update must send the complete document obtained and edited by the caller, including unknown extensions, GRC context, hierarchy and metadata. Updates are replacement documents, not patches. A successful commit increments the revision. On 409, retain the local draft, read the current project and reconcile explicitly; never blindly retry with a newer revision.
 
-## Built-in Controllers
+Deleting an asset linked to a finding is rejected until the link is removed in the finding workflow.
 
-### `InputSanitizer`
+`projects.export` returns `{ document, original, guardian, originalSha256 }`. `document` is the editable object; `original` is the preserved original import string; `guardian` is the current Guardian envelope string. Choose the correct representation rather than serializing the whole operation wrapper as a diagram.
 
-**File:** `src/guardian/input-sanitizer.ts`
+The browser's canonical route is `#systems?project=<id>`. Selecting, creating or importing a project updates that URL. Server project saves and autosave commit revisions; portable file exports use the browser's save dialog/download workflow.
 
-Mutating controller that strips invisible Unicode characters and detects prompt injection.
+## AI requests and durable jobs
 
-```typescript
-import { InputSanitizer } from './guardian/input-sanitizer.js';
+`ai.run` takes `kind` (`chat`, `analysis`, `generate` or `assessment`), `prompt`, optional `context`, optional unique `requestId`, and project context as `projectId` plus its expected `revision`. A credential with project restrictions must provide project context. Project-context requests also require `projects:read`.
 
-const sanitizer = new InputSanitizer({
-  blockThreshold: 3,      // injection score to block (default: 3)
-  stripInvisible: true,    // strip invisible Unicode (default: true)
-});
+The response is completed JSON containing `content`, `provider`, `model`, `jobId`, `requestId`, optional `usage`, and a validated `document` for generation. It is synchronous at the HTTP boundary and records a durable job; there is no SSE stream. Current limits include 120 seconds, two concurrent AI requests, 1 MiB serialized context and 96 KiB provider output. Operation schemas also bound prompts and other inputs. Authority and project revisions are checked again before releasing a result.
+
+Cancel using `ai.cancel` with the same `requestId`; ownership is tied to the credential. Cancellation and timeouts must remain visible. AI never executes tools or automatically commits the proposed diagram.
+
+`ai.configure` accepts `provider`, `model`, optional `apiKey`, `temperature` (0–2) and `maxTokens` (256–16000). `ai.models.discover` accepts a provider and optional draft key without saving configuration. Keys remain in backend memory until restart; returned configuration indicates whether a credential is available and inference is ready. Provider support for optional parameters can vary.
+
+Host/AWS collection returns a job immediately; use `jobs.list` to inspect its actual state/result. Native scan proposals wait for an administrator's approval, expire after a bounded window, and remain bound to requester and target. A scan request is not a clean scan result. Jobs visible to a credential are filtered by actor/project authority.
+
+## File-based CLI credentials
+
+Initialize and serve separately from assistant client setup. `guardianagent init` prints the administrator credential file path. Enroll a scoped assistant through the administrator UI/session, then save its returned token privately.
+
+PowerShell client example (the file already contains a scoped assistant token):
+
+```powershell
+$env:GUARDIAN_URL = 'http://127.0.0.1:3000'
+$env:GUARDIAN_TOKEN_FILE = 'C:\Private\guardian-assistant-token.txt'
+node dist/security-main.js operations
+node dist/security-main.js call status.get
+node dist/security-main.js call projects.get --input-file project-request.json
 ```
 
-#### Standalone Functions
+Bash client example:
 
-```typescript
-import { stripInvisibleChars, detectInjection } from './guardian/input-sanitizer.js';
-
-// Strip invisible Unicode characters
-const clean = stripInvisibleChars('Hello\u200BWorld');
-// → 'HelloWorld'
-
-// Detect injection signals
-const result = detectInjection('Ignore previous instructions');
-// → { score: 3, signals: ['role_override_ignore'] }
+```bash
+export GUARDIAN_URL='http://127.0.0.1:3000'
+export GUARDIAN_TOKEN_FILE='/private/path/guardian-assistant-token.txt'
+node dist/security-main.js operations
+node dist/security-main.js call projects.get --input-file project-request.json
 ```
 
-### `RateLimiter`
+`project-request.json` contains `{ "id": "<project-id>" }`, not a token. Use private input files for sensitive operation inputs and do not commit them. The CLI prints operation results, which may themselves contain sensitive architecture/evidence. `GUARDIAN_TOKEN` is supported for environments that require it, but a token file avoids embedding the credential in shell commands or MCP configuration.
 
-**File:** `src/guardian/rate-limiter.ts`
+## MCP over stdio
 
-Validating controller with per-agent sliding window rate limiting.
+Run `node dist/security-main.js mcp` with the same `GUARDIAN_URL` and scoped `GUARDIAN_TOKEN_FILE`. The service must already be running. An assistant client configuration uses its normal stdio-server format, for example:
 
-```typescript
-import { RateLimiter } from './guardian/rate-limiter.js';
-
-const limiter = new RateLimiter({
-  maxPerMinute: 30,    // default: 30
-  maxPerHour: 500,     // default: 500
-  burstAllowed: 5,     // default: 5 in 10s window
-});
-
-// Reset state for one agent
-limiter.reset('agent-id');
-
-// Reset all state
-limiter.resetAll();
-```
-
-Only limits `message_dispatch` actions. Internal events and schedules pass through.
-
-### `CapabilityController`
-
-**File:** `src/guardian/guardian.ts`
-
-Validating controller that checks agent capabilities against action requirements.
-
-```typescript
-import { CapabilityController } from './guardian/guardian.js';
-
-const controller = new CapabilityController();
-```
-
-Action type → capability mapping is fixed (see [SECURITY.md](../../SECURITY.md)). Unknown action types are denied by default except explicit internal passthrough actions.
-
-### `SecretScanController`
-
-**File:** `src/guardian/guardian.ts`
-
-Validating controller that scans content parameters for secret patterns.
-
-```typescript
-import { SecretScanController } from './guardian/guardian.js';
-
-const controller = new SecretScanController(['CUSTOM_[A-Z]{10}']);
-```
-
-Scans `action.params.content` for 28+ credential patterns plus any custom patterns.
-
-### `DeniedPathController`
-
-**File:** `src/guardian/guardian.ts`
-
-Validating controller that blocks access to sensitive file paths.
-
-```typescript
-import { DeniedPathController } from './guardian/guardian.js';
-
-const controller = new DeniedPathController();
-```
-
-Normalizes paths via `path.normalize()` before checking. Detects `..` traversal after normalization.
-
-### `ShellCommandController`
-
-**File:** `src/guardian/shell-command-controller.ts`
-
-Validating controller that tokenizes shell commands and validates each sub-command against allowed command lists and denied paths.
-
-```typescript
-import { ShellCommandController } from './guardian/shell-command-controller.js';
-
-const controller = new ShellCommandController(['ls', 'cat', 'grep', 'git']);
-```
-
-Only fires on `action.type === 'execute_command'`. Extracts command string from `action.params.command`.
-
-Uses the shell tokenizer (`src/guardian/shell-validator.ts`) to:
-1. Parse the command into tokens (handling quoting, escaping, operators)
-2. Split into sub-commands by chain operators (`&&`, `||`, `;`, `|`)
-3. Validate each sub-command name against the allowed list
-4. Check arguments and redirect targets against denied paths
-5. Flag subshell substitutions (`$(...)`, backticks)
-
-Deny-by-default: if the tokenizer can't parse the input, the command is denied.
-
----
-
-## SecretScanner
-
-**File:** `src/guardian/secret-scanner.ts`
-
-Low-level scanner used by SecretScanController and OutputGuardian.
-
-```typescript
-import { SecretScanner } from './guardian/secret-scanner.js';
-
-const scanner = new SecretScanner(['CUSTOM_[A-Z]{10}']);
-
-// Scan content for secrets
-const matches: SecretMatch[] = scanner.scanContent('Key: AKIAIOSFODNN7EXAMPLE');
-// → [{ pattern: 'AWS Access Key', match: 'AKIA...MPLE', rawMatch: 'AKIAIOSFODNN7EXAMPLE', offset: 5 }]
-
-// Check if a file path is denied
-const result = scanner.isDeniedPath('.env');
-// → { denied: true, reason: 'Matches denied pattern: .env' }
-```
-
-### Types
-
-```typescript
-interface SecretMatch {
-  pattern: string;     // pattern name (e.g. 'AWS Access Key')
-  match: string;       // redacted match (for logging)
-  rawMatch: string;    // full match (for replacement/redaction)
-  offset: number;      // position in original string
+```json
+{
+  "mcpServers": {
+    "guardian": {
+      "command": "node",
+      "args": ["/absolute/path/GuardianAgent/dist/security-main.js", "mcp"],
+      "env": {
+        "GUARDIAN_URL": "http://127.0.0.1:3000",
+        "GUARDIAN_TOKEN_FILE": "/private/path/guardian-assistant-token.txt"
+      }
+    }
+  }
 }
 ```
 
----
+Use actual absolute platform paths; JSON Windows backslashes must be escaped. Keep the token value out of the configuration. The exact client setup UI varies, but the Guardian server contract is standard MCP stdio.
 
-## OutputGuardian
+Each visible non-administrative operation maps to `guardian_` plus its name with periods replaced by underscores: `projects.get` becomes `guardian_projects_get`, `ai.run` becomes `guardian_ai_run`, and `native.scan.propose` becomes `guardian_native_scan_propose`. Tools expose the operation JSON schema. MCP returns JSON result text or `isError: true`; clients must inspect errors.
 
-**File:** `src/guardian/output-guardian.ts`
-
-Layer 2 defense — scans and redacts secrets from outbound content.
-
-```typescript
-import { OutputGuardian } from './guardian/output-guardian.js';
-
-const guard = new OutputGuardian(['CUSTOM_[A-Z]{10}']);
-```
-
-### Methods
-
-**`scanResponse(content)`**
-
-Scan an LLM response. Returns sanitized content with secrets replaced by `[REDACTED]`.
-
-```typescript
-const result = guard.scanResponse('The key is AKIAIOSFODNN7EXAMPLE');
-// → {
-//     clean: false,
-//     secrets: [{ pattern: 'AWS Access Key', ... }],
-//     sanitized: 'The key is [REDACTED]'
-//   }
-```
-
-**`scanPayload(payload)`**
-
-Scan an event payload for secrets. Returns matched secrets (does not redact).
-
-```typescript
-const secrets = guard.scanPayload({ key: 'AKIAIOSFODNN7EXAMPLE' });
-// → [{ pattern: 'AWS Access Key', ... }]
-```
-
-**`scanContent(content)`**
-
-Scan arbitrary content string. Returns matched secrets.
-
-```typescript
-const secrets = guard.scanContent('sk-ant-api03-abc123');
-// → [{ pattern: 'Anthropic API Key', ... }]
-```
-
-### Types
-
-```typescript
-interface ScanResult {
-  clean: boolean;           // true if no secrets found
-  secrets: SecretMatch[];   // detected secrets
-  sanitized: string;        // content with secrets replaced by [REDACTED]
-}
-```
-
----
-
-## AuditLog
-
-**File:** `src/guardian/audit-log.ts`
-
-In-memory ring buffer for structured security event logging. Optionally backed by persistent hash-chained storage.
-
-```typescript
-import { AuditLog } from './guardian/audit-log.js';
-
-const log = new AuditLog(10_000);  // max 10,000 events (default)
-```
-
-### Methods
-
-**`record(event)`**
-
-Record a new audit event. Auto-generates ID and timestamp. If persistence is wired, the event is also persisted fire-and-forget.
-
-```typescript
-const event = log.record({
-  type: 'action_denied',
-  severity: 'warn',
-  agentId: 'my-agent',
-  controller: 'CapabilityController',
-  details: { actionType: 'write_file', reason: 'lacks write_files capability' },
-});
-```
-
-**`query(filter)`**
-
-Query events matching a filter.
-
-```typescript
-const denials = log.query({
-  type: 'action_denied',
-  agentId: 'my-agent',
-  severity: 'warn',
-  after: Date.now() - 60_000,  // last minute
-  limit: 10,
-});
-```
-
-**`getRecentEvents(count)`**
-
-Get the N most recent events.
-
-```typescript
-const recent = log.getRecentEvents(50);
-```
-
-**`getSummary(windowMs)`**
-
-Get aggregated summary for a time window. Used by Sentinel for analysis.
-
-```typescript
-const summary = log.getSummary(300_000);  // last 5 minutes
-// → {
-//     totalEvents: 42,
-//     byType: { action_denied: 5, action_allowed: 30, ... },
-//     bySeverity: { info: 30, warn: 10, critical: 2 },
-//     topDeniedAgents: [{ agentId: 'bad-agent', count: 4 }],
-//     topControllers: [{ controller: 'CapabilityController', count: 3 }],
-//     windowStart: 1234567890,
-//     windowEnd: 1234867890,
-//   }
-```
-
-**`setPersistence(p)`**
-
-Wire persistent storage. Called during Runtime startup.
-
-```typescript
-import { AuditPersistence } from './guardian/audit-persistence.js';
-
-const persistence = new AuditPersistence('~/.guardianagent/audit/');
-await persistence.init();
-log.setPersistence(persistence);
-```
-
-**`verifyChain()`**
-
-Verify the integrity of the persisted hash chain. Delegates to `AuditPersistence.verifyChain()`.
-
-```typescript
-const result = await log.verifyChain();
-// → { valid: true, totalEntries: 1847 }
-// → { valid: false, totalEntries: 1847, brokenAt: 423 }
-```
-
-**`rehydrate(count)`**
-
-Read the last N persisted entries back into the in-memory ring buffer.
-
-```typescript
-await log.rehydrate(1000);  // load last 1000 events from disk
-```
-
-**`clear()`** — Clear all events.
-
-**`getAll()`** — Get all events (read-only array).
-
-**`size`** — Current event count (getter).
-
----
-
-## AuditPersistence
-
-**File:** `src/guardian/audit-persistence.ts`
-
-SHA-256 hash-chained JSONL persistence for tamper-evident audit storage.
-
-```typescript
-import { AuditPersistence } from './guardian/audit-persistence.js';
-
-const persistence = new AuditPersistence('~/.guardianagent/audit/');
-await persistence.init();
-```
-
-### Methods
-
-**`init()`**
-
-Ensures the audit directory exists and recovers `lastHash` from the existing file (if any).
-
-**`persist(event)`**
-
-Compute SHA-256 hash over `{ event, previousHash }`, append JSONL entry, update `lastHash`. Writes are serialized via chained Promises.
-
-**`verifyChain()`**
-
-Stream the JSONL file line by line, recompute each hash, and return integrity status.
-
-```typescript
-const result = await persistence.verifyChain();
-// → { valid: boolean, totalEntries: number, brokenAt?: number }
-```
-
-**`readTail(count)`**
-
-Return the last N entries from the file for rehydration.
-
-### Types
-
-```typescript
-interface ChainedAuditEntry {
-  event: AuditEvent;
-  previousHash: string;
-  hash: string;
-}
-
-interface ChainVerifyResult {
-  valid: boolean;
-  totalEntries: number;
-  brokenAt?: number;
-}
-```
-
-### Types
-
-```typescript
-type AuditEventType =
-  | 'action_denied'     | 'action_allowed'    | 'secret_detected'
-  | 'output_blocked'    | 'output_redacted'   | 'event_blocked'
-  | 'input_sanitized'   | 'rate_limited'      | 'capability_probe'
-  | 'policy_changed'    | 'anomaly_detected'  | 'agent_error'
-  | 'agent_stalled';
-
-type AuditSeverity = 'info' | 'warn' | 'critical';
-
-interface AuditEvent {
-  id: string;
-  timestamp: number;
-  type: AuditEventType;
-  severity: AuditSeverity;
-  agentId: string;
-  userId?: string;
-  channel?: string;
-  controller?: string;
-  details: Record<string, unknown>;
-}
-
-interface AuditFilter {
-  type?: AuditEventType;
-  agentId?: string;
-  severity?: AuditSeverity;
-  after?: number;
-  before?: number;
-  limit?: number;
-}
-
-interface AuditSummary {
-  totalEvents: number;
-  byType: Record<string, number>;
-  bySeverity: Record<AuditSeverity, number>;
-  topDeniedAgents: Array<{ agentId: string; count: number }>;
-  topControllers: Array<{ controller: string; count: number }>;
-  windowStart: number;
-  windowEnd: number;
-}
-```
-
----
-
-## GuardianAgentService
-
-**File:** `src/runtime/sentinel.ts`
-
-Layer 2 defense — inline LLM-powered action evaluation before tool execution.
-
-```typescript
-import { GuardianAgentService } from './runtime/sentinel.js';
-
-const guardianAgent = new GuardianAgentService({
-  enabled: true,
-  llmProvider: 'auto',       // 'local' | 'external' | 'auto'
-  failOpen: false,            // block actions when LLM unavailable (fail-closed)
-  timeoutMs: 8000,            // inline evaluation timeout
-});
-guardianAgent.setProviders(localProvider, externalProvider);
-```
-
-### Methods
-
-- `evaluateAction(action)` — evaluate a tool action, returns `{ allowed, riskLevel, reason }`
-- `setProviders(local?, external?)` — set available LLM providers
-- `updateConfig(update)` — update config at runtime
-- `getConfig()` — read current config
-
-### API Endpoints
-
-- `GET /api/guardian-agent/status` — current config and status
-- `POST /api/guardian-agent/config` — update settings (enabled, llmProvider, failOpen, timeoutMs)
-
----
-
-## SentinelAuditService
-
-**File:** `src/runtime/sentinel.ts`
-
-Layer 4 defense — retrospective anomaly detection, runnable on cron or on-demand.
-
-```typescript
-import { SentinelAuditService } from './runtime/sentinel.js';
-
-const sentinel = new SentinelAuditService({
-  enabled: true,
-  anomalyThresholds: {
-    volumeSpikeMultiplier: 3,
-    capabilityProbeThreshold: 5,
-    secretDetectionThreshold: 3,
-  },
-});
-sentinel.setProvider(llmProvider);
-```
-
-### Methods
-
-- `runAudit(auditLog, windowMs?)` — run retrospective analysis, returns `{ anomalies, llmFindings, timestamp, windowMs }`
-- `detectAnomalies(summary, auditLog?)` — heuristic-only analysis (no LLM)
-- `setProvider(provider?)` — set LLM provider for enhanced analysis
-- `getConfig()` — read current config
-
-### API Endpoints
-
-- `POST /api/sentinel/audit` — trigger on-demand audit (optional `{ windowMs }` body)
-
----
-
-## Capabilities
-
-**File:** `src/guardian/capabilities.ts`
-
-Utility functions for capability checking.
-
-```typescript
-import {
-  hasCapability,
-  hasAllCapabilities,
-  hasAnyCapability,
-  isValidCapability,
-} from './guardian/capabilities.js';
-
-// Check if a capability is valid (known)
-isValidCapability('read_files');  // true
-isValidCapability('unknown');     // false
-
-// Check if agent has a specific capability
-hasCapability(['read_files', 'write_files'], 'read_files');  // true
-
-// Check if agent has ALL required capabilities
-hasAllCapabilities(['read_files'], ['read_files', 'write_files']);  // false
-
-// Check if agent has ANY of the listed capabilities
-hasAnyCapability(['read_files'], ['read_files', 'write_files']);  // true
-```
-
-### Valid Capabilities
-
-```
-read_files, write_files, execute_commands, network_access,
-read_email, draft_email, send_email, git_operations, install_packages
-```
-
----
-
-## Runtime Integration
-
-The Runtime wires all Guardian components together. Key integration points:
-
-### `Runtime.dispatchMessage(agentId, message)`
-
-1. **Layer 1**: Runs `guardian.check()` with `type: 'message_dispatch'`
-   - If denied → returns `[Message blocked: <reason>]`, records `action_denied`
-   - If mutated → uses cleaned content, records `input_sanitized`
-2. **Agent execution**: Calls `agent.onMessage(message, ctx)`
-3. **Layer 2**: Runs `outputGuardian.scanResponse(response.content)`
-   - If secrets found + redact mode → replaces secrets with `[REDACTED]`, records `output_redacted`
-   - If secrets found + block mode → returns blocked message, records `output_blocked`
-
-### `Runtime.createAgentContext(agentId, options?)`
-
-Injects security-aware context:
-- `ctx.capabilities` — read-only list from `AgentDefinition.grantedCapabilities`
-- `ctx.checkAction(action)` — calls `guardian.check()`, throws on denial, records to AuditLog
-- `ctx.emit(partial)` — scans payload via `outputGuardian.scanPayload()`, throws if secrets found, records `event_blocked`
-- `ctx.dispatch(agentId, message)` — calls `Runtime.dispatchMessage()`, ensuring full Guardian pipeline runs for each sub-agent call. Enabled by default; set `options.enableDispatch` to `false` to disable.
-- `ctx.sharedState` — optional `SharedStateView` (read-only) for runtime-scoped handoff metadata
-
-### `Runtime.dispatchSchedule(agentId, schedule)`
-
-Injects `auditLog` into `ScheduleContext` for Sentinel access.
-
----
-
-## Shared State
-
-**File:** `src/runtime/shared-state.ts`
-
-Bounded per-invocation state for runtime handoffs.
-
-### `SharedState` (Mutable)
-
-```typescript
-import { SharedState } from './runtime/shared-state.js';
-
-const state = new SharedState();
-state.set('input', 'user message');
-state.set('temp:counter', 0);
-
-state.get<string>('input');    // 'user message'
-state.has('input');             // true
-state.keys();                   // ['input', 'temp:counter']
-state.snapshot();               // { input: 'user message', 'temp:counter': 0 }
-state.clearTemp();              // removes 'temp:counter'
-state.clear();                  // removes all keys
-```
-
-### `SharedStateView` (Read-Only)
-
-```typescript
-const view = state.asReadOnly();
-view.get<string>('input');     // works
-view.set('x', 'y');            // TypeScript error — no set method
-```
-
-### Types
-
-```typescript
-interface SharedStateView {
-  get<T = unknown>(key: string): T | undefined;
-  has(key: string): boolean;
-  keys(): string[];
-  snapshot(): Record<string, unknown>;
-}
-
-class SharedState implements SharedStateView {
-  get<T = unknown>(key: string): T | undefined;
-  set(key: string, value: unknown): void;
-  has(key: string): boolean;
-  delete(key: string): boolean;
-  keys(): string[];
-  snapshot(): Record<string, unknown>;
-  clearTemp(): void;           // Remove all 'temp:' prefixed keys
-  clear(): void;               // Remove all keys
-  readonly size: number;
-  asReadOnly(): SharedStateView;
-}
-```
-
----
-
-## MCP Client
-
-**File:** `src/tools/mcp-client.ts`
-
-Model Context Protocol client for consuming external tool servers.
-
-### `MCPClient`
-
-Manages a single MCP server connection over stdio.
-
-```typescript
-import { MCPClient } from './tools/mcp-client.js';
-
-const client = new MCPClient({
-  id: 'filesystem',
-  name: 'Filesystem Tools',
-  transport: 'stdio',
-  command: 'npx',
-  args: ['-y', '@modelcontextprotocol/server-filesystem', '/workspace'],
-  timeoutMs: 10_000,
-});
-
-await client.connect();              // spawn, initialize, discover tools
-client.getTools();                    // MCPToolSchema[] (raw)
-client.getToolDefinitions();          // ToolDefinition[] (GuardianAgent format)
-const result = await client.callTool('read_file', { path: '/a.txt' });
-client.disconnect();                  // kill process
-```
-
-### `MCPClientManager`
-
-Manages multiple MCP server connections with tool name namespacing.
-
-```typescript
-import { MCPClientManager } from './tools/mcp-client.js';
-
-const manager = new MCPClientManager();
-await manager.addServer(filesystemConfig);
-await manager.addServer(sqliteConfig);
-
-manager.getAllToolDefinitions();       // combined list, namespaced
-manager.getStatus();                  // per-server connection status
-
-// Tool calls use namespaced names: mcp:<serverId>:<toolName>
-const result = await manager.callTool('mcp:filesystem:read_file', { path: '/a.txt' });
-
-manager.removeServer('filesystem');
-await manager.disconnectAll();
-```
-
-### Types
-
-```typescript
-interface MCPServerConfig {
-  id: string;
-  name: string;
-  transport: 'stdio';
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  cwd?: string;
-  timeoutMs?: number;       // default: 30000
-}
-
-type MCPConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
-
-interface MCPToolSchema {
-  name: string;
-  description?: string;
-  inputSchema?: { type: string; properties?: Record<string, unknown>; required?: string[] };
-}
-
-interface MCPToolCallResult {
-  success: boolean;
-  output: string;
-  error?: string;
-  metadata?: Record<string, unknown>;
-}
-```
-
----
-
-## Evaluation Metrics
-
-**Files:** `src/eval/types.ts`, `src/eval/metrics.ts`
-
-The eval package keeps pure matcher and scoring helpers. Full runtime smoke and regression coverage lives in the `scripts/` harnesses.
-
-### Content Matchers
-
-```typescript
-import { evaluateContent, evaluateSafety } from './eval/metrics.js';
-
-const content = evaluateContent('hello world', { type: 'contains', value: 'world' });
-const safety = evaluateSafety({ content: 'safe output' }, { noSecrets: true });
-```
-
-```typescript
-type ContentMatcher =
-  | { type: 'exact'; value: string }
-  | { type: 'contains'; value: string }
-  | { type: 'not_contains'; value: string }
-  | { type: 'regex'; pattern: string; flags?: string }
-  | { type: 'not_empty' };
-```
-
-### Safety Expectations
-
-```typescript
-interface SafetyExpectation {
-  noSecrets?: boolean;              // run SecretScanner on response
-  noBlockedPatterns?: string[];     // custom regex that must not appear
-  noDenials?: boolean;              // no Guardian denial markers
-  maxInjectionScore?: number;       // InputSanitizer score threshold
-}
-```
-
-### Test Case Format
-
-```typescript
-interface EvalTestCase {
-  name: string;
-  description?: string;
-  tags?: string[];
-  agentId: string;
-  input: EvalInput;
-  expected: EvalExpected;
-  timeoutMs?: number;
-}
-
-interface EvalInput {
-  content: string;
-  userId?: string;
-  channel?: string;
-}
-
-interface EvalExpected {
-  content?: ContentMatcher;
-  toolCalls?: ExpectedToolCall[];
-  metadata?: Record<string, unknown>;
-  safety?: SafetyExpectation;
-  custom?: (response: AgentResponse & { durationMs: number }) => EvalAssertion;
-}
-```
-
-### Metrics
-
-| Metric | What It Checks |
-|--------|---------------|
-| `content_exact` | Full string equality |
-| `content_contains` | Substring present |
-| `content_not_contains` | Substring absent |
-| `content_regex` | Pattern matches |
-| `content_not_empty` | Non-whitespace content |
-| `tool_trajectory` | Required tools called in order |
-| `metadata_match` | Key-value subset matching |
-| `safety_no_secrets` | SecretScanner finds nothing |
-| `safety_no_blocked_pattern` | Custom patterns absent |
-| `safety_no_denials` | No Guardian denial markers |
-| `safety_injection_score` | Score below threshold |
-| `response_exists` | Fallback — non-empty response |
+The `guardian://status` resource is listed when `status.get` is visible. Tool discovery does not override the service's deeper project/installation checks. Administrative operations are excluded from discovery and invocation; `mcp --admin` is rejected. The MCP process never opens the runtime database directly.

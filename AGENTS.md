@@ -1,74 +1,83 @@
 # Repository Guidelines
 
-## No Hardcoded Deliverables Or Test-Passing Fallbacks (CRITICAL)
-Never add hardcoded application deliverables, canned sample apps, domain-specific output, scripted answers, or test-passing fallback implementations to GuardianAgent itself in order to make a delegated coding task appear successful. The orchestration app must not secretly create user-requested project files, UI behavior, sample data, verification content, or final answers. Guardian may orchestrate, route, retry, verify generic evidence, and report failure honestly; the delegated worker or coding backend must own the actual implementation in the target workspace. If a test only passes because Guardian recognizes a specific app domain, prompt shape, file name, selector set, or expected answer and fills it in, that is a critical architecture violation. Stop, remove the workaround, and fix the shared orchestration, worker contract, or verification model instead.
+## Current product and module ownership
+
+Guardian Agent 2 is the local security and ContextCypher architecture workspace. The package version in `package.json` is the release source of truth. The default entry point is `src/security-main.ts`, compiled to `dist/security-main.js`; it does not start the retained assistant runtime in `src/index.ts`.
+
+- `src/security-workspace/`: operation schemas and authorization (`operations.ts`), shared business rules (`service.ts`), loopback HTTP/session transport (`server.ts`), SQLite persistence (`store.ts`), CLI client/MCP transport, collectors, AWS, Entra and bounded AI.
+- `web/security/`: Guardian shell and security pages. `web/contextcypher/`: the standalone-capable diagram, analysis and GRC workbench. `web/shared/`: shared browser file dialogs.
+- `scripts/`: verification and packaging harnesses; `docs/`: current architecture, guides and explicitly marked historical material.
+- `src/runtime/`, `src/guardian/`, `src/tools/`, `src/channels/`, `src/index.ts` and `web/public/` retain legacy implementation and selected shared components. Their existence does not mean their assistant features ship in the default security application.
+
+Read [SECURITY.md](SECURITY.md), [the conversion architecture](docs/architecture/SECURITY-CONVERSION.md), [the operator guide](docs/guides/SECURITY-WORKSPACE.md), and [the operation API reference](docs/reference/GUARDIAN-API.md) before changing current trust boundaries or capabilities.
+
+## No hardcoded deliverables or test-passing fallbacks (CRITICAL)
+
+Never add canned domain output, fabricated findings, sample applications, scripted answers, or fallback implementations to make a requested workflow appear successful. Model generation must come from the configured provider; collection must report observed evidence and unavailable coverage honestly. Explicitly selected, bundled ContextCypher examples are legitimate product content, not fallback evidence or generated results.
+
+For retained orchestration code, Guardian may route, retry, verify generic evidence and report failure; the delegated worker owns the actual implementation in the target workspace. If a test passes because Guardian recognizes a prompt, filename, selector set or expected answer and fills it in, remove the workaround and fix the owning contract.
 
 ## Branching (CRITICAL)
-Do not create or switch to a new branch unless the user explicitly asks for it. Default to staying on the current branch, including `main`, unless the user directs otherwise.
 
-## Project Structure & Module Organization
-`src/` holds the TypeScript app; `src/index.ts` bootstraps the runtime. Subsystems live in `src/runtime/`, `src/guardian/`, `src/tools/`, `src/channels/`, `src/llm/`, and `src/search/`. Keep tests beside the code they cover as `*.test.ts`. The web UI is in `web/public/`. Use `scripts/` for verification harnesses, `docs/` for architecture and specs, `policies/` for rule files, `skills/` for bundled skills, and `native/windows-helper/` for the Rust helper.
+Do not create or switch branches unless the user explicitly asks. Stay on the current branch, including `main`.
 
-## Build, Test, and Development Commands
-- `npm run dev`: start the app with `tsx src/index.ts`.
-- `.\scripts\start-dev-windows.ps1 -StartOnly`: start the Windows dev server without rebuilding for browser/API regression loops.
-- `bash scripts/start-dev-unix.sh --start-only`: start the Unix/WSL dev server without rebuilding.
-- `npm run build`: compile TypeScript to `dist/`.
-- `npm run check`: type check with `tsc --noEmit`.
-- `npm test`: run the Vitest suite.
-- `npm run test:coverage`: run Vitest with coverage thresholds.
-- `npx vitest run src/path/file.test.ts`: run one test file.
-- `npm run validate:dependency-contract`: validate pinned dependency and lockfile contract after dependency or override changes.
-- `npm run validate:windows-package`: validate staged Windows package manifests after Windows packaging work.
-- `npm run helper:windows`: rebuild the Windows native helper when touching `native/windows-helper/`.
-- **Integration Testing (CRITICAL):** Review `docs/guides/INTEGRATION-TEST-HARNESS.md` for full-stack API regression testing, including guidance for cross-platform (Windows/WSL) and Ollama configurations.
+## Build, test and development commands
 
-## Runtime Restart Handoff (CRITICAL)
-After changing backend/runtime/startup code, rebuilding `dist/`, or modifying config that only loads at process start, always make the restart ownership explicit. State exactly one of these outcomes before handoff: "I restarted the Guardian backend" with the command/process used, or "I did not restart the Guardian backend; you need to restart it" with the exact command or UI action. If restarting the live Guardian process could interrupt Telegram, web dashboard, approvals, or active coding runs, do not restart it without an explicit user request; tell the user clearly that they must restart it. Never leave the user to infer whether source changes are already active in the running Windows `dist/index.js` process.
+Use Node.js at least the version required by `package.json` (currently 24.14.0).
 
-## Intent Gateway (CRITICAL)
-All user intent classification must go through the Intent Gateway (`src/runtime/intent-gateway.ts`). **Never use regex, keyword matching, string includes, or any ad-hoc pattern matching to determine what the user is asking for.** The Intent Gateway is an LLM classifier that routes requests via structured tool calls. New routes must be added to `IntentGatewayRoute`, the tool schema, the system prompt, `normalizeRoute`, `preferredCandidatesForDecision` in `direct-intent-routing.ts`, and the candidate dispatch loop in `src/index.ts`. Pre-gateway interception is only permitted for slash-command parsing in channel adapters and continuation/approval flow detection.
+- `npm ci`: install the reviewed root lockfile.
+- `npm run init`: initialize the local administrator credential; prints its file path, not the token.
+- `npm run dev`: run `tsx src/security-main.ts serve`; build the frontend when needed.
+- `npm run build`: clean/prune the security backend output and build the frontend.
+- `npm run build:backend` / `npm run build:web`: targeted builds.
+- `npm start`: run the built local service.
+- `.\scripts\start-security-windows.ps1` / `bash scripts/start-security-unix.sh`: current platform launch helpers; inspect their parameters before use.
+- `npm run check`: type-check the current backend and frontend.
+- `npm run test:security-workspace`: focused current service tests.
+- `npm test`: full retained and current regression suite; `npm run test:coverage` adds coverage.
+- `npm run test:production`: verify the production dependency/build boundary.
+- `npm run test:ui`: current browser harness against an explicitly selected local service.
+- `npm run validate:dependency-contract`, `npm run test:package`: dependency/packaging checks.
+- `npm run package:windows` / `npm run package:macos`: portable packaging, not proof of native-platform acceptance or a signed installer.
 
-## Shared Orchestration (CRITICAL)
-When a bug is about blocked execution, prerequisites, approvals, clarifications, cross-turn resume, workspace switching, or channel-specific drift, fix it by extending the shared orchestration/state system first. In the current architecture that means the Intent Gateway contract, `PendingActionStore`, shared response metadata, and shared channel rendering. Do not add bespoke per-tool or per-capability resume flows unless the shared model cannot represent the behavior.
+Never put credentials in commands, tracked fixtures or test output. Prefer `GUARDIAN_TOKEN_FILE` for assistant clients; never give an assistant the administrator bootstrap file. Use isolated QA projects for browser tests. Do not change a user's provider configuration just to make tests pass.
 
-## Architecture Discipline (CRITICAL)
-Do not ship tactical workarounds that bypass the intended architecture just to make a failing path appear to work. Fix the root cause in the layer that owns the behavior:
-- intent/routing bugs: `IntentGateway` and shared routing/orchestration
-- blocked-work / approval drift: shared pending-action and channel metadata flow
-- config/provider mutation: control-plane services and transactional config update paths
-- tool visibility/discovery: the deferred-loading / `find_tools` design, unless there is an intentional architecture change
+## Runtime restart handoff (CRITICAL)
 
-If a proposed fix would bypass the documented design, stop and reconsider. Examples of fixes that are not acceptable by default:
-- promoting deferred tools to always-loaded just because a model failed to call `find_tools`
-- adding one-off channel behavior that duplicates shared orchestration
-- bypassing control-plane callbacks with ad hoc config writes
-- adding special-case routing logic before the Intent Gateway
+After backend/startup changes, backend builds, or configuration changes read only at startup, explicitly report whether the live backend was restarted and which command/process was used. If it was not restarted, state the exact restart action needed for those changes to become active. Current built entry: `node dist/security-main.js serve`, retaining the operator's existing port and data-directory options.
 
-If the right fix is to change the architecture, make that an explicit architectural change and update the relevant docs/specs in the same change rather than sneaking in a workaround. For tool-loading changes, read `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`. For module boundaries and ownership, read `docs/architecture/FORWARD-ARCHITECTURE.md`.
+Do not restart a live process that could interrupt sessions, approvals, scans, AI requests or other active work without the user's authorization. Provider API keys are memory-only and are lost on restart. A frontend build and browser refresh do not require restarting the backend. Do not imply that built backend changes are active merely because compilation passed.
 
-## Strategic Architecture Pause (CRITICAL)
-When a fix starts adding layers of adapters, compatibility shims, prompt rules, duplicated state, or per-channel/per-tool exceptions, pause before continuing. Re-read the owning design docs and current implementation, then decide whether the better move is an architecture uplift instead of another local patch.
+## Current security architecture discipline (CRITICAL)
 
-Use this pause when the same symptom appears across multiple channels or subsystems, when two or more fixes compensate for each other, when the true owner of state or policy is unclear, or when a regression suggests the current module boundary is wrong. The expected output is a concise architecture note before implementation: the current shape, the root design flaw, the proposed target shape, migration steps, tests/harnesses to update, and any obsolete layers to remove. Prefer a small coherent redesign over accumulating defensive code.
+All UI, CLI and MCP business actions go through the shared operation service. Add operation schemas and scopes in `operations.ts`, authorization and behavior in the owning service, and thin transport/UI callers. Do not add unauthenticated routes, browser-only authorization, direct database access from MCP, ad hoc provider config writes, or a second ContextCypher backend.
 
-## Routing Trace (CRITICAL)
-When troubleshooting intent classification, smart routing, pending actions, approvals, direct tool dispatch, or cross-channel continuation behavior, inspect the intent routing trace before guessing from transcripts alone. The canonical log is `~/.guardianagent/routing/intent-routing.jsonl` on the host running Guardian (for Windows installs this is typically `C:\Users\<user>\.guardianagent\routing\intent-routing.jsonl`). Use it to confirm gateway classification, tier selection, direct-candidate evaluation, tool start/completion, pending-action creation, and approval propagation. For web-specific failures, combine the trace with server/channel inspection and `web/public/js/chat-panel.js`, because the routing trace will not show frontend rendering or input-lock bugs by itself.
+- Preserve separate administrative sessions and scoped assistant credentials. Administrative approval, enrollment, provider configuration and audit access must not become MCP tools.
+- Preserve project grants, credential expiry/revocation, expected revisions and actor/target-bound approvals. Revalidate authority and project revisions before releasing long-running AI results.
+- Imported findings, diagrams and model text are untrusted data. AI responses are proposals, never authority to execute actions.
+- Preserve complete ContextCypher documents and unknown fields through import, edit, save and export. Report failed conversions; do not fabricate a replacement diagram.
+- Report native scan requests separately from scan results; never claim an absence of findings proves the workstation clean.
+- Keep provider secrets out of browser persistence, project documents, audit details and logs. Current provider keys live only in backend process memory.
+- Preserve Windows/macOS capability reporting. Unsupported platform features and permission failures must remain visible.
 
-## Coding Style & Naming Conventions
-This repo uses strict TypeScript with ESM output. Follow the existing style: 2-space indentation, semicolons, single quotes, and explicit `.js` extensions in relative imports from `.ts` files. Prefer kebab-case file names like `security-alerts.ts`, PascalCase for classes and types, camelCase for functions and variables, and UPPER_SNAKE_CASE for constants. Prefer pure helpers and isolate side effects. There is no checked-in ESLint or Prettier config, so match surrounding code and use `npm run check` as the baseline gate.
+Fix behavior in its owning layer. When multiple adapters, duplicated state, per-channel exceptions or compensating patches accumulate, pause and write a concise architecture note: current shape, root flaw, target ownership, migration, verification and obsolete layers to remove. Update relevant design documentation alongside an intentional architectural change.
 
-## Testing Guidelines
-Vitest is configured for `src/**/*.test.ts`. Coverage thresholds are 70% for lines, functions, and statements, with 55% for branches. Add or update colocated tests for every behavior change. Agents should automatically run relevant Vitest coverage first, using a focused file run during iteration and `npm test` or `npm run test:coverage` before handoff. Do not wait for a user reminder to run the integration harnesses as well: after changes to web UI, coding assistant, approvals, prompts, routing, or security behavior, run the relevant `scripts/` harnesses automatically. The default path in WSL is the Node `.mjs` harnesses, especially `node scripts/test-coding-assistant.mjs`, `node scripts/test-code-ui-smoke.mjs`, and `node scripts/test-contextual-security-uplifts.mjs`. For AI-path smoke validation, use the real-Ollama lane with `HARNESS_USE_REAL_OLLAMA=1 ... --use-ollama`. In WSL, if the local Ollama server is not already responding, start it first with `ollama serve` before running the real-model harnesses. Real-Ollama harnesses also default `GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=1`; set `HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=0` if you need to reproduce the friendly local-model guard path. For adversarial prompt testing, use `npm run test:llmmap`. See `docs/guides/INTEGRATION-TEST-HARNESS.md` for WSL and Windows-hosted Ollama details, including `HARNESS_OLLAMA_BASE_URL`.
-For UI-facing chat regressions in Codex Desktop, use the documented web preview loop: start with `.\scripts\start-dev-windows.ps1 -StartOnly`, exercise `http://localhost:3000/`, replay with `POST /api/message/stream` if needed, then inspect `~/.guardianagent/routing/intent-routing.jsonl` by `requestId`.
-Use focused harnesses for their owned surfaces: `node --import tsx scripts/test-skills-routing-harness.mjs` for skill/tool routing, `node scripts/test-web-gmail-approvals.mjs` for Gmail approval UX, `node scripts/test-security-verification.mjs` for security verification paths, `node scripts/test-tool-contracts.mjs` for direct tool contract, policy, sandbox, and job-history regressions, and `node scripts/inspect-latest-coding-harness.mjs --list 3` when inspecting recent coding-harness artifacts.
-For approval-continuity or resume-flow regressions, pair focused Vitest coverage such as `npx vitest run src/runtime/continuity-threads.test.ts src/runtime/incoming-dispatch.test.ts src/runtime/direct-reasoning-mode.test.ts` with the channel harness `node scripts/test-web-approvals.mjs`.
-For orchestration, delegation, or multi-domain execution-graph changes, include `node scripts/test-cross-domain-orchestration-stress.mjs` in the relevant harness loop.
-When a change materially affects startup behavior, orchestration, delegation, approvals, resume flow, provider/profile selection, routing, progress/timeline rendering, tool contracts, or scripted UX copy, inspect and update the startup scripts, smoke harnesses, test scripts, and brittle test expectations in the same change. Do not leave harness or startup-script drift behind after architectural work.
+## Retained source
 
-## Commit & Pull Request Guidelines
-Recent history mostly follows Conventional Commit style, for example `feat(memory): ...`, `fix(code-ui): ...`, and `chore: ...`. Keep subjects imperative and add a scope when useful. PRs should summarize the behavior change, list verification commands, link the issue when applicable, and include screenshots for `web/` changes. Call out security, policy, or config impacts when changing `src/guardian/`, `src/runtime/`, `policies/`, or auth/integration code.
+When explicitly modifying retained v1 assistant source, also read its [archived contributor contract](docs/archive/previous/AGENTS.md). Its Intent Gateway, pending-action, tool-discovery and channel restrictions apply to that source, not to the current explicit operation API. Do not reactivate historical capabilities through current startup or packaging without an intentional, documented architecture change.
 
-## Documentation & Security Tips
-Keep `src/reference-guide.ts` in sync with any user-facing behavior, workflow, navigation, or output change. `src/reference-guide.ts` is a user/operator guide only: keep it focused on how to use the product and what the operator can do in the UI, CLI, or Telegram. Do not put backend implementation details, code-path notes, trace-file internals, config-file internals, tests, or architecture commentary into the Reference Guide unless an operator explicitly needs that information to use the product. Treat `docs/guides/CAPABILITY-AUTHORING-GUIDE.md` as the single source of truth before adding any new capability such as a tool, skill, integration, route, maintenance job, or control-plane surface. Do not commit secrets, bearer tokens, or local config from `~/.guardianagent/`. Treat `tmp/` as scratch output unless you are intentionally updating a tracked fixture. Read `SECURITY.md` and `docs/architecture/OVERVIEW.md` before changing sandboxing, approvals, audit logging, or other trust-boundary behavior. Read `docs/architecture/FORWARD-ARCHITECTURE.md` before large refactors or when adding new capabilities, control-plane surfaces, or channel routes so new code follows the target module boundaries instead of extending the existing monoliths. Read `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` before changing tool discovery, always-loaded vs deferred tool sets, approval UX, or tool control-plane behavior.
-Read `docs/design/WEBUI-DESIGN.md` before changing `web/public/`, web navigation, page ownership, guidance copy patterns, or dashboard/control-plane surface layout. Treat it as the source of truth for WebUI information architecture and visual/interaction standards. If a new web surface or nav item conflicts with that spec, update the spec in the same change rather than silently diverging in implementation.
+## Verification and coding style
+
+Use strict TypeScript and ESM, 2-space indentation, semicolons, single quotes, and explicit `.js` extensions in backend relative imports. Match the imported frontend's existing conventions. Prefer pure helpers and isolated side effects.
+
+Add or update meaningful tests for changed behavior. Run focused tests first, current type checks, and applicable integration/browser harnesses automatically. Use the full regression suite before release handoff; the retained suite does not by itself prove that a legacy capability ships in v2. Verify the actual browser-to-service-to-persistence flow for navigation, approvals, provider configuration, file dialogs and project changes; distinguish mocked boundaries from real provider/OS evidence.
+
+Current focused browser harnesses include `scripts/test-security-environment-ui.mjs`, `scripts/test-security-project-routing-ui.mjs`, `scripts/test-security-autosave-ui.mjs` and `scripts/test-security-keyboard-ui.mjs`. Read each harness's configuration before running. Update startup scripts, packaging checks and brittle expectations when their owned behavior changes. Windows browser checks do not establish macOS acceptance.
+
+## Documentation, commits and local data
+
+Keep current operator guides in sync with user-visible behavior. Operator documentation explains UI/CLI workflows, not internal implementation or test traces. `src/reference-guide.ts` belongs to the retained assistant; update it when changing that source's user workflows. Keep historical documentation in the archive, not mixed into current product guidance.
+
+Use Conventional Commit subjects when committing is authorized. PR descriptions explain the problem, final behavior, verification and relevant security/configuration impact; include screenshots for UI changes.
+
+Root `package.json` and `package-lock.json` are the dependency source of truth. Generated staging manifests are not independent manifests. Never commit secrets, bearer tokens, provider keys, local configuration, runtime databases or personal collected evidence from `~/.guardianagent/`. Treat `tmp/` as scratch output unless deliberately adding a sanitized fixture.

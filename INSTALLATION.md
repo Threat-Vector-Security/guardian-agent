@@ -1,97 +1,62 @@
-# Installation
+# Install Guardian Agent
 
-GuardianAgent is intended to be installed and started from the repository root.
+Guardian runs locally on Windows, macOS and Linux. It requires Node.js **24.14 or later**, npm and a writable private data directory. Core diagrams, GRC and security observations do not require an AI account. SQLite must be available; the security service does not fall back to temporary in-memory storage.
 
-## Requirements
+## From source
 
-- Node.js 20 or newer
-- A local or external LLM provider you intend to use
-- A supported shell environment
+Run from the repository root:
 
-SQLite-backed persistence and monitoring are enabled when the Node build includes `node:sqlite`. Otherwise GuardianAgent falls back to in-memory storage for those features.
+```sh
+npm ci
+npm run build
+npm run init
+npm start
+```
 
-## Install And Start
+Open **http://127.0.0.1:3000** using the exact address printed by the service. The listener accepts loopback access on that IP; do not substitute a different hostname or expose it through a public reverse proxy.
 
-Use the platform start script in `scripts/`.
+Initialization creates a private administrator credential and prints its file path, not its contents. The local browser opens without a code by default. Enable **Settings → Require an access token to open Guardian** if you want browser sign-in. Configured Entra SSO always requires sign-in. External assistants always use separately enrolled scoped credentials.
 
-Windows:
+The default data directory is `~/.guardianagent/security-v2`. Set `GUARDIAN_SECURITY_HOME` before initialization and startup to use another directory. Keep that directory and credentials outside source repositories.
+
+For an alternate port:
+
+```sh
+node dist/security-main.js serve --port 3007
+```
+
+Ctrl+C stops the foreground service.
+
+## Development launchers
+
+Install dependencies first with `npm ci`. The launchers run security tests, type checks and a build, initialize credentials when needed, then start Guardian.
+
+Windows PowerShell:
 
 ```powershell
-.\scripts\start-dev-windows.ps1
+.\scripts\start-security-windows.ps1
 ```
 
-Linux or macOS:
+macOS, Linux or WSL:
 
-```bash
-bash scripts/start-dev-unix.sh
+```sh
+bash scripts/start-security-unix.sh
 ```
 
-These scripts handle dependency checks, native Node dependencies such as `node-pty`, build, browser binary installation (Playwright Chromium), startup, and the initial config bootstrap flow.
+After an existing build, Windows accepts `-StartOnly`; Unix accepts `--start-only`. Windows accepts `-Port 3007`; on Unix set `GUARDIAN_PORT=3007`. These scripts do not stop another Guardian process.
 
-## Windows Portable Isolation Build
+Changes to backend code require a build and restart. Stop the process you intend to replace before starting its new build; active jobs may be interrupted. Browser-only changes require rebuilding the UI and reloading the page.
 
-If you want the additional native Windows isolation layer, use the portable Windows build path. This is the path that bundles the Windows sandbox helper used for stronger subprocess isolation on Windows.
+## Packaged distributions
 
-Primary build command:
+`npm run package:security` builds a local distribution with platform launchers. See the [packaging guide](docs/guides/SECURITY-PACKAGING.md) for the archive layout, target-platform dependency installation and verification.
 
-```powershell
-npm run portable:windows
-```
+The distribution requires Node and is currently unsigned. It does not install an elevated service or provide an additional subprocess sandbox. Native installers, signing and protected service deployment remain release work.
 
-This produces the portable Windows package and is the recommended path for Windows users who want the extra isolation layer.
+## Next steps
 
-Direct PowerShell script:
-
-```powershell
-.\scripts\make-windows-portable.ps1
-```
-
-If you want an installer build instead of the portable package:
-
-```powershell
-npm run installer:windows
-```
-
-Direct PowerShell script:
-
-```powershell
-.\scripts\build-windows-installer.ps1
-```
-
-Other Windows packaging scripts are also available:
-
-- `.\scripts\build-windows-helper.ps1`
-- `.\scripts\build-windows-package.ps1`
-- `.\scripts\build-windows-release.ps1`
-
-## First Run
-
-After startup:
-
-1. Open the web UI and go to Configuration Center.
-2. Add your LLM provider.
-3. Review web auth, tools policy, and channel settings.
-4. Open `#/code` if you want the dedicated Coding Assistant workspace for repo browsing, diffs, terminals, and coding-specific approvals.
-5. Enable optional channels such as Telegram if needed.
-
-Most users should configure GuardianAgent through the web UI or CLI rather than editing config files directly.
-
-## Coding Assistant
-
-GuardianAgent includes a dedicated web Coding Assistant at `#/code`.
-
-- it is separate from the general web chat
-- each Code session keeps its own backend-owned chat history, workspace profile, and focus state
-- the Code page uses dedicated backend session routes for chat and approvals, and it fails closed if the active backend session cannot be resolved
-- the page combines explorer, diff viewing, PTY-backed terminals, and a coding sidebar with `Chat`, `Tasks`, `Approvals`, and `Checks`
-- assistant-driven file and shell actions are scoped to the active Code workspace root, so Coding Assistant command breadth does not widen the main chat shell policy
-- the Coding Assistant can still use broader Guardian capabilities from that workspace context when they directly support the repo task
-
-For current behavior and limitations, see [docs/design/CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md).
-
-## More Detail
-
-- Deployment guidance: [docs/guides/DEPLOYMENT.md](/mnt/s/Development/GuardianAgent/docs/guides/DEPLOYMENT.md)
-- Windows portable isolation option: [docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md](/mnt/s/Development/GuardianAgent/docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md)
-- Security model: [SECURITY.md](/mnt/s/Development/GuardianAgent/SECURITY.md)
-- Architecture overview: [docs/architecture/OVERVIEW.md](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md)
+- [Use the workspace](USAGE.md)
+- [Security, AI, AWS, Entra and assistant setup](docs/guides/SECURITY-WORKSPACE.md)
+- [Diagram and GRC workflow](docs/guides/GRC-WORKFLOWS.md)
+- [Known issues](docs/KNOWN-ISSUES.md)
+- [Verification commands](docs/guides/INTEGRATION-TEST-HARNESS.md)

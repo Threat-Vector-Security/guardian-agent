@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.0.0-alpha.4](https://github.com/Threat-Vector-Security/guardian-agent/releases/tag/v2.0.0-alpha.4) — 6 September 2026
+
+- Rewrote installation, usage, security policy, contributor instructions, architecture and API guidance for the current Guardian security application.
+- Added a documentation home, full diagram/GRC walkthrough, current roadmap and known-issues page.
+- Documented both assistant-to-Guardian MCP and direct HTTP/CLI workflows with scoped credentials.
+- Moved previous application designs, guides, plans, research and test history into a separate archive, preserving links and source history.
+- Kept the main README focused on current capabilities and everyday use, with fuller coverage of GRC.
+
+This is a documentation update. The [known GRC identity, browser import and read-only viewer issues](docs/KNOWN-ISSUES.md) remain open. Published as the latest GitHub release; the existing version naming is retained.
+
 ## [2.0.0-alpha.3](https://github.com/Threat-Vector-Security/guardian-agent/releases/tag/v2.0.0-alpha.3) — 6 September 2026
 
 - Keep the Systems URL in sync when creating, importing or selecting a project, so refreshing opens the selected system.

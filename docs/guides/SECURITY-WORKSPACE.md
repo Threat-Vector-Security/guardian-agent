@@ -1,6 +1,6 @@
 # Guardian Agent security workspace
 
-The security conversion uses the existing public Guardian Agent repository and Apache-2.0 license. It starts without an LLM account. It combines local security observations, governed scan requests, ContextCypher architecture/risk context, and machine interfaces.
+Guardian starts without an LLM account. It combines local security observations, governed scan requests, ContextCypher architecture/risk context, and machine interfaces.
 
 ## Run locally
 
@@ -15,24 +15,27 @@ npm start
 
 Open `http://127.0.0.1:3000`. The local browser workspace opens without an access code by default. Enable **Settings → Require an access token to open Guardian** to opt into browser sign-in. Configured Entra SSO always requires sign-in. Initialization prints the administrator token file location, not its contents; use that token in the sign-in form when required. External assistants always need their own scoped credentials. Never give the root token to an assistant. Root recovery/rotation is an explicit local command: `node dist/security-main.js init --rotate-admin`. Rotation retains a previous token file for failure recovery and revokes prior administrators in the local database.
 
-The browser access setting persists across restarts. Turning sign-in on ends sessions opened without a code. To recover the setting locally, use your administrator token file with `guardianagent call browser-auth.update '{"requireSignIn":false}' --admin` (set `GUARDIAN_TOKEN_FILE` and `GUARDIAN_URL` for this installation). This does not bypass configured Entra sign-in.
+The browser access setting persists across restarts. Turning sign-in on ends sessions opened without a code. To recover the setting locally, use your administrator token file with `node dist/security-main.js call browser-auth.update '{"requireSignIn":false}' --admin` (set `GUARDIAN_TOKEN_FILE` and `GUARDIAN_URL` for this installation). This does not bypass configured Entra sign-in.
 
-`GUARDIAN_SECURITY_HOME` selects the data directory; the default is `~/.guardianagent/security-v2`. Original Guardian and ContextCypher profiles are not silently rewritten. The new service binds only to `127.0.0.1`; it does not accept arbitrary Host headers, CORS origins, or remote access. Use the exact displayed IP address rather than substituting localhost. `GUARDIAN_PORT` selects another port if the legacy application is still running.
+`GUARDIAN_SECURITY_HOME` selects the data directory; the default is `~/.guardianagent/security-v2`. The service binds only to `127.0.0.1`; it does not accept arbitrary Host headers, CORS origins, or remote access. Use the exact displayed IP address rather than substituting localhost. `GUARDIAN_PORT` selects another port when needed.
 
-The Windows launcher is `scripts/start-security-windows.ps1`; Unix/WSL uses `scripts/start-security-unix.sh`. These start scripts never stop another running Guardian process. The previous assistant has no supported launch or deployment path and is not part of the security build.
+The Windows launcher is `scripts/start-security-windows.ps1`; Unix/WSL uses `scripts/start-security-unix.sh`. These start scripts never stop another running Guardian process. See [installation](../../INSTALLATION.md) and [packaging](SECURITY-PACKAGING.md).
 
 ## Operate
 
 On desktop, use **Collapse sidebar** to make more room for the workspace. The icon rail keeps all navigation links; hover an icon for its label. **Expand sidebar** restores the labels, and the browser remembers this preference. Smaller screens retain their compact navigation.
 
-The desktop header shows the loaded app version. **Reload page** loads the current app build; the browser warns before discarding an unsaved draft. Creating, importing or choosing a saved system updates its address, and browser navigation between system links loads the corresponding project. Cancelling a system change keeps the open draft and restores its address. If an older tab opens `project=Not%20reported`, refresh the browser and choose the created system from **Choose a saved system**, or repeat **Environments → Preview latest snapshot → Create editable system**.
+The desktop header shows the loaded app version. **Reload page** loads the current app build; the browser warns before discarding an unsaved draft. Creating, importing or choosing a saved system updates its address, and browser navigation between system links loads the corresponding project. Cancelling a system change keeps the open draft and restores its address.
 
 - **Protection:** periodic host posture, native AV status and passive LAN/connection observations; run a check and inspect coverage/errors. An observed baseline is not a trusted clean baseline.
+- **Environments:** collect supported local or AWS observations, preview their evidence and coverage, and create a new editable system from the recorded snapshot.
 - **Findings:** review evidence, record an acknowledgment or resolution reason, and link a finding to an architecture asset. Resolution records a review decision; it does not prove technical remediation.
-- **Systems:** import a ContextCypher JSON workspace, edit assets/flows/threats/controls, and save a revision. Unknown fields and existing GRC data are preserved. Conflicting revisions are rejected. Export the exact original, current ContextCypher document, or a Guardian envelope containing both.
+- **Systems:** import a ContextCypher JSON workspace, edit assets/flows/threats/controls, and save a revision. Unknown fields and existing GRC data are preserved. Conflicting revisions are rejected. Export the stored source text, current ContextCypher document, or a Guardian envelope containing both. Browser JSON import parses and reserializes the document, so these paths do not guarantee retention of the original file's whitespace or byte formatting.
 - **Activity:** inspect jobs and pending scan proposals. Administrator approval is bound to the exact device and scan type for fifteen minutes. A native scan request remains requested/already-running/unknown; it never becomes a fabricated clean result. Jobs interrupted by service restart are not automatically replayed.
 - **Integrations:** inspect capability boundaries for native providers, ContextCypher, normalized security events, and external assistants.
 - **Settings:** enroll named assistants with minimum scopes, optional project restrictions, expiration (maximum ninety days), and immediate revocation. Tokens are displayed once. Administrative operations never appear in the MCP tool catalogue.
+
+See [GRC workflows](GRC-WORKFLOWS.md) for the fifteen GRC sections and diagram-to-risk relationships. The full workbench currently requires project-write permission; project viewers receive a simplified Systems view. Track this limitation in [known issues](../KNOWN-ISSUES.md).
 
 ### Save projects and portable files
 
@@ -78,7 +81,7 @@ HTTP uses `POST /api/v1/operations` with `{ "operation": "status.get", "input": 
 
 ## Standalone security AI
 
-Guardian's built-in AI uses its curated provider registry: local Ollama, Ollama Cloud, OpenAI, Anthropic, Gemini, xAI and the supported compatible providers. Configure a provider and model through the administrator-only `ai.configure` operation; `ai.providers.list` returns configuration without its secret, and `ai.models.list` lists models available to the configured account. `ai.test` performs a small connectivity conversation. Model access depends on the chosen provider and account. Local Ollama uses `127.0.0.1:11434`; custom provider endpoints are not accepted.
+Guardian's built-in AI uses its curated provider registry: local Ollama, Ollama Cloud, OpenAI, Anthropic, Gemini, xAI and the supported compatible providers. Configure a provider and model in the Systems editor settings. The underlying administrator-only `ai.configure` operation uses the same backend contract; `ai.providers.list` returns configuration without its secret, and `ai.models.list` lists models available to the configured account. `ai.test` performs a small connectivity conversation. Model access depends on the chosen provider and account. Local Ollama uses `127.0.0.1:11434`; custom provider endpoints are not accepted.
 
 `ai.run` supports security chat, analysis, assessment and diagram generation. It requires `ai:invoke`; reading a saved project additionally requires `projects:read`, its project ID and current revision. The service rechecks authorization and revision before delivering the answer. Generated diagrams are proposals: apply reviewed changes through the normal revision-checked project save. AI has no shell, discovery or remediation tools, and does not change security policy. `ai.cancel` cancels a request owned by the same credential.
 
@@ -98,7 +101,7 @@ Login uses authorization code, PKCE, one-time browser-bound state, nonce, signat
 
 Connections default to **Automatic (source security zone)**. Their line, arrow and label colors follow the source's current zone and active zone palette. For grouped nodes, the containing security zone defines the zone; changing that container updates its automatic connections. In an edge editor, choose a named Security Zone to hold an explicit override, or choose Automatic to resume inheritance. Document-style themes retain their separate ink and trust-boundary crossing presentation.
 
-Older diagrams recorded only a zone value, without identifying whether it was automatically copied or manually selected. On load, a missing zone or one matching the source is migrated to Automatic; a different zone remains an explicit override. A manually chosen legacy value that happens to match the source is indistinguishable from an automatic copy. Select that named zone again to lock it as an override. Original imports remain available; unrelated extension fields are retained.
+Imported diagrams can contain a zone value without identifying whether it was automatically copied or manually selected. On load, a missing zone or one matching the source becomes Automatic; a different zone remains an explicit override. A manually chosen value matching the source is indistinguishable from an automatic copy. Select that named zone again to lock it as an override. Stored imports remain available; unrelated extension fields are retained.
 
 ## Security and deployment boundaries
 
@@ -123,6 +126,8 @@ Environment previews require installation-wide `security:read`; AWS previews add
 ## Release limits
 
 Project deletion is not implemented. Azure resource discovery is not connected; optional Entra and AWS integrations require acceptance testing in the intended tenant/account.
+
+The current [known-issues register](../KNOWN-ISSUES.md) records remaining workflow gaps, including diagram identity, byte-format retention and viewer parity.
 
 Known diagram/GRC issue: renaming a system, saving and reopening it, then syncing assets or connections again can create duplicates because diagram references currently use the loaded name. Existing saved data is retained. Avoid renaming between syncs until stable diagram identity is implemented. Asset sync adds and links records; it does not automatically rename existing GRC assets or remove them when diagram elements disappear.
 

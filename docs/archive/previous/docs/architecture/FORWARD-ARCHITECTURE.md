@@ -1,0 +1,435 @@
+# GuardianAgent Forward Architecture
+
+> **Security conversion (2026-09-06):** The default product now follows [SECURITY-CONVERSION.md](SECURITY-CONVERSION.md). Its structured HTTP/CLI/MCP operations use the security application service directly, with explicit audiences and scopes. The general-assistant architecture below remains the contract for retained legacy code; it does not require the new service to start chat, workers, or an LLM.
+
+## Purpose
+
+This document defines the target application structure for GuardianAgent as the codebase is modularized. It is the architecture contract for future refactors and new capabilities.
+
+Use it when:
+- extracting logic out of `src/index.ts`, `src/channels/web.ts`, or `src/tools/executor.ts`
+- adding a new agent capability, control-plane surface, or channel feature
+- deciding where new code should live and what it may depend on
+
+This is a migration target, not a rewrite license. Existing behavior must be preserved by mechanically extracting code into better boundaries, with characterization coverage and harness validation after each phase.
+
+## Goals
+
+- Keep the security and orchestration invariants supervisor-owned and explicit.
+- Make new capabilities additive instead of requiring edits across the same large files.
+- Separate transport, application logic, runtime orchestration, and infrastructure adapters.
+- Keep configuration updates transactional and auditable.
+- Keep blocked-work, approvals, and continuation behavior shared across channels.
+- Make test scope map cleanly to architectural boundaries.
+
+## Non-Goals
+
+- Rewriting stable behavior from scratch.
+- Collapsing shared orchestration into per-channel logic.
+- Introducing plugin-style dynamic loading for first-party core behavior.
+- Moving trust-boundary enforcement away from the Runtime and Guardian layers.
+
+## Architectural Principles
+
+1. Composition roots compose. They do not own feature logic.
+2. Channel adapters translate protocols. They do not invent business rules.
+3. Control-plane services own configuration, mutation, persistence, and runtime application.
+4. Runtime orchestration owns intent routing, execution state, pending actions, approvals, and cross-turn state.
+5. Tool execution owns registration, policy enforcement, approval flow, execution lifecycle, and result shaping.
+6. Capability modules own domain-specific implementations behind stable contracts.
+7. Security decisions stay centralized in Guardian, policy, sandbox, and shared orchestration layers.
+8. New features should normally require edits in one layer plus wiring, not edits across every central file.
+
+## Target Layering
+
+### 1. Bootstrap / Composition Root
+
+Primary responsibility:
+- construct services
+- assemble the Runtime
+- start channels
+- register shutdown behavior
+
+Allowed locations:
+- `src/index.ts`
+- `src/bootstrap/`
+
+Rules:
+- `src/index.ts` should become a thin entrypoint.
+- Bootstrap code may wire dependencies together, but it should not contain long feature handlers, config transactions, route bodies, or tool implementations.
+- If a function in bootstrap starts owning domain decisions, extract it.
+
+Current checkpoint:
+- `src/bootstrap/runtime-factory.ts` now owns the earliest startup phase: default-config bootstrap, secure config load, runtime credential resolution, denied-path injection, and initial `Runtime` construction.
+- `src/bootstrap/service-wiring.ts` now owns scheduled-task executor wiring, runtime notification service construction, runtime support startup, playbook schedule migration, and CLI post-start setup.
+- `src/bootstrap/channel-startup.ts` now owns CLI, Telegram, and Web channel construction, startup logging, channel registration, Telegram reload wiring, and coding-backend bootstrap for the web surface.
+- `src/bootstrap/shutdown.ts` now owns graceful shutdown sequencing for channels, managed intervals, MCP cleanup, executor disposal, runtime stop, and terminal exit settlement.
+- `src/runtime/incoming-dispatch.ts` now owns shared pre-dispatch preparation for channel messages: request-id assignment, code-session attachment/pinning, gateway-first tier routing, pre-routed metadata attachment, and the early routing trace stages before the Runtime handles the turn.
+- `src/index.ts` now passes a shared `IntentGateway` instance into `src/chat-agent.ts` so the channel/runtime pre-routing path and the in-agent fallback classification path do not drift apart.
+- `src/runtime/dashboard-dispatch.ts` now owns the shared dashboard/runtime dispatch path: code-session-aware message shaping, pre-routed metadata attachment at dispatch time, orchestrator handoff, response-source enrichment, fallback-tier dispatch, and dispatch-response trace recording.
+- `src/runtime/control-plane/config-state-helpers.ts` now owns shared config-state helper logic used by dashboard/control-plane flows: credential-ref normalization, local-secret upserts/deletes, and persistence helpers for tool, skill, and connector state.
+- `src/runtime/control-plane/provider-config-helpers.ts` now owns shared provider/config shaping helpers used by multiple control-plane flows: provider snapshot/status construction, provider credential resolution for ad hoc model discovery, and cloud profile lookup helpers used by direct config updates.
+- `src/runtime/control-plane/provider-dashboard-callbacks.ts` now owns provider discovery and model-enumeration callbacks for the dashboard surface.
+- `src/runtime/control-plane/provider-integration-callbacks.ts` now owns provider connection, credential, and integration callback behavior that should not live in web routes or the entrypoint.
+- `src/runtime/control-plane/auth-control-callbacks.ts` now owns authentication control-plane callback behavior for the web/admin surface.
+- `src/runtime/control-plane/tool-policy-runtime-sync.ts` now owns synchronization between persisted tool policy and the live ToolExecutor/runtime policy view.
+- `src/runtime/control-plane/agent-dashboard-callbacks.ts` now owns dashboard agent listing/detail shaping, including internal-agent classification and routing-role exposure.
+- `src/runtime/control-plane/assistant-dashboard-callbacks.ts` now owns assistant-state summaries, worker follow-up actions, run timeline listing/detail callbacks, and routing-trace decoration for the dashboard surface.
+- `src/runtime/control-plane/dashboard-runtime-callbacks.ts` now owns dashboard SSE subscription fan-out, streaming chat dispatch, direct dashboard dispatch delegation, and quick-action orchestration callbacks for the web control-plane surface.
+- `src/runtime/control-plane/governance-dashboard-callbacks.ts` now owns the governance/admin callback surface for Guardian Agent status updates, Policy-as-Code controls, and Sentinel audit execution.
+- `src/runtime/control-plane/performance-dashboard-callbacks.ts`, `operations-dashboard-callbacks.ts`, `security-dashboard-callbacks.ts`, `setup-config-dashboard-callbacks.ts`, `tools-dashboard-callbacks.ts`, and `workspace-dashboard-callbacks.ts` now own their respective dashboard callback slices instead of keeping that logic in the entrypoint.
+- `src/runtime/control-plane/provider-runtime-adapters.ts` now owns provider-runtime adapter construction that does not belong in the entrypoint: provider health probes and the cloud connection test adapter set used by provider integration callbacks.
+- `src/chat-agent.ts` now owns the primary chat-turn orchestration path that used to live inline in `src/index.ts`: LLM/tool loop handling, direct-intent shortcuts, approval continuation handling, code-session interaction, and shared pending-action coordination.
+- `src/chat-agent-helpers.ts` now owns the shared support helpers used by the chat agent and control-plane surface for tool-result shaping, code-session prompt context, provider-routing defaults, Gmail/M365 summarization, and config redaction.
+- `src/index.ts` is still a heavy composition root at roughly 6.6k lines. The main remaining architecture work is residual callback-factory assembly, provider/config helper cleanup, and final composition-root trimming so `main()` becomes composition-only.
+- `src/tools/executor.ts` remains the other major extraction target at roughly 7.6k lines. The desired direction is still category registrars and narrow helper modules rather than adding more builtin implementations directly to the central executor.
+
+Suggested structure:
+
+```text
+src/bootstrap/
+  runtime-factory.ts
+  service-wiring.ts
+  channel-startup.ts
+  shutdown.ts
+```
+
+### 2. Channel / Transport Layer
+
+Primary responsibility:
+- accept input from CLI, Web, Telegram, and future transports
+- authenticate the request
+- parse and validate transport payloads
+- translate Runtime responses into channel-specific rendering
+
+Allowed locations:
+- `src/channels/`
+- `web/public/` for browser presentation
+
+Rules:
+- Channel code must not duplicate orchestration rules, approval logic, or continuation semantics.
+- Shared blocked-work behavior must stay driven by shared response metadata.
+- Request parsing, auth helpers, SSE, terminal lifecycle, and route groups should be split into focused modules.
+
+Suggested structure:
+
+```text
+src/channels/
+  cli.ts
+  telegram.ts
+  web.ts
+  web-json.ts
+  web-shell-launch.ts
+  web-terminal-routes.ts
+  web-chat-routes.ts
+  web-runtime-routes.ts
+  web-monitoring-routes.ts
+  web-control-routes.ts
+  web-automation-routes.ts
+  web-code-session-routes.ts
+  web-code-workspace-routes.ts
+  web-provider-admin-routes.ts
+```
+
+Current checkpoint:
+- `src/channels/web.ts` is still the HTTP composition module, but most route ownership now lives in focused sibling modules.
+- `src/channels/web-chat-routes.ts` owns chat, streaming, chat approvals, pending-action rendering, and run-tracking HTTP flow.
+- `src/channels/web-runtime-routes.ts`, `web-monitoring-routes.ts`, and `web-control-routes.ts` own runtime/system, monitoring, and control-plane endpoints.
+- `src/channels/web-code-session-routes.ts` and `web-code-workspace-routes.ts` own backend Code-session and workspace APIs.
+- `src/channels/web-provider-admin-routes.ts`, `web-terminal-routes.ts`, and `web-automation-routes.ts` own provider-admin, PTY terminal, and automation endpoints.
+- `web/public/` remains browser presentation only; route semantics and shared orchestration stay server-side.
+
+### 3. Control Plane / Application Services
+
+Primary responsibility:
+- own dashboard callbacks and admin operations
+- validate and persist config changes
+- apply live runtime changes
+- coordinate multi-service state transitions
+- expose stable contracts to channels and UI
+
+Allowed locations:
+- `src/runtime/control-plane/`
+- `src/runtime/dashboard/`
+
+Rules:
+- Configuration mutation must flow through dedicated services, not ad hoc code paths.
+- Control-plane services should have explicit phases: validate, persist, reload, apply, audit, rollback/report.
+- Web routes and UI callbacks should call services, not directly mutate shared refs or infrastructure objects.
+
+Suggested structure:
+
+```text
+src/runtime/control-plane/
+  agent-dashboard-callbacks.ts
+  assistant-dashboard-callbacks.ts
+  dashboard-runtime-callbacks.ts
+  governance-dashboard-callbacks.ts
+  provider-runtime-adapters.ts
+  config-persistence-service.ts
+  config-state-helpers.ts
+  provider-config-helpers.ts
+  provider-dashboard-callbacks.ts
+  provider-integration-callbacks.ts
+  auth-control-callbacks.ts
+  tool-policy-runtime-sync.ts
+  config-apply-service.ts
+  config-validation-service.ts
+  provider-routing-service.ts
+  tool-policy-service.ts
+  web-auth-config-service.ts
+  dashboard-callbacks.ts
+```
+
+### 4. Runtime Orchestration Layer
+
+Primary responsibility:
+- execute the authoritative user-turn pipeline
+- own intent classification through the Intent Gateway
+- manage execution records, pending actions, approvals, continuation, and shared response metadata
+- coordinate conversations, analytics, identities, budgets, watchdogs, and scheduled execution
+
+Primary locations:
+- `src/runtime/`
+- `src/agent/`
+- `src/guardian/`
+- `src/policy/`
+
+Rules:
+- Intent classification must stay gateway-first.
+- Execution identity, approval flow, and blocked-work state must remain shared abstractions, not feature-specific forks.
+- Runtime services should depend on interfaces and helpers, not channel-specific details.
+
+Current checkpoint:
+- `src/runtime/incoming-dispatch.ts` is now the shared boundary between channel adapters/bootstrap startup and the Runtime dispatch pipeline.
+- `src/runtime/incoming-dispatch.ts` exists to keep request normalization, code-session-aware routing, and pre-routed intent metadata out of `src/index.ts` and out of per-channel adapters.
+- `src/runtime/executions.ts` now owns the durable execution record for user work, including route/intent snapshots, blocker state, and parent/root/retry lineage used by resume and delegated-run correlation.
+- `src/runtime/dashboard-dispatch.ts` now owns the shared dispatch path used by dashboard callbacks and the web chat flow after route selection has been made.
+- `src/runtime/second-brain/` now owns the Guardian-local personal context store and services for tasks, notes, links, people, routines, briefs, usage, local calendar, provider sync cursors, and deterministic briefing/horizon scanning.
+- `src/runtime/code-sessions.ts` and the code-session helper modules now own backend Code-session identity, workspace profiles, repo grounding, working-set state, trust state, and managed sandbox attachments used by the web workbench and chat path.
+- `src/runtime/remote-execution/` now owns provider-neutral target discovery, health, lease acquisition, managed/ephemeral lease semantics, policy checks, provider adapters, and normalized remote run metadata for Vercel and Daytona sandbox execution.
+- `src/runtime/control-plane/config-state-helpers.ts` now owns the shared config-state helper surface that used to live inline in the callback factory.
+- `src/runtime/control-plane/provider-config-helpers.ts` and `src/runtime/control-plane/provider-dashboard-callbacks.ts` now keep provider-state shaping and provider dashboard callbacks out of the entrypoint factory.
+- `src/runtime/control-plane/provider-integration-callbacks.ts`, `auth-control-callbacks.ts`, and `tool-policy-runtime-sync.ts` now keep provider integration, auth-control, and live policy synchronization behavior out of channel routes and the entrypoint.
+- `src/runtime/control-plane/agent-dashboard-callbacks.ts` now keeps agent dashboard shaping and internal-agent classification out of the callback factory.
+- `src/runtime/control-plane/assistant-dashboard-callbacks.ts` now keeps assistant-state summaries, run-history routing, and routing-trace decoration out of the callback factory.
+- `src/runtime/control-plane/dashboard-runtime-callbacks.ts` now keeps dashboard SSE fan-out, stream dispatch, direct dispatch delegation, and quick-action orchestration out of the callback factory.
+- `src/runtime/control-plane/governance-dashboard-callbacks.ts` now keeps Guardian Agent, Policy-as-Code, and Sentinel audit callback logic out of the callback factory.
+- `src/runtime/control-plane/performance-dashboard-callbacks.ts`, `operations-dashboard-callbacks.ts`, `security-dashboard-callbacks.ts`, `setup-config-dashboard-callbacks.ts`, `tools-dashboard-callbacks.ts`, and `workspace-dashboard-callbacks.ts` now keep additional dashboard/control-plane callback slices out of the entrypoint factory.
+- `src/runtime/control-plane/provider-runtime-adapters.ts` now keeps provider-specific runtime probing and cloud test adapter construction out of the callback factory.
+- `src/chat-agent.ts` now isolates the main conversational agent runtime from the composition root, so the remaining `src/index.ts` work is centered on callback-factory cleanup, provider/config helper trimming, and final orchestration cleanup rather than the core message dispatch path.
+
+Authoritative shared prompt/context contract:
+- `docs/design/CONTEXT-ASSEMBLY-DESIGN.md`
+
+### 5. Tool Execution Core
+
+Primary responsibility:
+- own tool registry lifecycle
+- own approval and policy checks
+- own execution context assembly
+- dispatch tool implementations
+- compact and normalize tool outputs
+
+Primary locations:
+- `src/tools/executor.ts`
+- `src/tools/approvals/`
+- `src/tools/builtin/`
+
+Rules:
+- `ToolExecutor` should become an orchestration core, not a giant host for every builtin implementation.
+- Builtin tools should be registered by category registrars.
+- Capability logic should move into category modules and helper services with narrow write scopes.
+
+Suggested structure:
+
+```text
+src/tools/
+  executor.ts
+  approvals/
+  builtin/
+    web-tools.ts
+    browser-tools.ts
+    coding-tools.ts
+    filesystem-tools.ts
+    network-tools.ts
+    automation-tools.ts
+    workspace-tools.ts
+    contacts-tools.ts
+  helpers/
+    tool-context.ts
+    tool-http.ts
+    tool-browser.ts
+    tool-shell.ts
+    tool-output.ts
+    tool-policy.ts
+```
+
+### 6. Capability Modules
+
+Primary responsibility:
+- implement domain-specific behavior behind stable service or tool contracts
+
+Examples:
+- `src/google/`
+- `src/microsoft/`
+- `src/search/`
+- `src/runtime/second-brain/`
+- `src/runtime/code-sessions.ts` and code-session helpers
+- `src/runtime/remote-execution/`
+- `src/runtime/threat-intel.ts`
+- `src/runtime/automation-*`
+
+Rules:
+- Capability modules should not reach back up into channel adapters or bootstrap code.
+- New capabilities should provide a service or registrar entrypoint that the composition root can wire once.
+- `Second Brain` should remain the canonical assistant-facing capability boundary for Guardian-owned personal context such as calendar, contact context, notes, tasks, library items, briefs, and routines.
+- Google Workspace and Microsoft 365 should remain adapter modules for provider-owned data and operations. They may sync into `Second Brain`, but they should not become the default owner of generic personal-assistant calendar or contact context.
+- Email remains provider-owned even when `Second Brain` uses synced and derived mailbox context for retrieval, briefing, and drafting.
+
+### 7. Infrastructure Adapters
+
+Primary responsibility:
+- talk to external systems, SDKs, processes, storage, or OS services
+
+Examples:
+- LLM providers in `src/llm/`
+- MCP client in `src/tools/mcp-client.ts`
+- native OAuth integrations in `src/google/` and `src/microsoft/`
+- sandbox and broker infrastructure in `src/sandbox/`, `src/broker/`, and `src/supervisor/`
+- remote sandbox provider adapters in `src/runtime/remote-execution/providers/`
+- cloud provider clients in `src/tools/cloud/`, including Vercel and Daytona sandbox clients
+
+Rules:
+- Infrastructure code should not absorb application decision logic.
+- It should expose explicit methods and typed failure states that higher layers can orchestrate.
+
+## Dependency Direction
+
+Allowed dependency flow:
+
+```text
+Bootstrap
+  -> Channels
+  -> Control Plane
+  -> Runtime Orchestration
+  -> Tool Execution
+  -> Capability Modules
+  -> Infrastructure Adapters
+  -> Shared Utilities
+```
+
+Constraints:
+- Channels may depend on control-plane contracts and shared render helpers, but not on low-level infrastructure internals.
+- Control-plane services may coordinate runtime and tool services, but should not depend on web-specific request objects.
+- Capability modules must not import channel adapters.
+- Shared utilities in `src/util/` must stay generic and side-effect-light.
+- Avoid circular imports between `runtime`, `tools`, and `channels`.
+
+## Canonical Request Flows
+
+### User Turn
+
+1. Channel adapter authenticates and normalizes the request.
+2. Shared incoming-dispatch preparation resolves request id, code-session attachment, pinned-agent behavior, and pre-routed intent metadata.
+3. Shared dashboard/runtime dispatch shapes the runtime message, attaches code-session context, and enters the orchestrator queue.
+4. Runtime receives the prepared message.
+5. Intent Gateway classifies the turn if it was not already pre-routed.
+6. Shared orchestration decides direct route vs normal assistant path.
+7. Pending-action and approval state are resolved through shared contracts.
+8. Tool execution, if needed, runs through ToolExecutor and Guardian enforcement.
+9. Response metadata is rendered by the channel without inventing channel-specific semantics.
+
+### Config Update
+
+1. Channel or dashboard route validates transport payload.
+2. Control-plane service validates semantic config changes.
+3. Config is persisted and signed.
+4. Canonical config is reloaded.
+5. Apply services update runtime/provider/tool/channel state.
+6. Audit and result metadata are recorded.
+7. The channel returns the service result.
+
+### Tool Registration and Execution
+
+1. Bootstrap creates ToolExecutor with shared services and policy dependencies.
+2. ToolExecutor invokes builtin registrars by category.
+3. Each registrar registers tool definitions and delegates implementation to focused helpers.
+4. At runtime, ToolExecutor performs policy, approval, and context checks.
+5. Tool output is normalized and compacted through shared helpers before reinjection.
+
+### Code Session Remote Execution
+
+1. The web workbench or chat path resolves the active backend Code session through shared incoming-dispatch/session context.
+2. Code-session state provides workspace profile, repo map, working set, trust state, and any managed sandbox attachments.
+3. ToolExecutor applies Guardian, policy, approval, allowed-path, and command checks before any command leaves the supervisor.
+4. The shared remote-execution service selects a healthy compatible Vercel or Daytona target, reusing a managed lease when appropriate.
+5. Provider adapters perform bounded command execution and return stdout, stderr, artifacts, lifecycle state, and sandbox metadata.
+6. Guardian-owned state records the run, updates managed-sandbox visibility, and composes the final response locally.
+
+## Module Placement Rules
+
+When adding new code:
+
+- Put request parsing and HTTP response shaping in `src/channels/`.
+- Put config mutation and dashboard action logic in `src/runtime/control-plane/`.
+- Put shared orchestration or pending-action behavior in `src/runtime/`.
+- Put tool definitions and execution helpers in `src/tools/`.
+- Put external-provider integrations in their domain directories, not inside channel or bootstrap files.
+- Put pure, reusable helpers in `src/util/` only if they are not domain-owned.
+
+If a change requires edits to `src/index.ts`, `src/channels/web.ts`, and `src/tools/executor.ts` at the same time, stop and identify the missing abstraction first.
+
+## Refactor Rules
+
+These rules are mandatory for the modularization effort:
+
+1. Do not delete a large file and recreate it from model context.
+2. Move code mechanically in small slices.
+3. Preserve behavior first, improve shape second.
+4. Add characterization tests before moving high-risk logic when coverage is weak.
+5. Run focused tests during iteration.
+6. Run the relevant integration harnesses after each phase.
+7. Land one boundary improvement per phase when possible.
+8. Keep unrelated dirty-worktree changes untouched.
+
+## Testing Strategy By Layer
+
+- Bootstrap changes: `npm run check`, targeted bootstrap/runtime tests, affected harnesses, then `npm test`.
+- Channel/web changes: focused Vitest for extracted helpers and route behavior, `node scripts/test-code-ui-smoke.mjs`, `node scripts/test-coding-assistant.mjs`, `node scripts/test-contextual-security-uplifts.mjs`.
+- Control-plane changes: focused runtime/control-plane tests, `node scripts/test-coding-assistant.mjs`, `node scripts/test-contextual-security-uplifts.mjs`.
+- Incoming-dispatch and routing-preparation changes: focused `src/runtime/incoming-dispatch.test.ts`, bootstrap/channel-startup tests that exercise the preparer boundary, `npm run check`, `node scripts/test-code-ui-smoke.mjs`, and the routing/security harnesses affected by the touched path.
+- Tool execution changes: focused executor tests, relevant capability harnesses such as `node scripts/test-automation-authoring-compiler.mjs`, then full suite.
+- Code session or remote-execution changes: focused code-session, managed-sandbox, and remote-execution provider tests, `node scripts/test-code-ui-smoke.mjs`, `node scripts/test-coding-assistant.mjs`, and sandbox/security harnesses affected by the path.
+- Security or routing changes: always include the relevant security/routing harnesses and inspect the routing trace when applicable.
+
+See `docs/guides/INTEGRATION-TEST-HARNESS.md` for harness details and lane selection.
+
+## Definition of Clean Structure
+
+GuardianAgent is considered structurally healthy when:
+
+- `src/index.ts` is primarily composition and startup logic.
+- channel adapters are transport-focused and route groups are modular.
+- config updates flow through dedicated control-plane services.
+- ToolExecutor is mostly execution orchestration plus registrar wiring.
+- builtin tool implementations are grouped by domain and tested in isolation.
+- pending actions, approvals, and continuation semantics remain shared.
+- adding a new capability usually means adding one registrar or service module plus a single wiring step.
+
+## Architectural Guardrails
+
+Use these as review heuristics:
+
+- No new 1k+ line callback factories.
+- No route modules that duplicate body parsing and error handling for every endpoint.
+- No tool category growth that requires pasting new implementations into `registerBuiltinTools()`.
+- No channel-specific approval or continuation state machines.
+- No direct config mutation from UI handlers without a control-plane service.
+
+## Documentation Responsibilities
+
+- Keep this document aligned with the actual target structure as refactors land.
+- Keep `docs/architecture/OVERVIEW.md` aligned with the current shipped architecture.
+- Keep `src/reference-guide.ts` aligned with user-facing behavior.
+- Update `AGENTS.md` and `CLAUDE.md` when the architectural contract for contributors changes.

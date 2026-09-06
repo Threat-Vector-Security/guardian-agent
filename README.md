@@ -26,6 +26,18 @@ Guardian is built for individuals, security practitioners and teams who want loc
 | **Review and report** | Investigate findings, record review decisions, inspect activity, and export diagrams, portable project files and GRC reports. |
 | **Work with AI assistants** | Give compatible assistants scoped access to inspect findings and read or update projects—including embedded node, edge and GRC data. |
 
+### Threat modelling and GRC in one place
+
+ContextCypher's GRC workspace brings the wider security picture alongside your diagrams:
+
+- **Assets, findings and risks:** build an asset register, connect diagram elements to risks, and track scoring and treatment.
+- **Compliance, controls and assessments:** manage implementation, evidence and statements of applicability.
+- **Governance and risk management:** organise policies, responsibilities and treatment plans.
+- **Threat profiles, third parties, initiatives and incidents:** connect security work to the people, suppliers and programmes involved.
+- **Dashboards, reporting and workflow configuration:** review progress and tailor the workspace to your process.
+
+Open the shield icon in the Systems editor to switch to GRC. The [GRC walkthrough](docs/guides/GRC-WORKFLOWS.md) explains all 15 sections and how they link to diagrams.
+
 ## Two ways to work
 
 ### Use Guardian on its own
@@ -71,10 +83,11 @@ Local browser access opens without an access code by default. Optional browser s
 - **Security event intake:** scoped HTTP ingestion for connectors that provide normalised findings.
 - **GRC reference material:** seven bundled reference datasets covering NIST SP 800-53, OWASP Top 10, MITRE ATT&CK Enterprise/ICS/Mobile, Australian ISM and Essential Eight, plus local CSV/XLSX control imports.
 
-Integration coverage varies by platform and provider. See the [operator guide](docs/guides/SECURITY-WORKSPACE.md#release-limits) for current coverage and deployment considerations, and the [roadmap](docs/plans/GUARDIAN-SECURITY-UPLIFT-PLAN-2026-09-06.md) for planned capabilities.
+Integration coverage varies by platform and provider. See the [operator guide](docs/guides/SECURITY-WORKSPACE.md#release-limits) for current coverage and deployment considerations, and the [roadmap](docs/ROADMAP.md) for planned capabilities.
 
 ## Documentation and development
 
+- [Documentation home](docs/README.md): all current guides, reference material and known issues.
 - [Operator and integration guide](docs/guides/SECURITY-WORKSPACE.md): everyday workflows, AI, assistant setup, AWS, Entra and migration.
 - [Installation and packaging](docs/guides/SECURITY-PACKAGING.md): local distributions, launchers and platform requirements.
 - [Architecture](docs/architecture/SECURITY-CONVERSION.md): service boundaries and security design.

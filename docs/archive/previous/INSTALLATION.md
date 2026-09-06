@@ -1,0 +1,97 @@
+# Installation
+
+GuardianAgent is intended to be installed and started from the repository root.
+
+## Requirements
+
+- Node.js 20 or newer
+- A local or external LLM provider you intend to use
+- A supported shell environment
+
+SQLite-backed persistence and monitoring are enabled when the Node build includes `node:sqlite`. Otherwise GuardianAgent falls back to in-memory storage for those features.
+
+## Install And Start
+
+Use the platform start script in `scripts/`.
+
+Windows:
+
+```powershell
+.\scripts\start-dev-windows.ps1
+```
+
+Linux or macOS:
+
+```bash
+bash scripts/start-dev-unix.sh
+```
+
+These scripts handle dependency checks, native Node dependencies such as `node-pty`, build, browser binary installation (Playwright Chromium), startup, and the initial config bootstrap flow.
+
+## Windows Portable Isolation Build
+
+If you want the additional native Windows isolation layer, use the portable Windows build path. This is the path that bundles the Windows sandbox helper used for stronger subprocess isolation on Windows.
+
+Primary build command:
+
+```powershell
+npm run portable:windows
+```
+
+This produces the portable Windows package and is the recommended path for Windows users who want the extra isolation layer.
+
+Direct PowerShell script:
+
+```powershell
+.\scripts\make-windows-portable.ps1
+```
+
+If you want an installer build instead of the portable package:
+
+```powershell
+npm run installer:windows
+```
+
+Direct PowerShell script:
+
+```powershell
+.\scripts\build-windows-installer.ps1
+```
+
+Other Windows packaging scripts are also available:
+
+- `.\scripts\build-windows-helper.ps1`
+- `.\scripts\build-windows-package.ps1`
+- `.\scripts\build-windows-release.ps1`
+
+## First Run
+
+After startup:
+
+1. Open the web UI and go to Configuration Center.
+2. Add your LLM provider.
+3. Review web auth, tools policy, and channel settings.
+4. Open `#/code` if you want the dedicated Coding Assistant workspace for repo browsing, diffs, terminals, and coding-specific approvals.
+5. Enable optional channels such as Telegram if needed.
+
+Most users should configure GuardianAgent through the web UI or CLI rather than editing config files directly.
+
+## Coding Assistant
+
+GuardianAgent includes a dedicated web Coding Assistant at `#/code`.
+
+- it is separate from the general web chat
+- each Code session keeps its own backend-owned chat history, workspace profile, and focus state
+- the Code page uses dedicated backend session routes for chat and approvals, and it fails closed if the active backend session cannot be resolved
+- the page combines explorer, diff viewing, PTY-backed terminals, and a coding sidebar with `Chat`, `Tasks`, `Approvals`, and `Checks`
+- assistant-driven file and shell actions are scoped to the active Code workspace root, so Coding Assistant command breadth does not widen the main chat shell policy
+- the Coding Assistant can still use broader Guardian capabilities from that workspace context when they directly support the repo task
+
+For current behavior and limitations, see [docs/design/CODING-WORKSPACE-DESIGN.md](docs/design/CODING-WORKSPACE-DESIGN.md).
+
+## More Detail
+
+- Deployment guidance: [docs/guides/DEPLOYMENT.md](https://github.com/Threat-Vector-Security/guardian-agent/blob/v1.0.0/docs/guides/DEPLOYMENT.md)
+- Windows portable isolation option: [docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md](docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md)
+- Security model: [SECURITY.md](SECURITY.md)
+- Architecture overview: [docs/architecture/OVERVIEW.md](docs/architecture/OVERVIEW.md)

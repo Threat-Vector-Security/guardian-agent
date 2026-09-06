@@ -1,7 +1,7 @@
-# Test Results
+# Test results
 
-This directory holds recorded harness and verification-result artifacts.
+- [Security workspace workflows](SECURITY-WORKSPACE-2026-09-06.md)
+- [Project navigation and reload checks](SECURITY-WORKSPACE-ALPHA3-2026-09-06.md)
+- [Dependency and publication checks](../security-testing-results/PREPUBLICATION-2026-09-06.md)
 
-For the Guardian 2 security workspace, start with the [alpha.3 project-navigation checks](SECURITY-WORKSPACE-ALPHA3-2026-09-06.md), [functional verification](SECURITY-WORKSPACE-2026-09-06.md) and the [prepublication/dependency review](../security-testing-results/PREPUBLICATION-2026-09-06.md). Earlier artifacts describe their recorded versions and may cover the original general-purpose assistant.
-
-These files are not guides. They are retained run outputs and analysis notes that support regression tracking and historical verification.
+Each result records its tested version and scope. Use the [testing guide](../guides/INTEGRATION-TEST-HARNESS.md) to run current checks and the [known-issues page](../KNOWN-ISSUES.md) for unresolved behavior.

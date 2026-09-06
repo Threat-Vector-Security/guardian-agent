@@ -1,11 +1,9 @@
 # Reference Docs
 
-This directory holds developer-facing reference material.
+This directory describes the current Guardian Agent security workspace.
 
-Use it for:
+- [Operation API](GUARDIAN-API.md): loopback HTTP, session and assistant authority, operation scopes, project revisions, CLI credentials and MCP mappings.
+- [Operator guide](../guides/SECURITY-WORKSPACE.md): application setup and workflows.
+- [Security policy](../../SECURITY.md): current protections, disclosure and release limitations.
 
-- subsystem API references
-- detailed method/config surface summaries
-- reference material that is neither a current design contract nor an architecture-boundary document
-
-Current files here should be read as reference, not as the source of truth for architecture ownership or current product taxonomy.
+Historical in-process assistant API material belongs in the [v1 archive](../archive/previous/docs/reference/GUARDIAN-API.md). It is not an integration contract for the current application.
