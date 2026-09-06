@@ -12,6 +12,8 @@ Systems fills the available workspace without an outer padded frame. The Guardia
 
 The local browser opens the workspace without an access code by default. Settings owns the opt-in **Require an access token to open Guardian** control; configured Entra SSO requires sign-in. This preference does not remove scoped credentials from machine interfaces. **Save Settings and Close** in the editor must save pending provider changes before closing and retain the form on failure.
 
+Systems owns the selected project and its canonical URL. Successful create/import/select operations update that URL; same-page project navigation respects unsaved drafts and ignores stale asynchronous loads. Cancelled navigation restores the previous complete URL. The shell shows the loaded package version, and **Reload page** performs a browser reload with native unsaved-draft protection so deployed frontend fixes become active.
+
 **Status:** Source of truth
 **Date:** 2026-05-01
 **Owner:** WebUI uplift

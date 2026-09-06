@@ -52,6 +52,10 @@ function ProjectWorkbench() {
   const fileInput = useRef<HTMLInputElement>(null);
   const projectRef = useRef(project);
   projectRef.current = project;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const requestVersion = useRef(0);
+  const acceptedHash = useRef(window.location.hash);
   useEffect(() => {
     setGuardianProjectContext(project ? { projectId: project.id, revision: project.revision } : null);
     return () => setGuardianProjectContext(null);
@@ -65,40 +69,73 @@ function ProjectWorkbench() {
   }, [dirty]);
 
   const accept = (next: Project) => {
+    projectRef.current = next;
+    dirtyRef.current = false;
+    acceptedHash.current = `#systems?project=${encodeURIComponent(next.id)}`;
+    window.history.replaceState(null, '', acceptedHash.current);
     draft.current = next.document;
     saved.current = documentContentFingerprint(next.document);
     baselinePending.current = true;
     setDirty(false); setError(''); setAutosavePaused(false); setProject(next); setGeneration(value => value + 1);
   };
-  const canDiscard = () => !dirty || window.confirm('Discard unsaved changes? Export your draft first to keep a copy.');
-  const run = async (action: () => Promise<void>) => {
+  const canDiscard = () => !dirtyRef.current || window.confirm('Discard unsaved changes? Export your draft first to keep a copy.');
+  const run = async (action: (version: number) => Promise<void>) => {
+    const version = ++requestVersion.current;
     setBusy(true); setError(''); setNotice('');
-    try { await action(); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Operation failed.'); }
-    finally { setBusy(false); }
+    try { await action(version); } catch (cause) {
+      if (version === requestVersion.current) {
+        setError(cause instanceof Error ? cause.message : 'Operation failed.');
+        window.history.replaceState(null, '', acceptedHash.current);
+      }
+    }
+    finally { if (version === requestVersion.current) setBusy(false); }
   };
   const load = (id: string) => {
-    if (!id || !canDiscard()) return;
-    void run(async () => { const result = await operation<{ project: Project }>('projects.get', { id }); accept(result.project); });
+    if (!id) return;
+    if (saving.current || !canDiscard()) {
+      ++requestVersion.current;
+      if (!saving.current) setBusy(false);
+      window.history.replaceState(null, '', acceptedHash.current);
+      return;
+    }
+    void run(async version => {
+      const result = await operation<{ project: Project }>('projects.get', { id });
+      if (version === requestVersion.current) accept(result.project);
+    });
   };
   useEffect(() => {
-    const id = new URLSearchParams(window.location.hash.split('?')[1] || '').get('project');
-    if (id) load(id);
+    const route = () => {
+      if (window.location.hash.split('?')[0] !== '#systems') return;
+      const id = new URLSearchParams(window.location.hash.split('?')[1] || '').get('project');
+      if (id && id !== projectRef.current?.id) load(id);
+      else if (projectRef.current) {
+        // A route back to the open project also cancels an older pending load.
+        ++requestVersion.current;
+        if (!saving.current) setBusy(false);
+        window.history.replaceState(null, '', acceptedHash.current);
+      }
+    };
+    route();
+    window.addEventListener('hashchange', route);
+    return () => { ++requestVersion.current; window.removeEventListener('hashchange', route); };
   }, []);
   const create = () => {
     if (!name.trim() || !canDiscard()) return;
-    void run(async () => { const result = await operation<{ project: Project }>('projects.create', { name: name.trim() }); accept(result.project); setName(''); await projects.refresh(); });
+    void run(async version => { const result = await operation<{ project: Project }>('projects.create', { name: name.trim() }); if (version !== requestVersion.current) return; accept(result.project); setName(''); await projects.refresh(); });
   };
   const importDocument = useCallback(async (content: RecordData) => {
     if (!canDiscard()) return;
-    await run(async () => {
+    await run(async version => {
       const result = await operation<{ project: Project }>('projects.import', { name: typeof content.systemName === 'string' ? content.systemName : 'Imported system', content: JSON.stringify(content) });
-      accept(result.project); await projects.refresh(); setNotice('Imported as a new system.');
+      if (version !== requestVersion.current) return;
+      accept(result.project); await projects.refresh(); if (version === requestVersion.current) setNotice('Imported as a new system.');
     });
   }, [dirty, projects.refresh]);
   const change = useCallback((next: RecordData) => {
     draft.current = next;
     const serialized = documentContentFingerprint(next);
     if (baselinePending.current) { saved.current = serialized; baselinePending.current = false; }
+    dirtyRef.current = saved.current !== serialized;
     setDirty(saved.current !== serialized);
   }, []);
   const save = useCallback(async (next: RecordData, automatic = false): Promise<boolean> => {

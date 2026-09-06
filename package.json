@@ -1,6 +1,6 @@
 {
   "name": "guardianagent",
-  "version": "2.0.0-alpha.2",
+  "version": "2.0.0-alpha.3",
   "description": "Local security operations and ContextCypher architecture context, driven by people and AI assistants",
   "private": true,
   "main": "dist/security-main.js",

@@ -35,7 +35,6 @@ export default function App() {
     catch { /* The sidebar still works when browser preference storage is unavailable. */ }
   }, [sidebarCollapsed]);
   const activePage = useRef(page);
-  const [generation, setGeneration] = useState(0);
   const allowNavigation = () => window.document.documentElement.dataset.guardianDirty !== 'true' || window.confirm('Discard unsaved system changes? Export your draft from Systems first to retain them.');
   const session = async () => {
     setChecking(true);
@@ -52,10 +51,10 @@ export default function App() {
   useEffect(() => {
     void session();
     const expired = () => setPrincipal(null);
-    const navigate = () => {
+    const navigate = (event: HashChangeEvent) => {
       const next = currentPage();
       if (next === activePage.current) return;
-      if (!allowNavigation()) { window.history.replaceState(null, '', `#${activePage.current}`); return; }
+      if (!allowNavigation()) { window.history.replaceState(null, '', event.oldURL ? new URL(event.oldURL).hash : `#${activePage.current}`); return; }
       activePage.current = next;
       setPage(next);
     };
@@ -82,8 +81,8 @@ export default function App() {
       <div className="sidebar-bottom"><div title="Local workspace" aria-label="Local workspace"><Monitor size={17} /><span>Local workspace</span></div><div className="identity"><span className="avatar" title={`${principal.role} · ${principal.id}`}>{principal.role[0].toUpperCase()}</span><span><strong>{principal.role}</strong><small title={principal.id}>{principal.id}</small></span><button className="icon-button" title="Sign out" aria-label="Sign out" onClick={async () => { if (!allowNavigation()) return; try { await request('/api/v1/session', { method: 'DELETE' }); setPrincipal(null); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Sign out failed.'); } }}><LogOut size={16} /></button></div></div>
     </aside>
     <main id="main-content" tabIndex={-1}>
-      <header className="topbar"><span>Workspace</span><ChevronRight size={13} /><strong>{title}</strong><span className="topbar-spacer" /><span className="local-label"><span className="neutral-dot" />Local security</span></header>
-      <div className={`page ${page === 'systems' ? 'systems-page' : ''}`} key={`${page}:${generation}`}>
+      <header className="topbar"><span>Workspace</span><ChevronRight size={13} /><strong>{title}</strong><span className="topbar-spacer" /><span className="local-label" title="Loaded application build"><span className="neutral-dot" />Local security · v{process.env.REACT_APP_VERSION}</span></header>
+      <div className={`page ${page === 'systems' ? 'systems-page' : ''}`} key={page}>
         <ErrorNotice message={error} />
         {page === 'protection' && <ProtectionPage principal={principal} go={go} />}
         {page === 'environments' && <Suspense fallback={<p role="status">Loading environments…</p>}><EnvironmentsPage principal={principal} /></Suspense>}
@@ -93,7 +92,7 @@ export default function App() {
         {page === 'settings' && <SettingsPage principal={principal} />}
         {page === 'systems' && <Suspense fallback={<p role="status">Loading systems workspace…</p>}><SystemsPage principal={principal} /></Suspense>}
       </div>
-      <footer className="workspace-footer"><span>Evidence first. Scoped actions. Recorded decisions.</span><button className="text-button" onClick={() => { if (allowNavigation()) setGeneration(value => value + 1); }}>Reload page</button></footer>
+      <footer className="workspace-footer"><span>Evidence first. Scoped actions. Recorded decisions.</span><button className="text-button" onClick={() => window.location.reload()}>Reload page</button></footer>
     </main>
   </div>;
 }

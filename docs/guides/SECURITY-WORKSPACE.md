@@ -25,6 +25,8 @@ The Windows launcher is `scripts/start-security-windows.ps1`; Unix/WSL uses `scr
 
 On desktop, use **Collapse sidebar** to make more room for the workspace. The icon rail keeps all navigation links; hover an icon for its label. **Expand sidebar** restores the labels, and the browser remembers this preference. Smaller screens retain their compact navigation.
 
+The desktop header shows the loaded app version. **Reload page** loads the current app build; the browser warns before discarding an unsaved draft. Creating, importing or choosing a saved system updates its address, and browser navigation between system links loads the corresponding project. Cancelling a system change keeps the open draft and restores its address. If an older tab opens `project=Not%20reported`, refresh the browser and choose the created system from **Choose a saved system**, or repeat **Environments → Preview latest snapshot → Create editable system**.
+
 - **Protection:** periodic host posture, native AV status and passive LAN/connection observations; run a check and inspect coverage/errors. An observed baseline is not a trusted clean baseline.
 - **Findings:** review evidence, record an acknowledgment or resolution reason, and link a finding to an architecture asset. Resolution records a review decision; it does not prove technical remediation.
 - **Systems:** import a ContextCypher JSON workspace, edit assets/flows/threats/controls, and save a revision. Unknown fields and existing GRC data are preserved. Conflicting revisions are rejected. Export the exact original, current ContextCypher document, or a Guardian envelope containing both.
