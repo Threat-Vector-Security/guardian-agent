@@ -122,6 +122,10 @@ Environment previews require installation-wide `security:read`; AWS previews add
 
 ## Release limits
 
+Project deletion is not implemented. Azure resource discovery is not connected; optional Entra and AWS integrations require acceptance testing in the intended tenant/account.
+
+Known diagram/GRC issue: renaming a system, saving and reopening it, then syncing assets or connections again can create duplicates because diagram references currently use the loaded name. Existing saved data is retained. Avoid renaming between syncs until stable diagram identity is implemented. Asset sync adds and links records; it does not automatically rename existing GRC assets or remove them when diagram elements disappear.
+
 This is a local security-workspace alpha, not a kernel EDR, full LAN sensor, or universally enforced assistant sandbox. Windows Defender is the native managed scan provider; Security Center registration of other AV products is inventory, not a claim that their health or response APIs are supported. ClamAV on Linux is currently executable inventory only. No actual antivirus scan is started by the test suite.
 
 The service uses OS file permissions and local credentials. It is not yet installed as a separately protected Windows service. A process with the same account or local administrator authority may bypass it or read its state; do not expose the listener through a reverse proxy and call it enterprise-ready. Signed installers/updates, service ACL hardening, EDR response adapters, SIEM delivery guarantees, remote fleets and vendor/customer acceptance are separate release gates.

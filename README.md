@@ -1,12 +1,48 @@
 # Guardian Agent
 
-A local security agent for workstations and networks, combining Guardian's security operations with ContextCypher's diagram editor, threat analysis and governance, risk and compliance (GRC) workflows.
+**Understand your environment. Connect the risks. Stay in control.**
 
-Use it as a standalone application or drive it through a scoped AI assistant connection. Review suspicious activity, connect observations to your system architecture, and approve supported security actions from one workspace.
+Guardian Agent is an open-source security workspace for local workstations, networks and system architecture. It brings Guardian's security operations and ContextCypher's visual threat modelling together in one application—connecting security observations, editable diagrams, AI analysis and governance, risk and compliance (GRC).
 
-## Run
+Use it directly in your browser, with its own AI analysis, or connect **Codex, Claude Code and other compatible AI assistants** through scoped interfaces. Guardian runs locally on Windows, macOS and Linux.
 
-Requires **Node.js 24.14 or later**. Windows, macOS and Linux build/runtime checks run in CI; native security capabilities vary by operating system. The security workspace is an **alpha**, with no signed native installers. Clone this repository or download and extract its source, then run these commands from its directory:
+## Security with context
+
+Security findings are more useful when you can see what they affect. Guardian helps you move from an observation on a workstation or network to the system diagram, assets, risks and controls needed to understand it and decide what to do next.
+
+Its purpose is to help people protect their workstations and local networks, investigate suspicious or automated activity, and avoid risky decisions. Supported security actions use explicit permissions, approvals and recorded decisions so the operator stays in control.
+
+Guardian is built for individuals, security practitioners and teams who want local security visibility alongside practical threat modelling. It works with existing security tools and provides optional identity and cloud integrations for organisations developing their security workflows.
+
+## What you can do
+
+| Capability | How it helps |
+| --- | --- |
+| **Check your workstation** | Review host posture, Microsoft Defender status and registered antivirus products. Propose and approve supported Defender scans. |
+| **Understand your environment** | Review passive local network observations or enrolled AWS EC2/security-group inventory, preview a snapshot, and turn it into an editable system diagram. |
+| **Model your systems** | Build diagrams with a drag-and-drop node toolbox, security zones, detailed node and connection data, automatic zone colours and layout tools. Start from a built-in example or import a ContextCypher file. |
+| **Analyse threats with AI** | Ask security questions, analyse selected architecture and generate proposed diagrams using your chosen provider. Review the results and decide what to apply. |
+| **Connect diagrams to GRC** | Sync diagram nodes and connections into the asset register, link risks to diagram elements, and manage controls, assessments, evidence and statements of applicability. |
+| **Review and report** | Investigate findings, record review decisions, inspect activity, and export diagrams, portable project files and GRC reports. |
+| **Work with AI assistants** | Give compatible assistants scoped access to inspect findings and read or update projects—including embedded node, edge and GRC data. |
+
+## Two ways to work
+
+### Use Guardian on its own
+
+The browser workspace brings together **Protection, Environments, Findings, Systems, Activity, Integrations and Settings**. Core monitoring, manual diagrams and GRC work require no AI account.
+
+For built-in AI analysis and diagram generation, configure a provider and an available model in the editor's settings. Options include OpenAI, Anthropic, Gemini, xAI and Ollama. Selected context is sent to that provider when you request analysis; local Ollama is available when the model and context need to stay on your workstation. Provider keys remain in backend memory and are re-entered after a backend restart.
+
+### Connect your preferred assistant
+
+Guardian exposes **MCP, CLI and HTTP interfaces** so Codex, Claude Code and other compatible clients can work with the same security workspace. For example, an assistant can read a system, propose architecture changes, and save a diagram with meaningful data attached to its nodes and connections.
+
+Enroll a separate assistant credential in **Settings**, choose its permissions and project access, and configure the client using the [assistant setup guide](docs/guides/SECURITY-WORKSPACE.md#drive-it-through-mcp-or-the-cli). Credentials can expire or be revoked, and supported response actions still follow Guardian's approval process. Each client needs its own setup and connection check.
+
+## Get started
+
+Requires **Node.js 24.14 or later**. Clone the repository or download its source, then run from the project directory:
 
 ```sh
 npm ci
@@ -15,67 +51,41 @@ npm run init
 npm start
 ```
 
-Open **http://127.0.0.1:3000**. Guardian runs locally and binds to the workstation's loopback address. Core security monitoring and manual diagram/GRC work require no LLM account.
+Open **http://127.0.0.1:3000**. Guardian runs on your machine and binds to its loopback address. See the [installation and packaging guide](docs/guides/SECURITY-PACKAGING.md) for platform launchers and distribution details.
 
-Local browser access opens without an access code by default. Enable **Settings → Require an access token to open Guardian** to require sign-in; initialization reports the administrator token file location for recovery. Configured Entra SSO always requires sign-in. External assistants always need their own scoped credentials.
+Try this first:
 
-## What you can do
+1. Open **Protection** and run a check to review your workstation's available security observations.
+2. Open **Systems**, create a system and choose a built-in example from **Examples** to explore the editor. You can also import an existing ContextCypher JSON file.
+3. Switch to **GRC** to explore the example's assets, risks, controls and assessments. Use **Sync from Diagram** when you want to bring diagram elements into the asset register.
+4. Use **Save system** to retain the workspace, or **File → Save As** for a portable copy.
+5. To model your own environment, use **Environments → Collect now → Preview latest snapshot → Create editable system**.
 
-| Area | Included capability |
-| --- | --- |
-| Workstation and network | Host posture checks, passive network observations, Microsoft Defender status and approved scan requests, plus inventory of registered third-party antivirus products |
-| System modelling | Drag-and-drop node toolbox, built-in examples, editable node/edge data, automatic zone colours, layout tools and portable diagram/report exports |
-| Threat analysis and GRC | Standalone security AI, attack paths, risks, assessments, controls, evidence, statements of applicability and reporting |
-| Environment maps | Editable diagrams from recorded local host/neighbor observations or enrolled AWS EC2/security-group inventory; explicit read-only AWS Security Hub and GuardDuty collection |
-| Assistant integration | Standard MCP over stdio, JSON CLI and HTTP operations, with scoped, expiring, revocable credentials and recorded approval decisions |
-| Identity and workspace | Optional Microsoft Entra ID sign-in, a collapsible Codex-inspired sidebar, revision-checked save/autosave and draft retention on conflicts |
+Local browser access opens without an access code by default. Optional browser sign-in, assistant credentials and Microsoft Entra ID configuration are covered in the [operator guide](docs/guides/SECURITY-WORKSPACE.md).
 
-The workspace has seven pages: **Protection, Environments, Findings, Systems, Activity, Integrations and Settings**. Existing ContextCypher imports preserve original bytes and embedded records, including unknown extension fields.
+## Integrations and reference material
 
-### Standalone AI or your own assistant
+- **Microsoft Defender and antivirus inventory:** inspect available local protection and use supported, approved scan requests.
+- **AWS:** work with authenticated EC2/security-group inventory and explicitly collect Security Hub or GuardDuty findings.
+- **Microsoft Entra ID:** optional SSO with configured group-to-role mappings.
+- **Security event intake:** scoped HTTP ingestion for connectors that provide normalised findings.
+- **GRC reference material:** seven bundled reference datasets covering NIST SP 800-53, OWASP Top 10, MITRE ATT&CK Enterprise/ICS/Mobile, Australian ISM and Essential Eight, plus local CSV/XLSX control imports.
 
-Configure a provider and an available model in the editor's settings for built-in analysis and diagram generation. Supported providers include OpenAI, Anthropic, Gemini, xAI and Ollama. Provider keys remain in backend memory and must be entered again after restart. Selected context is sent to the configured provider when you request an AI run; use local Ollama when that context must stay on the workstation.
+Integration coverage varies by platform and provider. See the [operator guide](docs/guides/SECURITY-WORKSPACE.md#release-limits) for current coverage and deployment considerations, and the [roadmap](docs/plans/GUARDIAN-SECURITY-UPLIFT-PLAN-2026-09-06.md) for planned capabilities.
 
-For Codex or another MCP-compatible assistant, enroll a client in **Settings** and grant only the operations and projects it needs. Follow the [MCP and CLI setup](docs/guides/SECURITY-WORKSPACE.md#drive-it-through-mcp-or-the-cli). An external assistant is optional; the editor and security workflows are usable directly.
+## Documentation and development
 
-### Reference datasets
+- [Operator and integration guide](docs/guides/SECURITY-WORKSPACE.md): everyday workflows, AI, assistant setup, AWS, Entra and migration.
+- [Installation and packaging](docs/guides/SECURITY-PACKAGING.md): local distributions, launchers and platform requirements.
+- [Architecture](docs/architecture/SECURITY-CONVERSION.md): service boundaries and security design.
+- [Testing guide](docs/guides/INTEGRATION-TEST-HARNESS.md): test commands and integration harnesses.
+- [Functional verification](docs/test-results/SECURITY-WORKSPACE-2026-09-06.md) and [prepublication review](docs/security-testing-results/PREPUBLICATION-2026-09-06.md): recorded checks and their scope.
+- [Changelog](CHANGELOG.md): changes between versions.
 
-Seven historical reference datasets are bundled: NIST SP 800-53, OWASP Top 10, MITRE ATT&CK Enterprise/ICS/Mobile, Australian ISM and Essential Eight. **IEC 62443 and CSA CCM texts are excluded** because redistribution permission has not been established. You can import appropriately licensed controls through CSV/XLSX; existing imported controls and workspace records remain supported.
-
-## Documentation
-
-- [Operator and integration guide](docs/guides/SECURITY-WORKSPACE.md): daily use, AI settings, MCP/CLI, Entra, AWS and migration.
-- [Local packaging](docs/guides/SECURITY-PACKAGING.md): unsigned Windows/macOS launchers and Node requirements.
-- [Conversion architecture](docs/architecture/SECURITY-CONVERSION.md): service boundaries and security ownership.
-- [Functional verification](docs/test-results/SECURITY-WORKSPACE-2026-09-06.md) and [prepublication review](docs/security-testing-results/PREPUBLICATION-2026-09-06.md): tested workflows, dependency/credential checks and remaining gaps.
-- [Roadmap and uplift plan](docs/plans/GUARDIAN-SECURITY-UPLIFT-PLAN-2026-09-06.md): planned work, separate from shipped capabilities.
-
-## Verify
-
-```sh
-npm run check
-npm run test:security-workspace
-npm test
-node --import tsx web/security/document.check.ts
-npm run build
-npm run validate:dependency-contract
-npm audit
-npm run test:package
-npm run test:production
-```
-
-Tests exercise real SQLite, HTTP and MCP transports with isolated state. Antivirus side effects are injected only in tests, so the test suite never starts a real malware scan. Browser checks run against the real local service; see the [test guide](docs/guides/INTEGRATION-TEST-HARNESS.md).
-
-## Alpha boundaries and migration
-
-`npm run package:security` builds a production-only local distribution and tarball. See [packaging](docs/guides/SECURITY-PACKAGING.md) for Windows/macOS launchers and Node prerequisites. Native signed installers remain a release gate. Root `npm pack` is blocked so it cannot accidentally ship the retained legacy runtime.
-
-Guardian coordinates security observations and supported actions. Passive neighbor data is not a complete LAN census, and the app is not a kernel EDR, packet-inspection engine or universal interceptor of actions taken outside its interfaces. A requested antivirus scan does not establish completion or a clean result; third-party antivirus inventory does not imply control over those products.
-
-Microsoft/Azure resource discovery and project deletion are not implemented. Optional Entra and authenticated AWS integrations need acceptance testing in the customer's environment. Signed service deployment, remote fleets, proprietary EDR response connectors and managed SIEM delivery remain future release work. The current listener is local-only; this release is not a public-facing hosted service.
-
-Existing application profiles are not silently rewritten. The new service uses `~/.guardianagent/security-v2`; import ContextCypher exports through Systems. The former general assistant has no supported launch, package, container, or deployment path. Its remaining source is retained temporarily only for migration history and test-backed extraction of security modules; it is not part of the Guardian 2 build.
+For development, start with `npm run check`, `npm test` and `npm run build`. Run `npm audit` to check the complete dependency graph.
 
 ## License and attribution
 
-[Apache-2.0](LICENSE) applies to application code. Third-party datasets and vendor artwork retain their own terms; see the [ContextCypher and artwork notice](web/contextcypher/NOTICE.md), [dataset notice](web/contextcypher/src/data/security-knowledge-base/README.md) and [migration attribution](docs/architecture/CONTEXT-MIGRATION.md). Local credentials, provider configuration and generated user state are excluded from the repository. Report vulnerabilities using the [security policy](SECURITY.md).
+Application code is licensed under [Apache-2.0](LICENSE). Third-party datasets and vendor artwork retain their own terms; see the [ContextCypher notice](web/contextcypher/NOTICE.md), [dataset notice](web/contextcypher/src/data/security-knowledge-base/README.md) and [migration attribution](docs/architecture/CONTEXT-MIGRATION.md). IEC 62443 and CSA CCM texts are not bundled; appropriately licensed local imports remain supported.
+
+Report vulnerabilities using the [security policy](SECURITY.md).

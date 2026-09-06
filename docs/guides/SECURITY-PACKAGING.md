@@ -10,6 +10,8 @@ For another machine or platform, extract the npm tarball, open its `package` dir
 
 Packaging permits only the compiled JavaScript dependency closure rooted at `dist/security-main.js`, static assets under `web/security/dist`, the production manifest/lock, license, security operator/packaging guides, and launchers. The installed directory additionally contains locked production dependencies. Legacy entrypoints/UI, TypeScript sources/maps, local configuration, state, tokens, import archives, environment files and developer dependencies are excluded. Unexpected dependencies, dynamic module paths and symlinks fail packaging instead of widening the allowlist.
 
+Use `npm run package:security` for distributions. Root `npm pack` is blocked to prevent accidentally packaging the retained legacy runtime.
+
 Run `npm run test:package` for packaging policy and launcher regression tests, and `npm run test:production` for clean production installation and authenticated API/UI smoke coverage. Release acceptance still requires running the produced package on real Windows and macOS machines. macOS launcher execution is exercised only when the test runs on macOS or another POSIX host; Windows runs the actual batch launcher. Fixture tests do not establish native platform support.
 
 This is an unsigned local alpha distribution. Code signing/notarization, native installers, elevated service identity, tamper protection and verified automatic updates remain release gates; none is simulated or claimed by this package. The legacy installer and portable scripts must not be used for a Guardian 2 security release.
