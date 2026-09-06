@@ -64,3 +64,32 @@ fixtures/placeholders; scanning the rebuilt 10.72 MB frontend found no detection
 Both excluded dataset paths are absent from the index, and neither dataset has a
 chunk in the clean frontend build. Build and frontend typecheck passed.
 The final full test suite passed: 4,269 tests across 355 files.
+
+## Expanded dependency audit before the initial release
+
+The production-only audit was insufficient for this repository because browser
+libraries and build tooling are installed as development dependencies. A full
+audit identified 48 dependency advisories, including three critical build/tool
+dependency findings; this is not a claim that all advisories were reachable in
+the running application.
+
+Updated exact dependency pins and compatible transitive dependencies, including
+Axios, DOMPurify, Lodash, js-yaml, Vite, Vitest, tsx and the retained Daytona SDK.
+Both the full dependency audit and production-only audit now report zero
+advisories. The dependency contract passes. CI now audits the complete dependency
+graph, including browser libraries and build tools.
+
+Daytona's lazy listing API now consumes one result during connection testing so
+authentication errors are observed and enumeration closes promptly. A focused
+test covers authentication success/failure and iterator disposal. The production
+smoke harness also uses bounded native filesystem retries for transient Windows
+cleanup locks; application assertions are unchanged. CI branch filtering avoids
+duplicate runs for a branch and tag pointing to the same commit.
+
+The already-pushed `v2.0.0-alpha.1` tag remains an unpublished preflight snapshot.
+The first published security-workspace release is `v2.0.0-alpha.2` with these
+dependency corrections; no published tag or public history was rewritten.
+
+Verification after dependency updates: 4,270 tests across 355 files passed, both
+typechecks and the frontend build passed, and clean-install/packaging checks
+passed. Actual Edge export checks produced all eight supported diagram formats.

@@ -72,7 +72,8 @@ export function createCloudConnectionTesters(): CloudConnectionTesters {
         apiUrl: profile.apiUrl,
         target: profile.target,
       });
-      await client.list(undefined, 1, 1);
+      // Listing is lazy: consume one result to authenticate, then close the iterator.
+      for await (const _sandbox of client.list({ limit: 1 })) break;
     },
     cloudflare: async (profile) => {
       const { CloudflareClient } = await import('../../tools/cloud/cloudflare-client.js');

@@ -50,5 +50,6 @@ try {
   }
   const canonical = resolve(stage);
   if (!canonical.startsWith(resolve(tmpdir()) + sep + 'guardian-production-')) throw new Error('Unexpected cleanup path');
-  await rm(canonical, { recursive: true, force: true });
+  // Windows can retain process or antivirus file handles briefly after the child exits.
+  await rm(canonical, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }

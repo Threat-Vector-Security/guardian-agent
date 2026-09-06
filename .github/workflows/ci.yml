@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -34,8 +35,8 @@ jobs:
       - name: Validate dependency contract
         run: npm run validate:dependency-contract
 
-      - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+      - name: Audit dependencies including browser libraries and build tools
+        run: npm audit --audit-level=high
 
       - name: Type check
         run: npm run check

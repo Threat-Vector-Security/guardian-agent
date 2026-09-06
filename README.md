@@ -40,6 +40,7 @@ npm test
 node --import tsx web/security/document.check.ts
 npm run build
 npm run validate:dependency-contract
+npm audit
 npm run test:package
 npm run test:production
 ```

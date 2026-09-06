@@ -1,7 +1,35 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../../config/types.js';
-import { createGwsCliProbe } from './provider-runtime-adapters.js';
+import { createCloudConnectionTesters, createGwsCliProbe } from './provider-runtime-adapters.js';
+
+const daytona = vi.hoisted(() => ({ list: vi.fn(), disposed: vi.fn() }));
+vi.mock('@daytona/sdk', () => ({ Daytona: class {
+  list = daytona.list;
+  [Symbol.asyncDispose] = daytona.disposed;
+} }));
+
+it('checks lazy Daytona authentication and closes enumeration after one result', async () => {
+  const authenticate = vi.fn().mockResolvedValue(undefined);
+  const closed = vi.fn();
+  daytona.list.mockImplementation(async function* () {
+    try {
+      await authenticate();
+      yield {};
+      throw new Error('Connection test enumerated more than one sandbox');
+    } finally { closed(); }
+  });
+  const test = createCloudConnectionTesters().daytona;
+  const profile = { id: 'test', name: 'Test', apiKey: 'test-placeholder' } as Parameters<typeof test>[0];
+  await expect(test(profile)).resolves.toBeUndefined();
+  expect(authenticate).toHaveBeenCalledTimes(1);
+  expect(daytona.list).toHaveBeenCalledWith({ limit: 1 });
+  expect(closed).toHaveBeenCalledTimes(1);
+  expect(daytona.disposed).toHaveBeenCalledTimes(1);
+  authenticate.mockRejectedValueOnce(new Error('Invalid credentials'));
+  await expect(test(profile)).rejects.toThrow('Invalid credentials');
+  expect(daytona.disposed).toHaveBeenCalledTimes(2);
+});
 
 function createConfig(): GuardianAgentConfig {
   return structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
