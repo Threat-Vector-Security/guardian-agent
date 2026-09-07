@@ -123,7 +123,7 @@ const GrcConfigAppetiteSection: React.FC<GrcTabProps> = ({ workspace, applyWorks
           The most specific matching rule wins. Ties are broken by the lowest threshold.
         </Typography>
 
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 1.5, mb: 2 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 1.5, mb: 2 }}>
           <Tooltip title="Descriptive name for this appetite rule" arrow>
             <TextField size="small" label="Rule Name" value={newName}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewName(e.target.value)} />

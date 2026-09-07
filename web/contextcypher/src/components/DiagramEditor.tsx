@@ -484,7 +484,7 @@ const DiagramEditor: React.FC<DiagramEditorProps> = ({
   const isSmallTouchViewport = isPhoneViewport || (viewportTier === 'md' && viewport.height <= 540);
   const isCompactViewport = toolbarDensity === 'compact';
   const allowFloatingEditors = settings.useFloatingWindows !== false && isDesktopViewport;
-  const toolbarHeight = isCompactViewport ? appShell.compactToolbarHeight : appShell.appBarHeight;
+  const toolbarHeight = isPhoneViewport ? 96 : isCompactViewport ? appShell.compactToolbarHeight : appShell.appBarHeight;
   const [nodes, setNodes] = useState<SecurityNode[]>([]);
   const [edges, setEdges] = useState<SecurityEdge[]>([]);
   const [currentView, setCurrentView] = useState<'diagram' | 'isometric'>('diagram');
@@ -5784,6 +5784,8 @@ const DiagramEditor: React.FC<DiagramEditorProps> = ({
                 gap: 1,
                 display: 'grid',
                 gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+                gridTemplateRows: isPhoneViewport ? '40px 40px' : undefined,
+                py: isPhoneViewport ? 0.5 : 0,
                 alignItems: 'center'
               }}
             >
@@ -5827,6 +5829,8 @@ const DiagramEditor: React.FC<DiagramEditorProps> = ({
                 sx={{
                   minWidth: 0,
                   display: 'flex',
+                  gridColumn: isPhoneViewport ? '1 / -1' : undefined,
+                  gridRow: isPhoneViewport ? 2 : undefined,
                     justifyContent: 'flex-start',
                     px: compactToolbar ? 0.5 : 2
                 }}
@@ -5838,7 +5842,7 @@ const DiagramEditor: React.FC<DiagramEditorProps> = ({
                   size="small"
                   placeholder="System name..."
                   sx={{
-                    width: systemNameFieldWidth,
+                    width: isPhoneViewport ? '100%' : systemNameFieldWidth,
                     minWidth: 0,
                     maxWidth: '100%',
                     flexShrink: 1,
@@ -5869,6 +5873,8 @@ const DiagramEditor: React.FC<DiagramEditorProps> = ({
                   display: 'flex',
                   alignItems: 'center',
                   gap: isCompactViewport ? 0.25 : 0.5,
+                  gridColumn: 3,
+                  gridRow: 1,
                   flexShrink: 0
                 }}
               >
@@ -6370,13 +6376,13 @@ const DiagramEditor: React.FC<DiagramEditorProps> = ({
             left: 0,
             top: appBarHeightPx, // Below AppBar
             bottom: 0,
-            width: toolboxFullscreen ? '100vw' : toolboxPanelWidthPx,
+            width: toolboxFullscreen ? '100%' : toolboxPanelWidthPx,
             height: `calc(${guardian ? '100%' : '100dvh'} - ${appBarHeightPx})`,
             minHeight: guardian ? 0 : `calc(100vh - ${appBarHeightPx})`,
             display: 'flex',
             transform: isNodeToolboxOpen
               ? 'translateX(0)'
-              : `translateX(-${toolboxFullscreen ? '100vw' : toolboxPanelWidthPx})`,
+              : 'translateX(-100%)',
             transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
             zIndex: toolboxDocked ? 1000 : 1340,
             pointerEvents: isNodeToolboxOpen ? 'auto' : 'none',

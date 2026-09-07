@@ -125,7 +125,7 @@ const GuardianProviderSettings = forwardRef<GuardianProviderSettingsHandle>(func
     } finally { actionInProgress.current = false; if (mounted.current) setBusy(false); }
   }
   const chosen = currentOption || configuredOption;
-  return <Stack spacing={2}>
+  return <Stack spacing={2} sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
     <Typography variant="h6">Built-in security AI</Typography>
     <Typography variant="body2">Choose a provider, load its available models and save your selection. API keys stay in Guardian's memory only until the backend restarts; enter the key again after a restart. Keys are never saved to disk or browser storage.</Typography>
     {configuration && <Typography variant="body2" color="text.secondary">Current configuration: {configuration.provider} / {configuration.model}. {configuration.ready ? 'Ready to use.' : 'Enter the API key again to enable this session.'}</Typography>}
@@ -148,14 +148,14 @@ const GuardianProviderSettings = forwardRef<GuardianProviderSettingsHandle>(func
       onChange={(_event, option) => setModel(option?.id || '')}
       noOptionsText={discovering ? 'Loading models…' : discovered ? 'No models returned by this provider' : 'Load available models first'}
       renderOption={(props, option) => <li {...props} key={option.id}>
-        <Box><Typography variant="body2">{option.name}</Typography>
+        <Box sx={{ minWidth: 0, overflowWrap: 'anywhere' }}><Typography variant="body2">{option.name}</Typography>
           <Typography variant="caption" color="text.secondary">{option.id}{option.contextWindow ? ` · ${option.contextWindow.toLocaleString()} context tokens` : ''}{!models.some(item => item.id === option.id) ? ' · saved selection; not verified in this model list' : ''}</Typography>
         </Box>
       </li>}
       renderInput={params => <TextField {...params} label="Search available models" helperText={chosen && !currentOption ? 'Saved model preserved. Load models to verify current availability.' : 'Search the provider’s live model list by name or ID.'}
         InputProps={{ ...params.InputProps, endAdornment: <>{discovering ? <CircularProgress size={18} /> : null}{params.InputProps.endAdornment}</> }} />}
     />
-    <Box sx={{ display: 'flex', gap: 2 }}>
+    <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 2 }}>
       <TextField label="Temperature" type="number" value={temperature} disabled={busy} onChange={event => setTemperature(Number(event.target.value))} inputProps={{ min: 0, max: 2, step: 0.1 }} helperText="0–2; provider support varies." />
       <TextField label="Maximum output tokens" type="number" value={maxTokens} disabled={busy} onChange={event => setMaxTokens(Number(event.target.value))} inputProps={{ min: 256, max: 16000, step: 256 }} helperText="256–16,000 tokens." />
     </Box>

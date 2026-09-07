@@ -82,7 +82,7 @@ const GrcConfigurationTab: React.FC<GrcTabProps> = (props) => {
   );
 
   return (
-    <Box sx={{ display: 'grid', gap: 1.5 }}>
+    <Box sx={{ display: 'grid', gap: 1.5, minWidth: 0, overflowWrap: 'anywhere', '& .MuiPaper-root': { minWidth: 0 }, '& .MuiFormControl-root': { maxWidth: '100%' } }}>
       <Paper sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
         <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', px: 1.5, pt: 1.5, pb: 1 }}>
           <Typography variant="subtitle2" sx={{ mb: 0.5 }}>

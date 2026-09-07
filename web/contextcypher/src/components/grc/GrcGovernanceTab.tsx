@@ -551,7 +551,7 @@ const GrcGovernanceTab: React.FC<GrcTabProps> = ({
               }
             />
           </Box>
-          <Box sx={{ flex: 2, minWidth: 0, display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', alignContent: 'start' }}>
+          <Box sx={{ flex: 2, minWidth: 0, display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', alignContent: 'start' }}>
             <Box>
               <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, mb: 0.5, display: 'block' }}>
                 Type
@@ -800,7 +800,7 @@ const GrcGovernanceTab: React.FC<GrcTabProps> = ({
 
         <Collapse in={addFormOpen} timeout="auto" unmountOnExit>
           <Box sx={{ mt: 2, p: 2, bgcolor: 'action.hover', borderRadius: 1, display: 'grid', gap: 1.5 }}>
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 1.5 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 1.5 }}>
               <TextField size="small" label="Document Title" value={newTitle}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewTitle(e.target.value)} />
               <TextField size="small" select label="Document Type" value={newType}
@@ -835,7 +835,7 @@ const GrcGovernanceTab: React.FC<GrcTabProps> = ({
             <TextField size="small" label="Description" value={newDescription}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewDescription(e.target.value)}
               fullWidth multiline minRows={2} />
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 1.5 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: 1.5 }}>
               <FormControl size="small">
                 <InputLabel id="gov-linked-risks-label">Linked Risks</InputLabel>
                 <Select

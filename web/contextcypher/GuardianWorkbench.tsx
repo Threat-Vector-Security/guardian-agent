@@ -179,14 +179,14 @@ function ProjectWorkbench() {
     return () => { disposed = true; clearInterval(timer); };
   }, [settings.autosave.enabled, settings.autosave.intervalMinutes, project?.id, autosavePaused, busy, save]);
 
-  return <Box sx={{ display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 55px)', minHeight: 0, minWidth: 0 }}>
-    <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, p: 1, bgcolor: 'background.paper' }}>
-      <Typography variant="h6">Systems</Typography>
-      <Select size="small" aria-label="Saved system" value={project?.id || ''} displayEmpty disabled={busy} onChange={event => load(event.target.value)} sx={{ minWidth: 190, maxWidth: 330 }}>
+  return <Box className="guardian-workbench" sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', flexShrink: 0, gap: 1, p: 1.5, bgcolor: 'background.paper', borderBottom: 1, borderColor: 'divider', maxHeight: '45%', overflowY: 'auto' }}>
+      <Typography variant="h6" sx={{ mr: 1 }}>Systems</Typography>
+      <Select size="small" aria-label="Saved system" value={project?.id || ''} displayEmpty disabled={busy} onChange={event => load(event.target.value)} sx={{ flex: '1 1 210px', minWidth: 0, maxWidth: 330 }}>
         <MenuItem value="" disabled>Choose a saved system</MenuItem>
-        {projects.data.items.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+        {projects.data.items.map(item => <MenuItem key={item.id} value={item.id} sx={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{item.name}</MenuItem>)}
       </Select>
-      <TextField size="small" label="New system name" value={name} onChange={event => setName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') create(); }} />
+      <TextField size="small" label="New system name" sx={{ flex: '1 1 200px', minWidth: 0, maxWidth: 280 }} value={name} onChange={event => setName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') create(); }} />
       <Button disabled={busy || !name.trim()} onClick={create}>Create system</Button>
       <Button disabled={busy} onClick={() => fileInput.current?.click()}>Import JSON</Button>
       <input hidden ref={fileInput} type="file" accept=".json,application/json" onChange={event => {
@@ -216,7 +216,7 @@ function ProjectEditor(bridge: GuardianDocumentBridge) {
   const workspaceLoad = useCallback((value: unknown) => setWorkspace(preserveExtensions(value, ensureGrcWorkspace(value))), []);
   const actionsReady = useCallback((value: DiagramFileActions) => setActions(value), []);
   return <ViewStateProvider><AnalysisContextProvider><ManualAnalysisProvider>
-    <Box ref={containerRef} sx={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative', transform: 'translateZ(0)', overflow: 'hidden' }}>
+    <Box ref={containerRef} sx={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative', transform: 'translateZ(0)', overflow: 'clip' }}>
       <WorkspaceViewportProvider containerRef={containerRef}>
       <Box sx={{ height: '100%', display: activeModule === 'diagram' ? 'block' : 'none' }}>
         <DiagramEditor guardian={bridge} activeModule={activeModule} onSwitchModule={setActiveModule} grcWorkspace={workspace} onGrcWorkspaceLoad={workspaceLoad} onDiagramContextChange={setSnapshot} onFileActionsReady={actionsReady} />

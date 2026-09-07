@@ -690,7 +690,7 @@ const GrcRiskManagementPlanTab: React.FC<GrcTabProps> = ({
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
             Assessments ({workspace.assessments.length})
           </Typography>
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 1.5 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', gap: 1.5 }}>
             {workspace.assessments.map(assessment => {
               const isActive = assessment.id === activeAssessmentId;
               const completion = assessmentCompletion(assessment);
@@ -771,7 +771,7 @@ const GrcRiskManagementPlanTab: React.FC<GrcTabProps> = ({
           </Typography>
 
           {/* Plan fields */}
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 1.5, mb: 1.5 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: 1.5, mb: 1.5 }}>
             <Tooltip describeChild title="High-level goal of the risk management plan, e.g. 'Reduce externally exposed attack paths'." arrow>
               <TextField
                 size="small" label="Plan Objective"
@@ -818,7 +818,7 @@ const GrcRiskManagementPlanTab: React.FC<GrcTabProps> = ({
 
           {/* Add action form */}
           <Typography variant="subtitle2" sx={{ mb: 1 }}>Plan Actions</Typography>
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 1, mb: 1.5 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 1, mb: 1.5 }}>
             <Tooltip describeChild title="Short descriptive title for this treatment action." arrow>
               <TextField
                 size="small" label="Action Title"

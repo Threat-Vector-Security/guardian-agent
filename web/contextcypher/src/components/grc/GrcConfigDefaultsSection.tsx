@@ -712,7 +712,7 @@ const GrcConfigDefaultsSection: React.FC<GrcTabProps> = ({ workspace, applyWorks
             label="Rating Preset"
             value={selectedPresetId}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSelectedPresetId(e.target.value as RatingPresetId)}
-            sx={{ minWidth: 230 }}
+            sx={{ minWidth: 'min(100%, 230px)' }}
           >
             {ratingPresets.map(preset => (
               <MenuItem key={preset.id} value={preset.id}>
@@ -747,7 +747,7 @@ const GrcConfigDefaultsSection: React.FC<GrcTabProps> = ({ workspace, applyWorks
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRatingBands(current =>
                     current.map((row, rowIndex) => rowIndex === index ? { ...row, label: e.target.value } : row)
                   )}
-                  sx={{ minWidth: 220 }}
+                  sx={{ minWidth: 'min(100%, 220px)' }}
                 />
               </Tooltip>
               <Tooltip describeChild title="Numeric severity rank for sorting and display." arrow>
@@ -874,7 +874,7 @@ const GrcConfigDefaultsSection: React.FC<GrcTabProps> = ({ workspace, applyWorks
                       current.map((row, rowIndex) => rowIndex === index ? { ...row, label: e.target.value } : row)
                     )
                   }
-                  sx={{ minWidth: 240 }}
+                  sx={{ minWidth: 'min(100%, 240px)' }}
                 />
               </Tooltip>
               <Tooltip describeChild title="Remove criticality level">
@@ -911,7 +911,7 @@ const GrcConfigDefaultsSection: React.FC<GrcTabProps> = ({ workspace, applyWorks
         </Tooltip>
       </Box>
 
-      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 1.5, mb: 2 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: 1.5, mb: 2 }}>
         {domainOptions.map(opt => (
           <Tooltip key={opt.value} describeChild title={`Define ${opt.label} asset category options available in the Assets tab.`} arrow>
             <TextField
@@ -960,7 +960,7 @@ const GrcConfigDefaultsSection: React.FC<GrcTabProps> = ({ workspace, applyWorks
               }
             }
           }}
-          sx={{ minWidth: 220 }}
+          sx={{ minWidth: 'min(100%, 220px)' }}
         />
         <Button
           size="small"
@@ -1008,7 +1008,7 @@ const GrcConfigDefaultsSection: React.FC<GrcTabProps> = ({ workspace, applyWorks
           </Tooltip>
         ))}
       </Box>
-      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 1.5, mb: 2 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: 1.5, mb: 2 }}>
         <Tooltip describeChild title="User-configurable system scope presets (e.g., Production, Development, DR). Available when Scope Type is System." arrow>
           <TextField
             size="small"
@@ -1268,7 +1268,7 @@ const GrcConfigDefaultsSection: React.FC<GrcTabProps> = ({ workspace, applyWorks
                       current.map((row, rowIndex) => rowIndex === index ? { ...row, label: e.target.value } : row)
                     )
                   }
-                  sx={{ minWidth: 240 }}
+                  sx={{ minWidth: 'min(100%, 240px)' }}
                 />
               </Tooltip>
               <Tooltip describeChild title="Remove maturity level">

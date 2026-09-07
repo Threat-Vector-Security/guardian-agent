@@ -105,7 +105,7 @@ const GrcCrossFrameworkMappingsSection: React.FC<Props> = ({ workspace, applyWor
         )}
       </Box>
 
-      <Box sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1, mb: 1.5, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 1, alignItems: 'end' }}>
+      <Box sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1, mb: 1.5, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))', gap: 1, alignItems: 'end' }}>
         <TextField size="small" select label="Source Set" value={srcSetId}
           onChange={e => { setSrcSetId(e.target.value); setSrcCtrlId(''); }}>
           {controlSets.map(cs => <MenuItem key={cs.id} value={cs.id}>{cs.name}</MenuItem>)}

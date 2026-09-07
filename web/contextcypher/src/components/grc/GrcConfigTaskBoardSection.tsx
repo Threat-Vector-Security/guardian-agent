@@ -365,7 +365,7 @@ const GrcConfigTaskBoardSection: React.FC<GrcTabProps> = ({ workspace, applyWork
         </Box>
       </Box>
 
-      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 1.5 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 1.5 }}>
         <Tooltip title="Short description of the action to be completed" arrow>
           <TextField size="small" label="Task Title" value={newTaskTitle} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewTaskTitle(e.target.value)} />
         </Tooltip>

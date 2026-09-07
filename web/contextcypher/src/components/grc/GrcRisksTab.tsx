@@ -1180,7 +1180,7 @@ const GrcRisksTab: React.FC<GrcTabProps> = ({
                 </Typography>
               )}
               {showAcceptanceForm === risk.id ? (
-                <Box sx={{ mt: 1, p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 1 }}>
+                <Box sx={{ mt: 1, p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 1 }}>
                   <TextField size="small" label="Title" value={acceptanceForm.title}
                     onChange={e => setAcceptanceForm(f => ({ ...f, title: e.target.value }))} />
                   <TextField size="small" select label="Scope Type" value={acceptanceForm.scopeType}
@@ -1345,7 +1345,7 @@ const GrcRisksTab: React.FC<GrcTabProps> = ({
           <TextField size="small" label="Risk Title" value={newRiskTitle}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewRiskTitle(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleAddRisk(); }}
-            sx={{ minWidth: 300, flex: 1 }} />
+            sx={{ minWidth: 'min(100%, 300px)', flex: 1 }} />
           {businessUnits.length > 0 && (
             <TextField
               select size="small" label="Business Unit"

@@ -234,9 +234,9 @@ const GrcConfigRiskModelSection: React.FC<GrcTabProps> = ({ workspace, applyWork
         Matrix Size: {likelihoodDraft.length} x {impactDraft.length} (supported range: {MIN_SCALE_ITEMS}-{MAX_SCALE_ITEMS})
       </Typography>
 
-      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: 2 }}>
         <Box sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
             <Typography variant="subtitle2">Likelihood Scale</Typography>
             <Tooltip describeChild title="Add another likelihood level row to the current risk model." arrow>
               <span>
@@ -254,7 +254,7 @@ const GrcConfigRiskModelSection: React.FC<GrcTabProps> = ({ workspace, applyWork
             </Tooltip>
           </Box>
           {likelihoodDraft.map((item, index) => (
-            <Box key={item.id} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+            <Box key={item.id} sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1, alignItems: 'center' }}>
               <Tooltip describeChild title="Label shown for this likelihood level in scoring selectors." arrow>
                 <TextField size="small" label={`L${index + 1} Label`} value={item.label}
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => setLikelihoodDraft(cur =>
@@ -283,7 +283,7 @@ const GrcConfigRiskModelSection: React.FC<GrcTabProps> = ({ workspace, applyWork
           ))}
         </Box>
         <Box sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
             <Typography variant="subtitle2">Impact Scale</Typography>
             <Tooltip describeChild title="Add another impact level row to the current risk model." arrow>
               <span>
@@ -301,7 +301,7 @@ const GrcConfigRiskModelSection: React.FC<GrcTabProps> = ({ workspace, applyWork
             </Tooltip>
           </Box>
           {impactDraft.map((item, index) => (
-            <Box key={item.id} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+            <Box key={item.id} sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1, alignItems: 'center' }}>
               <Tooltip describeChild title="Label shown for this impact level in scoring selectors." arrow>
                 <TextField size="small" label={`I${index + 1} Label`} value={item.label}
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => setImpactDraft(cur =>

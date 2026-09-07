@@ -184,7 +184,7 @@ const GrcModule: React.FC<GrcModuleProps> = ({
   const isPhoneViewport = viewportTier === 'xs' || viewportTier === 'sm';
   const isSmallTouchViewport = isPhoneViewport || (viewportTier === 'md' && viewport.height <= 540);
   const isCompactViewport = toolbarDensity === 'compact';
-  const toolbarHeight = isCompactViewport ? appShell.compactToolbarHeight : appShell.appBarHeight;
+  const toolbarHeight = isPhoneViewport ? 96 : isCompactViewport ? appShell.compactToolbarHeight : appShell.appBarHeight;
   const analysisDocked = analysisPresentation === 'docked';
   const analysisFullscreen = analysisPresentation === 'fullscreen';
 
@@ -521,7 +521,7 @@ const GrcModule: React.FC<GrcModuleProps> = ({
   );
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100dvh', minHeight: '100vh', overflow: 'hidden' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: viewport.height, minHeight: 0, minWidth: 0, overflow: 'clip' }}>
       <Box
         sx={{
           display: 'flex',
@@ -548,6 +548,8 @@ const GrcModule: React.FC<GrcModuleProps> = ({
               gap: 1,
               display: 'grid',
               gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+              gridTemplateRows: isPhoneViewport ? '40px 40px' : undefined,
+              py: isPhoneViewport ? 0.5 : 0,
               alignItems: 'center'
             }}
           >
@@ -584,6 +586,8 @@ const GrcModule: React.FC<GrcModuleProps> = ({
               sx={{
                 minWidth: 0,
                 display: 'flex',
+                gridColumn: isPhoneViewport ? '1 / -1' : undefined,
+                gridRow: isPhoneViewport ? 2 : undefined,
                 justifyContent: isCompactViewport ? 'flex-start' : 'center',
                 px: isCompactViewport ? 0.5 : 2
               }}
@@ -619,7 +623,7 @@ const GrcModule: React.FC<GrcModuleProps> = ({
               />
             </Box>
 
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: isCompactViewport ? 0.25 : 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gridColumn: 3, gridRow: 1, gap: isCompactViewport ? 0.25 : 1 }}>
               {diagramFileActions && !isPhoneViewport && (
                 <>
                   <Button
@@ -768,7 +772,7 @@ const GrcModule: React.FC<GrcModuleProps> = ({
           </Box>
 
           <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', position: 'relative' }}>
-            <Box sx={{ width: '100%', height: '100%', overflow: 'auto', p: isCompactViewport ? 1.25 : 2.5 }}>
+            <Box role="region" aria-label="GRC workspace" sx={{ width: '100%', height: '100%', overflow: 'auto', p: isCompactViewport ? 1.25 : 2.5 }}>
               {statusMessage && (
                 <Alert severity={statusMessage.severity} onClose={() => setStatusMessage(null)} sx={{ mb: 2 }}>
                   {statusMessage.text}
@@ -869,13 +873,13 @@ const GrcModule: React.FC<GrcModuleProps> = ({
           right: 0,
           top: analysisDocked ? 0 : appBarHeightPx,
           bottom: 0,
-          width: analysisFullscreen ? '100vw' : analysisPanelWidthPx,
-          height: analysisDocked ? '100dvh' : `calc(100dvh - ${appBarHeightPx})`,
-          minHeight: analysisDocked ? '100vh' : `calc(100vh - ${appBarHeightPx})`,
+          width: analysisFullscreen ? viewport.width : analysisPanelWidthPx,
+          height: analysisDocked ? viewport.height : `calc(${viewport.height}px - ${appBarHeightPx})`,
+          minHeight: 0,
           display: 'flex',
           transform: isAnalysisPanelOpen
             ? 'translateX(0)'
-            : `translateX(${analysisFullscreen ? '100vw' : analysisPanelWidthPx})`,
+            : `translateX(${analysisFullscreen ? `${viewport.width}px` : analysisPanelWidthPx})`,
           transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
           zIndex: analysisDocked ? 1000 : 1360,
           pointerEvents: isAnalysisPanelOpen ? 'auto' : 'none'

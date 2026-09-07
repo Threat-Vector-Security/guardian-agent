@@ -862,7 +862,7 @@ const GrcThreatProfileTab: React.FC<GrcTabProps> = ({
 
         <Collapse in={showActorForm} timeout="auto" unmountOnExit>
           <Box sx={{ mt: 2, p: 2, bgcolor: 'action.hover', borderRadius: 1, display: 'grid', gap: 1.5 }}>
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 1.5 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 1.5 }}>
               <TextField size="small" label="Actor Name" value={newActorName}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewActorName(e.target.value)} />
               <TextField size="small" select label="Type" value={newActorType}
@@ -1005,7 +1005,7 @@ const GrcThreatProfileTab: React.FC<GrcTabProps> = ({
 
             <Collapse in={showScenarioForm} timeout="auto" unmountOnExit>
               <Box sx={{ mt: 2, p: 2, bgcolor: 'action.hover', borderRadius: 1, display: 'grid', gap: 1.5 }}>
-                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 1.5 }}>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 1.5 }}>
                   <TextField size="small" label="Scenario Title" value={newScenarioTitle}
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewScenarioTitle(e.target.value)} />
                   <TextField size="small" select label="Threat Actor" value={newScenarioActorId}

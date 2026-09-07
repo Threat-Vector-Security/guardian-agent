@@ -513,7 +513,7 @@ const GrcTprmTab: React.FC<GrcTabProps> = ({
 
         <Collapse in={showForm} timeout="auto" unmountOnExit>
           <Box sx={{ mt: 2, p: 2, bgcolor: 'action.hover', borderRadius: 1, display: 'grid', gap: 1.5 }}>
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 1.5 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 1.5 }}>
               <TextField size="small" label="Name" value={newName}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewName(e.target.value)} />
               <TextField size="small" select label="Category" value={newCategory}

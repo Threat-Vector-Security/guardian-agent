@@ -966,7 +966,7 @@ const GrcAssetsTab: React.FC<GrcTabProps> = ({
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.25 }}>
           Classify assets by domain and maintain business/security criticality ratings.
         </Typography>
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 1.5 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 1.5 }}>
           <Tooltip title="Name identifying this business or technical asset" arrow placement="top">
             <TextField
               size="small" label="Asset Name" value={newAssetName}

@@ -31,7 +31,7 @@ const GrcDashboardTab: React.FC<GrcTabProps> = ({ workspace, onSwitchTab }) => {
   const config = getConfig(workspace);
 
   return (
-    <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+    <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))' }}>
       <Paper sx={clickableSx} onClick={() => onSwitchTab?.('assets')}>
         <Tooltip describeChild title="Click to go to Assets tab. Total assets in scope with counts of high business/security critical entries." arrow>
           <Typography variant="caption" color="text.secondary">

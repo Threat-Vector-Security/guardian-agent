@@ -1244,7 +1244,7 @@ const GrcAssessmentsTab: React.FC<GrcTabProps> = ({
         </Typography>
 
         <SectionHeader label="Step 1: Assessment Details" />
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 1.5 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: 1.5 }}>
           <Tooltip describeChild title="Name for this assessment workspace (e.g., 'Q1 2026 DMZ Security Review')" arrow>
             <TextField
               size="small"
@@ -1283,7 +1283,7 @@ const GrcAssessmentsTab: React.FC<GrcTabProps> = ({
         </Box>
 
         <SectionHeader label="Step 2: Define Scope" />
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 1.5 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 1.5 }}>
           <Tooltip describeChild title="What are you assessing? System = entire system, Security Zone = a diagram segment, Application = specific app, OSI Layer = network layer focus" arrow>
             <TextField
               size="small"
@@ -1370,7 +1370,7 @@ const GrcAssessmentsTab: React.FC<GrcTabProps> = ({
         </Typography>
 
         <SectionHeader label="Step 3: Tier Filters (Optional)" />
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 1.5 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 1.5 }}>
           {renderTierSelect(
             'Tier 1 Filter',
             'Filter risks by taxonomy tier to narrow scope. Leave empty to include all tiers',
@@ -1402,7 +1402,7 @@ const GrcAssessmentsTab: React.FC<GrcTabProps> = ({
         </Box>
 
         <SectionHeader label="Step 4: Link Risks" />
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 1.5 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: 1.5 }}>
           <Tooltip describeChild title="Select risks to include in this assessment" arrow disableInteractive>
             <FormControl size="small">
               <InputLabel id="assessment-risks-label">Add Risk</InputLabel>
@@ -1476,7 +1476,7 @@ const GrcAssessmentsTab: React.FC<GrcTabProps> = ({
         </Box>
 
         {threatActors.length > 0 && (
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 1.5, mt: 1.5 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: 1.5, mt: 1.5 }}>
             <Tooltip describeChild title="Threat actors considered in scope for this assessment" arrow>
               <FormControl size="small">
                 <InputLabel>Threat Actors</InputLabel>
@@ -1536,7 +1536,7 @@ const GrcAssessmentsTab: React.FC<GrcTabProps> = ({
             <Typography variant="subtitle2" sx={{ mb: 1 }}>
               Assessments ({workspace.assessments.length})
             </Typography>
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 1.5 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', gap: 1.5 }}>
               {workspace.assessments.map(assessment => {
                 const isActive = assessment.id === activeAssessmentId;
                 const assessmentHealth = computeAssessmentHealth(assessment, workspace);
@@ -1647,7 +1647,7 @@ const GrcAssessmentsTab: React.FC<GrcTabProps> = ({
                 </Typography>
 
                 <SectionHeader label="Details & Ownership" />
-                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 1.5 }}>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 1.5 }}>
                   <Tooltip describeChild title="Name for this assessment workspace (e.g., 'Q1 2026 DMZ Security Review')" arrow>
                     <TextField
                       size="small"
@@ -1715,7 +1715,7 @@ const GrcAssessmentsTab: React.FC<GrcTabProps> = ({
                     );
                   })()}
                 </Box>
-                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 1.5 }}>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 1.5 }}>
                   <Tooltip describeChild title="Person reviewing and approving assessment findings" arrow>
                     <TextField
                       size="small"
@@ -1766,7 +1766,7 @@ const GrcAssessmentsTab: React.FC<GrcTabProps> = ({
 
                 <SectionHeader label="Scope & Filters" />
                 <Typography variant="subtitle2">Assessment Scope Items</Typography>
-                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 1.5 }}>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 1.5 }}>
                   <Tooltip describeChild title="What are you assessing? System = entire system, Security Zone = a diagram segment, Application = specific app, OSI Layer = network layer focus" arrow>
                     <TextField
                       size="small"
@@ -1838,7 +1838,7 @@ const GrcAssessmentsTab: React.FC<GrcTabProps> = ({
                 </Box>
 
                 <Typography variant="subtitle2" sx={{ mt: 1 }}>Risk Tier Filter</Typography>
-                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 1.5 }}>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 1.5 }}>
                   {renderTierSelect(
                     'Tier 1 Filter',
                     'Filter risks by taxonomy tier to narrow scope. Leave empty to include all tiers',

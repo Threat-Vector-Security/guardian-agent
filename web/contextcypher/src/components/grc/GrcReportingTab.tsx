@@ -383,7 +383,7 @@ const GrcReportingTab: React.FC<GrcTabProps> = ({ workspace, applyWorkspace, get
       {/* Metrics Snapshot */}
       <Paper sx={cardSx}>
         <SectionHeader title="Metrics Snapshot" />
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 1.5 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 130px), 1fr))', gap: 1.5 }}>
           <MetricCard value={metrics.assetCount} label="Assets" />
           <MetricCard value={metrics.riskCount} label="Risks" />
           <MetricCard value={metrics.highAndCriticalRiskCount} label="High/Critical Risks" color={metrics.highAndCriticalRiskCount > 0 ? '#dc2626' : undefined} />
@@ -724,7 +724,7 @@ const GrcReportingTab: React.FC<GrcTabProps> = ({ workspace, applyWorkspace, get
       {/* Report Catalog */}
       <Paper sx={cardSx}>
         <SectionHeader title="Report Catalog" count={GRC_REPORT_CATALOG.length} />
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 1.5 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 260px), 1fr))', gap: 1.5 }}>
           {GRC_REPORT_CATALOG.map((report: GrcReportCatalogEntry) => (
             <Paper
               key={report.id}

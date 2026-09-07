@@ -101,6 +101,8 @@ export interface GrcAssessmentFocusRequest {
 }
 
 export const cardSx = {
+  minWidth: 0,
+  overflowWrap: 'anywhere',
   p: 2,
   border: '1px solid',
   borderColor: 'divider',

@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.0.0-alpha.5](https://github.com/Threat-Vector-Security/guardian-agent/releases/tag/v2.0.0-alpha.5) — 8 September 2026
+
+- Aligned form actions and field heights, added consistent card spacing, and fixed long-text wrapping across the Guardian shell.
+- Isolated native form defaults from ContextCypher components and improved the saved-system toolbar at narrow widths.
+- Fit diagram and GRC panels to the embedded workspace, kept system names readable on small screens, and prevented navigation from shifting the workspace sideways.
+- Made GRC forms, cards, and grids adapt to their available width while keeping wide tables independently scrollable.
+- Improved provider-setting labels and added browser layout regression checks for all seven pages, GRC sections and configuration, settings, and screen widths from 320 to 1440 pixels.
+
+Source release; no signed native installers are included. The [known GRC identity, browser import and read-only viewer issues](docs/KNOWN-ISSUES.md) remain open.
+
 ## [2.0.0-alpha.4](https://github.com/Threat-Vector-Security/guardian-agent/releases/tag/v2.0.0-alpha.4) — 6 September 2026
 
 - Rewrote installation, usage, security policy, contributor instructions, architecture and API guidance for the current Guardian security application.
