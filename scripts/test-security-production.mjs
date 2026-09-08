@@ -23,7 +23,8 @@ try {
   await new Promise(done => reservation.listen(0, '127.0.0.1', done));
   const port = reservation.address().port;
   await new Promise(done => reservation.close(done));
-  child = spawn(process.execPath, ['dist/security-main.js', 'serve', '--data-dir', 'state', '--port', String(port)], { cwd: stage, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_PATH: '', GUARDIAN_ENTRA_TENANT_ID: '' } });
+  // This packaging check must never discover or collect from the operator's AWS account.
+  child = spawn(process.execPath, ['dist/security-main.js', 'serve', '--data-dir', 'state', '--port', String(port)], { cwd: stage, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_PATH: '', GUARDIAN_ENTRA_TENANT_ID: '', GUARDIAN_AWS_ACCOUNT_ID: '', GUARDIAN_AWS_REGION: '', GUARDIAN_AWS_PROFILE: '', AWS_PROFILE: '', AWS_REGION: '', AWS_DEFAULT_REGION: '', AWS_CONFIG_FILE: join(stage, 'no-aws-config'), AWS_SHARED_CREDENTIALS_FILE: join(stage, 'no-aws-credentials') } });
   child.stdout.resume(); child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-5000); });
   const url = `http://127.0.0.1:${port}`;
   let ready = false;
@@ -38,11 +39,16 @@ try {
   const login = await fetch(`${url}/api/v1/session`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: url }, body: JSON.stringify({ token }) });
   if (!login.ok) throw new Error('Production administrator sign-in failed');
   const cookie = login.headers.get('set-cookie').split(';')[0];
+  const awsRequest = operation => fetch(`${url}/api/v1/operations`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: url, Cookie: cookie }, body: JSON.stringify({ operation, input: {} }) });
+  const awsStatus = await awsRequest('aws.status.get');
+  const awsState = (await awsStatus.json()).result;
+  if (!awsStatus.ok || awsState?.configured !== false || awsState.mode !== 'host_cli' || awsState.status !== 'needs_region' || awsState.identityOk !== false) throw new Error('Production AWS startup without host configuration did not report needs_region');
+  if ((await awsRequest('aws.check.start')).status !== 409) throw new Error('Unconfigured AWS collection was not rejected');
   const result = await fetch(`${url}/api/v1/operations`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: url, Cookie: cookie }, body: JSON.stringify({ operation: 'projects.create', input: { name: 'Production packaging check' } }) });
   if (!result.ok || !(await result.json()).result?.project?.id) throw new Error('Production operation failed');
   const page = await fetch(url);
   if (!page.ok || !(await page.text()).includes('Guardian Agent')) throw new Error('Packaged UI unavailable');
-  console.log('Production-only clean install, SQLite bootstrap, service startup, administrator session, project mutation and packaged UI passed.');
+  console.log('Production-only clean install, SQLite bootstrap, service startup without AWS configuration, administrator session, project mutation and packaged UI passed.');
 } finally {
   if (child && child.exitCode === null) {
     child.kill('SIGTERM');

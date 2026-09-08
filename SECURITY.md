@@ -49,7 +49,7 @@ AI provider keys stay in backend process memory until restart. Provider/model pr
 
 When project context is selected, AI requires project read authorization and the current revision. It rechecks credential authority and revision after the provider response before releasing the result. This guards against stale context and revoked grants; it does not guarantee that a model's analysis is correct.
 
-Optional Entra sign-in validates the configured tenant and uses explicit group-to-role mapping. Optional AWS collection is read-only within the configured account/region and reports missing permissions. Protocol and mocked SDK tests do not substitute for acceptance testing in the operator's tenant/account.
+Optional Entra sign-in validates the configured tenant and uses explicit group-to-role mapping. AWS uses the host credential chain by default: startup resolves a configured region and verifies STS identity, pinning that account/region for the process lifetime. Explicit Guardian account/region pins retain precedence and reject mismatched identities. Missing host credentials or region leave AWS unavailable without stopping the local service. Inventory/finding collection remains explicit, read-only and account/region-filtered, with pinned service endpoints and reported permission failures. No AWS secrets or discovered enrollment are persisted; host AWS profile files and credential processes remain part of the trusted local configuration. Protocol and mocked SDK tests do not substitute for acceptance testing in the operator's tenant/account.
 
 ## Storage and resource limits
 

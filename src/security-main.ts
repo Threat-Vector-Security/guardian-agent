@@ -41,15 +41,11 @@ The administrator bootstrap file must never be configured as an assistant creden
   if (command === 'serve') {
     const port = Number(option('--port') ?? process.env['GUARDIAN_PORT'] ?? 3000);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid port');
-    const accountId = process.env['GUARDIAN_AWS_ACCOUNT_ID'];
-    const region = process.env['GUARDIAN_AWS_REGION'];
-    const profile = process.env['GUARDIAN_AWS_PROFILE'];
-    if ((accountId || region || profile) && (!accountId || !region)) throw new Error('AWS integration requires both GUARDIAN_AWS_ACCOUNT_ID and GUARDIAN_AWS_REGION.');
+    const { integration: aws, unavailable: awsUnavailable } = await (await import('./security-workspace/aws-security.js')).AwsSecurityIntegration.fromEnvironment();
     const [{ SecurityStore }, { SecurityWorkspace }, { SecurityCollectors }, { startSecurityServer }] = await Promise.all([
       import('./security-workspace/store.js'), import('./security-workspace/service.js'),
       import('./security-workspace/collectors.js'), import('./security-workspace/server.js'),
     ]);
-    const aws = accountId && region ? new (await import('./security-workspace/aws-security.js')).AwsSecurityIntegration({ accountId, region, ...(profile ? { profile } : {}) }) : undefined;
     const store = new SecurityStore(dataDir);
     if (!store.clients().some(client => client.role === 'admin' && !client.revoked && client.expiresAt > Date.now())) { store.close(); throw new Error('Run guardianagent init before starting the service.'); }
     const collectors = new SecurityCollectors(dataDir);
@@ -61,7 +57,7 @@ The administrator bootstrap file must never be configured as an assistant creden
       redirectUri: `http://127.0.0.1:${port}/api/v1/auth/entra/callback`,
       adminGroupIds: groups('GUARDIAN_ENTRA_ADMIN_GROUPS'), operatorGroupIds: groups('GUARDIAN_ENTRA_OPERATOR_GROUPS'), viewerGroupIds: groups('GUARDIAN_ENTRA_VIEWER_GROUPS'),
     }) : undefined;
-    const workspace = new SecurityWorkspace(store, collectors, aws, { entraEnabled: !!entra });
+    const workspace = new SecurityWorkspace(store, collectors, aws, { entraEnabled: !!entra, awsUnavailable });
     let running;
     try { running = await startSecurityServer(workspace, { port, webRoot: resolve(root, 'web/security/dist'), entra }); }
     catch (error) { await workspace.close(); store.close(); throw error; }

@@ -58,7 +58,7 @@ The catalog below summarizes current families. Query `GET /api/v1/operations` or
 | `projects.list`, `projects.get`, `projects.export` | `projects:read` | Authorized workspace summaries, complete documents and export representations |
 | `projects.create`, `projects.import`, `projects.update` | `projects:write` | Create/import or commit a complete document with expected revision |
 | `host.check.start` | `security:collect` | Start bounded local posture/network/native collection |
-| `aws.status.get` | `cloud:read` | Configured account/region collection status |
+| `aws.status.get` | `cloud:read` | Local credential mode, pinned account/region, identity verification and collection status |
 | `aws.check.start` | `cloud:collect` | Start read-only collection for that configured AWS target |
 | `native.scan.propose` | `response:propose` | Propose `scanType: "quick"\|"full"` for separate approval |
 | `ai.providers.list`, `ai.models.list`, `ai.run`, `ai.cancel` | `ai:invoke` | Sanitized provider metadata, live models and bounded AI workflows |
@@ -69,6 +69,10 @@ The catalog below summarizes current families. Query `GET /api/v1/operations` or
 | `audit.list` | Administrator session | Read local audit records |
 
 Finding/audit pagination accepts optional numeric `cursor` and `limit` (1–100). Use returned pagination metadata; do not assume list order or that one page contains every record.
+
+`aws.status.get` returns `configured`, `mode` (`pinned` or `host_cli`), `status` (`configured`, `degraded`, `needs_region` or `unavailable`), a recovery/scope `message`, `identityOk`, `checking`, and the last target-scoped `report` (or `null`). When known, it also includes `accountId`, `region`, `profile`, `target`, and `lastIdentityAt` (Unix milliseconds). `configured` means a collection target is bound; `identityOk` describes the latest identity attempt in this process, not the health of that account. `lastIdentityAt` is the last successful verification, not a credential-expiry estimate. Status reads make no AWS calls.
+
+Without Guardian account/region pins, startup resolves the host profile/region and uses STS to bind one account for the process lifetime. Failed discovery leaves the service running; collection and AWS environment preview return 409 with recovery instructions. Explicit collection always rechecks STS, and account drift aborts before inventory APIs. `aws.check.start` still accepts no caller-selected profile, account, region, endpoint or credentials. Installation scope and the existing cloud grants are required in either mode. See [AWS setup and restart rules](../guides/SECURITY-WORKSPACE.md#optional-aws-security).
 
 `clients.create` takes `name`, `scopes`, optional `projectIds` and `expiresInDays` (1–90, default 30). It returns `{ client, token }`; the secret is returned once. Store it in a private file outside the repository and pass only that file path to the intended assistant. Unknown/administrative scopes are rejected.
 

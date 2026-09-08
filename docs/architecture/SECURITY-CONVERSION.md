@@ -1,6 +1,6 @@
 # Guardian Agent security application contract
 
-**Scope:** Current security application, inspected 6 September 2026. This documentation revision records implemented boundaries and unresolved acceptance gaps; it does not add or repair application behavior.
+**Scope:** Current security application, inspected 6 September 2026; AWS host enrollment updated 8 September 2026. This contract records implemented boundaries and unresolved acceptance gaps.
 
 Guardian combines local security observations with a standalone ContextCypher editor, built-in security AI and GRC workflows. HTTP, CLI and MCP clients share one application service. External assistant applications are optional. The [architecture overview](OVERVIEW.md) contains the current system diagram; the [current scope and acceptance gaps](OVERVIEW.md#current-scope-and-acceptance-gaps) records the implemented scope and unresolved work.
 
@@ -26,7 +26,13 @@ The seven-page browser shell is **Protection, Environments, Findings, Systems, A
 
 `ai.ts` uses the configured provider boundary for bounded chat, analysis, generation and assessment requests. Provider discovery/configuration is administrative; invocation and cancellation use their declared scopes and request ownership. AI output is untrusted, checked and presented as a response or proposal. `ai.run` does not execute arbitrary tools or automatically commit project changes.
 
-Host/native collectors report available, degraded, unavailable or unsupported coverage. Windows Defender scan requests are distinct from scan completion. AWS enrolls one explicit account/region and verifies STS identity before bounded read-only collection. Environment previews map passive neighbor-cache entries or EC2/security-group associations into editable snapshots. They do not establish complete inventory, physical topology or reachability.
+Host/native collectors report available, degraded, unavailable or unsupported coverage. Windows Defender scan requests are distinct from scan completion. AWS binds one account/region, either through explicit environment pins or bounded host credential discovery at startup, and verifies STS identity before every bounded read-only collection. Environment previews map passive neighbor-cache entries or EC2/security-group associations into editable snapshots. They do not establish complete inventory, physical topology or reachability.
+
+### AWS enrollment ownership
+
+Startup composition calls `AwsSecurityIntegration.fromEnvironment`. Explicit account/region pins retain the existing constructor path; a partial pin is rejected. Otherwise the SDK configuration loader resolves the selected host profile's region (after `AWS_REGION`/`AWS_DEFAULT_REGION`), and a bounded STS-only bootstrap discovers the account. The resulting integration owns an immutable process-lifetime account/region pin. Missing configuration, expired sessions and startup timeouts produce sanitized unavailable status rather than a second backend or a startup crash.
+
+The shared operation service exposes that local enrollment status and existing target-keyed observation reports. It retains cloud scopes, project restrictions and explicit collection jobs; status reads and polling never invoke AWS. Every collection revalidates STS against the pin before inventory, and existing endpoint pinning, ownership filters and aggregator distrust remain in the collector. Discovered enrollment and SDK credentials are not written to settings or SQLite, and no rebind operation is added. Restart is the explicit boundary for a different account/profile/region. Tests cover startup-only identity discovery, region/profile precedence, unavailable startup, account drift, endpoint overrides and service authorization; real AWS acceptance remains separate.
 
 Entra sign-in does not provide Azure/Microsoft 365 discovery. Active LAN probing, wider cloud/identity inventory, automatic discovery reconciliation, autonomous defensive workflows, proprietary response adapters and managed fleets require additional implementation and acceptance. There is no kernel EDR or universal enforcement over software outside Guardian.
 

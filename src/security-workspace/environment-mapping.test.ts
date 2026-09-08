@@ -76,7 +76,7 @@ describe('environment mapping', () => {
   it('enforces installation and cloud scopes without invoking collection or allowing target overrides', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'guardian-environment-test-'));
     const store = new SecurityStore(dir);
-    const workspace = new SecurityWorkspace(store, { check: async () => { throw new Error('Unexpected host collection'); }, requestScan: async () => { throw new Error('Unexpected scan'); } }, { target: 'aws:123456789012:ap-southeast-2', check: async () => { throw new Error('Unexpected AWS collection'); }, close: () => {} });
+    const workspace = new SecurityWorkspace(store, { check: async () => { throw new Error('Unexpected host collection'); }, requestScan: async () => { throw new Error('Unexpected scan'); } }, { target: 'aws:123456789012:ap-southeast-2', check: async () => { throw new Error('Unexpected AWS collection'); }, close: () => {}, status: () => ({ configured: true, mode: 'pinned', status: 'configured', identityOk: false, message: 'Pinned test enrollment' }) });
     try {
       const createClient = (scopes: string[], projectIds?: string[]) => store.createClient({ name: 'test', role: 'viewer', scopes, ...(projectIds ? { projectIds } : {}), expiresAt: Date.now() + 600000 }, 'bootstrap').client;
       const reader = createClient(['security:read']);

@@ -78,7 +78,7 @@ Local browser access opens without an access code by default. Optional browser s
 ## Integrations and reference material
 
 - **Microsoft Defender and antivirus inventory:** inspect available local protection and use supported, approved scan requests.
-- **AWS:** work with authenticated EC2/security-group inventory and explicitly collect Security Hub or GuardDuty findings.
+- **AWS:** use the host's AWS profile/SSO session or workload credentials, with optional explicit account/region pins, to collect EC2/security-group inventory and Security Hub or GuardDuty findings on request. See [AWS setup](docs/guides/SECURITY-WORKSPACE.md#optional-aws-security).
 - **Microsoft Entra ID:** optional SSO with configured group-to-role mappings.
 - **Security event intake:** scoped HTTP ingestion for connectors that provide normalised findings.
 - **GRC reference material:** seven bundled reference datasets covering NIST SP 800-53, OWASP Top 10, MITRE ATT&CK Enterprise/ICS/Mobile, Australian ISM and Essential Eight, plus local CSV/XLSX control imports.

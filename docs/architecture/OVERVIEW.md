@@ -63,7 +63,7 @@ Only explicitly registered operations exist in this runtime. A native scan propo
 
 - Standalone editors restore ContextCypher examples, typed nodes, advanced diagram views and GRC workflows. **Read-only credentials still receive the older reduced Systems renderer**; equivalent read-only diagram fidelity remains unfinished.
 - Raw-content imports through the backend preserve exact original bytes. **The workbench's JSON upload currently parses and serializes first**, losing original formatting/BOM fidelity. This documentation revision does not repair that seam.
-- Local mapping uses passive neighbor-cache observations. AWS mapping covers collected regional EC2 instances and security-group associations for an explicitly enrolled account. Neither proves physical topology or reachability. Active LAN discovery, wider cloud/identity inventory and automatic refresh reconciliation remain uplift work.
+- Local mapping uses passive neighbor-cache observations. AWS mapping covers collected regional EC2 instances and security-group associations for an explicitly pinned or startup-discovered account. The host credential chain can supply that account, but collection remains explicit and account-bound. Neither proves physical topology or reachability. Active LAN discovery, wider cloud/identity inventory and automatic refresh reconciliation remain uplift work.
 - Entra sign-in is not Azure/Microsoft 365 inventory access. Native Mac and real cloud/tenant acceptance must be recorded separately from mocked tests or CI build success.
 - Autonomous security triage, event-triggered response automation and gateway configuration collection are not registered capabilities in the current service. There is no kernel EDR or universally enforced assistant sandbox.
 

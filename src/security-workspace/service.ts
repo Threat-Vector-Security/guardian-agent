@@ -4,7 +4,7 @@ import { SecurityStore, WorkspaceError, digest, type Principal } from './store.j
 import { authorize, ASSISTANT_SCOPES } from './operations.js';
 import { importContextCypher, updateContextDocument, exportContextCypher, type GuardianContextEnvelope } from './contextcypher.js';
 import type { SecurityCollectors } from './collectors.js';
-import type { AwsSecurityIntegration } from './aws-security.js';
+import type { AwsSecurityIntegration, AwsSecurityStatus } from './aws-security.js';
 import { SecurityAi, type SecurityAiKind } from './ai.js';
 import { buildLocalEnvironmentMap, buildAwsEnvironmentMap } from './environment-mapping.js';
 import type { CollectorTelemetry } from './collectors.js';
@@ -43,7 +43,7 @@ export class SecurityWorkspace {
   private checkId?: string;
   private awsCheckId?: string;
   private closing = false;
-  constructor(readonly store: SecurityStore, readonly collectors: Pick<SecurityCollectors, 'check' | 'requestScan'> & { supportsScan?: boolean }, readonly aws?: Pick<AwsSecurityIntegration, 'target' | 'check' | 'close'>, private readonly config: { entraEnabled?: boolean } = {}) {
+  constructor(readonly store: SecurityStore, readonly collectors: Pick<SecurityCollectors, 'check' | 'requestScan'> & { supportsScan?: boolean }, readonly aws?: Pick<AwsSecurityIntegration, 'target' | 'check' | 'close' | 'status'>, private readonly config: { entraEnabled?: boolean; awsUnavailable?: AwsSecurityStatus } = {}) {
     store.acquireServiceOwnership();
     this.ai = new SecurityAi(store);
     const savedDevice = store.get<{ id: string; name: string; platform: string }>('meta', 'device');
@@ -60,6 +60,12 @@ export class SecurityWorkspace {
         store.audit('service', 'jobs.interrupted', job.id);
       }
     });
+  }
+  private awsStatus(): AwsSecurityStatus {
+    return this.aws?.status() ?? this.config.awsUnavailable ?? {
+      configured: false, mode: 'host_cli', status: 'unavailable', identityOk: false,
+      message: 'AWS host credentials have not been initialized. Configure a host AWS profile and region, then restart Guardian.',
+    };
   }
   private project(principal: Principal, id: string): Project {
     if (principal.projectIds && !principal.projectIds.includes(id)) throw new WorkspaceError(403, 'Project is outside this credential scope');
@@ -108,7 +114,7 @@ export class SecurityWorkspace {
         if (principal.projectIds) throw new WorkspaceError(403, 'Environment mapping requires installation scope');
         if (input.source === 'aws') {
           authorize(principal, audience, 'aws.status.get', {});
-          if (!this.aws) throw new WorkspaceError(409, 'Configure and collect the AWS account before mapping it');
+          if (!this.aws) throw new WorkspaceError(409, this.awsStatus().message);
           const report = this.store.get<AwsSecurityReport>('aws-status', this.aws.target);
           if (!report) throw new WorkspaceError(409, 'Collect AWS observations before mapping the account');
           const [, accountId, region] = this.aws.target.split(':');
@@ -260,12 +266,12 @@ export class SecurityWorkspace {
       }
       case 'aws.status.get': {
         if (principal.projectIds) throw new WorkspaceError(403, 'AWS status requires installation scope');
-        return { configured: !!this.aws, target: this.aws?.target, checking: !!this.awsCheckId, report: this.aws ? this.store.get('aws-status', this.aws.target) ?? null : null };
+        return { ...this.awsStatus(), checking: !!this.awsCheckId, report: this.aws ? this.store.get('aws-status', this.aws.target) ?? null : null };
       }
       case 'aws.check.start': {
         if (principal.projectIds) throw new WorkspaceError(403, 'AWS collection requires installation scope');
         const aws = this.aws;
-        if (!aws) throw new WorkspaceError(409, 'Configure the AWS account and region on the service before collecting.');
+        if (!aws) throw new WorkspaceError(409, this.awsStatus().message);
         if (this.awsCheckId) throw new WorkspaceError(409, 'An AWS check is already running');
         const job = this.createJob(principal.id, 'aws.check', {}, aws.target);
         this.awsCheckId = job.id;
@@ -325,7 +331,7 @@ export class SecurityWorkspace {
         { id: 'mcp', name: 'External assistants', status: 'available', capabilities: ['stdio', 'scoped_operations'], description: 'MCP and CLI share the authenticated operation service. Administrative tools are excluded from MCP.' },
         { id: 'entra', name: 'Microsoft Entra ID', status: this.config.entraEnabled ? 'configured' : 'not_configured', capabilities: ['oidc', 'pkce', 'group_roles'], description: 'Optional tenant-bound SSO with explicit administrator/operator/viewer groups. Configure on the local service and verify in your tenant.' },
         { id: 'macos', name: 'macOS security posture', status: process.platform === 'darwin' ? 'supported_platform' : 'unsupported', capabilities: ['gatekeeper', 'filevault', 'application_firewall', 'passive_network'], description: 'Read-only native posture and passive visibility. No XProtect scan or protection-disablement API is exposed.' },
-        { id: 'aws', name: 'AWS security', status: this.aws ? 'configured' : 'not_configured', capabilities: ['account_identity', 'resource_posture', 'securityhub', 'guardduty'], description: this.aws ? `Read-only collection for ${this.aws.target}. Coverage and permission failures remain explicit.` : 'Set GUARDIAN_AWS_ACCOUNT_ID and GUARDIAN_AWS_REGION; use a dedicated AWS profile or workload role. No AWS calls run until explicitly requested.' },
+        { id: 'aws', name: 'AWS security', status: this.awsStatus().status, mode: this.awsStatus().mode, capabilities: ['account_identity', 'resource_posture', 'securityhub', 'guardduty'], description: this.awsStatus().message },
       ] };
       default: throw new WorkspaceError(404, 'Unknown operation');
     }

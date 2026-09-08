@@ -35,7 +35,7 @@ A named operation is already classified; it does not need an LLM to determine it
 
 Declare supported collection/response capabilities precisely. Validate external responses, bound pagination and resource use, and report missing permissions, unavailable providers and truncated inventory. Do not turn incomplete evidence into a healthy or clean result.
 
-Use explicit account/region enrollment for AWS and configured tenant/group mappings for Entra. Adding another vendor requires its actual API and permission contract; installed-software inventory alone is not a management integration.
+Keep AWS collection bound to its explicit or startup-discovered account/region pin and revalidate STS before inventory. Host credential discovery must not start collection or accept caller-selected targets. Use configured tenant/group mappings for Entra. Adding another vendor requires its actual API and permission contract; installed-software inventory alone is not a management integration.
 
 ## UI and documentation
 

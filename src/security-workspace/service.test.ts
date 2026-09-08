@@ -6,10 +6,10 @@ import { request } from 'node:http';
 import { SecurityStore } from './store.js';
 import { SecurityWorkspace } from './service.js';
 import { startSecurityServer } from './server.js';
-import type { AwsSecurityIntegration, AwsSecurityReport } from './aws-security.js';
+import type { AwsSecurityIntegration, AwsSecurityReport, AwsSecurityStatus } from './aws-security.js';
 
 const active: Array<{ store: SecurityStore; workspace: SecurityWorkspace; dir: string; closeServer?: () => Promise<void> }> = [];
-function setup(aws?: Pick<AwsSecurityIntegration, 'target' | 'check' | 'close'>, config: { entraEnabled?: boolean } = {}) {
+function setup(aws?: Pick<AwsSecurityIntegration, 'target' | 'check' | 'close' | 'status'>, config: { entraEnabled?: boolean; awsUnavailable?: AwsSecurityStatus } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'guardian-context-review-'));
   const store = new SecurityStore(dir);
   const workspace = new SecurityWorkspace(store, { check: vi.fn(), requestScan: vi.fn() }, aws, config);
@@ -31,12 +31,37 @@ afterEach(async () => {
 describe('AWS workspace integration boundaries', () => {
   const target = 'aws:123456789012:ap-southeast-2';
   const report = (status: AwsSecurityReport['status'] = 'available'): AwsSecurityReport => ({ accountId: '123456789012', region: 'ap-southeast-2', status, collectedAt: Date.now(), findings: [], coverage: [], errors: [] });
-  const awsClient = (check = vi.fn(async () => report())) => ({ target, check, close: vi.fn() });
+  const awsClient = (check = vi.fn(async () => report())) => ({ target, check, close: vi.fn(), status: vi.fn((): AwsSecurityStatus => ({ configured: true, mode: 'pinned', status: 'configured', target, accountId: '123456789012', region: 'ap-southeast-2', identityOk: false, message: 'Pinned test enrollment' })) });
 
   it('reports disabled AWS and refuses collection without enrollment', async () => {
     const { workspace, admin, store } = setup();
-    await expect(workspace.execute(admin, 'admin', 'aws.status.get', {})).resolves.toEqual({ configured: false, target: undefined, checking: false, report: null });
+    await expect(workspace.execute(admin, 'admin', 'aws.status.get', {})).resolves.toMatchObject({ configured: false, mode: 'host_cli', identityOk: false, checking: false, report: null });
     await expect(workspace.execute(admin, 'admin', 'aws.check.start', {})).rejects.toMatchObject({ status: 409 });
+    expect(store.count('job')).toBe(0);
+  });
+
+  it('exposes host discovery failures without starting jobs or reading stale account reports', async () => {
+    const awsUnavailable: AwsSecurityStatus = { configured: false, mode: 'host_cli', status: 'needs_region', profile: 'sso-test', identityOk: false, message: 'Set AWS_REGION and restart Guardian.' };
+    const { workspace, admin, store } = setup(undefined, { awsUnavailable });
+    store.put('aws-status', target, report());
+    await expect(workspace.execute(admin, 'admin', 'aws.status.get', {})).resolves.toEqual({ ...awsUnavailable, checking: false, report: null });
+    await expect(workspace.execute(admin, 'admin', 'aws.check.start', {})).rejects.toMatchObject({ status: 409, message: awsUnavailable.message });
+    await expect(workspace.execute(admin, 'admin', 'environments.preview', { source: 'aws' })).rejects.toMatchObject({ status: 409, message: awsUnavailable.message });
+    const integrations = await workspace.execute(admin, 'admin', 'integrations.list', {}) as { items: unknown[] };
+    expect(integrations.items).toContainEqual(expect.objectContaining({ id: 'aws', mode: 'host_cli', status: 'needs_region', description: awsUnavailable.message }));
+    expect(store.count('job')).toBe(0);
+  });
+
+  it('reads host credential status without collecting and retains cloud/project authorization', async () => {
+    const aws = awsClient();
+    aws.status.mockReturnValue({ configured: true, mode: 'host_cli', status: 'configured', target, accountId: '123456789012', region: 'ap-southeast-2', profile: 'sso-test', identityOk: true, lastIdentityAt: 1000, message: 'Using host AWS credentials.' });
+    const { workspace, admin, store } = setup(aws);
+    await expect(workspace.execute(admin, 'admin', 'aws.status.get', {})).resolves.toMatchObject({ mode: 'host_cli', identityOk: true, lastIdentityAt: 1000 });
+    const integrations = await workspace.execute(admin, 'admin', 'integrations.list', {}) as { items: unknown[] };
+    expect(integrations.items).toContainEqual(expect.objectContaining({ id: 'aws', mode: 'host_cli', status: 'configured' }));
+    const restricted = store.createClient({ name: 'restricted', role: 'operator', scopes: ['cloud:read', 'cloud:collect'], projectIds: ['project'], expiresAt: Date.now() + 600000 }, admin.id).client;
+    for (const operation of ['aws.status.get', 'aws.check.start']) await expect(workspace.execute(restricted, 'assistant', operation, {})).rejects.toMatchObject({ status: 403 });
+    expect(aws.check).not.toHaveBeenCalled();
     expect(store.count('job')).toBe(0);
   });
 

@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { STSClient } from '@aws-sdk/client-sts';
 import { EC2Client } from '@aws-sdk/client-ec2';
 import { SecurityHubClient } from '@aws-sdk/client-securityhub';
@@ -10,7 +13,24 @@ const region = 'ap-southeast-2';
 const config = { accountId, region };
 type Reply = (input: Record<string, any>, options: { abortSignal: AbortSignal }) => any;
 const integrations: AwsSecurityIntegration[] = [];
-afterEach(() => { integrations.splice(0).forEach(item => item.close()); vi.restoreAllMocks(); vi.useRealTimers(); });
+const configDirectories: string[] = [];
+afterEach(() => {
+  integrations.splice(0).forEach(item => item.close());
+  for (const directory of configDirectories.splice(0)) {
+    if (!directory.startsWith(join(tmpdir(), 'guardian-aws-config-'))) throw new Error('Unexpected AWS test directory');
+    rmSync(directory, { recursive: true, force: true });
+  }
+  vi.restoreAllMocks(); vi.useRealTimers();
+});
+
+function hostEnvironment(content = ''): NodeJS.ProcessEnv {
+  const directory = mkdtempSync(join(tmpdir(), 'guardian-aws-config-'));
+  configDirectories.push(directory);
+  const env = { AWS_CONFIG_FILE: join(directory, 'config'), AWS_SHARED_CREDENTIALS_FILE: join(directory, 'credentials') };
+  writeFileSync(env.AWS_CONFIG_FILE, content);
+  writeFileSync(env.AWS_SHARED_CREDENTIALS_FILE, '');
+  return env;
+}
 
 function setup(overrides: Record<string, Reply> = {}, timeoutMs = 15000) {
   // Explicit inert credentials and mocked send methods: no provider chain or network.
@@ -44,10 +64,150 @@ const hub = (extra = {}) => ({ AwsAccountId: accountId, Region: region, RecordSt
 const guard = (extra = {}) => ({ AccountId: accountId, Region: region, Id: 'guard-id', Service: { Archived: false }, Severity: 8, ...extra });
 const permission = { IpProtocol: 'tcp', FromPort: 22, ToPort: 22, IpRanges: [{ CidrIp: '0.0.0.0/0' }] };
 
+describe('AWS host credential enrollment', () => {
+  it('discovers only STS at startup, then pins the account for explicit collection', async () => {
+    let currentAccount = accountId;
+    const { clients, calls } = setup({ GetCallerIdentityCommand: () => ({ Account: currentAccount }) });
+    const result = await AwsSecurityIntegration.fromEnvironment({ ...hostEnvironment(), AWS_REGION: region }, { clients, now: () => 1234 });
+    const integration = result.integration!;
+    integrations.push(integration);
+    expect(result.unavailable).toBeUndefined();
+    expect(integration.status()).toMatchObject({ configured: true, mode: 'host_cli', accountId, region, identityOk: true, lastIdentityAt: 1234 });
+    expect(calls.map(item => item.name)).toEqual(['GetCallerIdentityCommand']);
+    expect((await integration.check()).status).toBe('available');
+    calls.length = 0;
+    currentAccount = '999999999999';
+    const mismatch = await integration.check();
+    expect(mismatch.errors).toContainEqual(expect.objectContaining({ code: 'AccountMismatch' }));
+    expect(calls.map(item => item.name)).toEqual(['GetCallerIdentityCommand']);
+    expect(integration.status()).toMatchObject({ accountId, identityOk: false, status: 'degraded', lastIdentityAt: 1234 });
+    currentAccount = accountId;
+    expect((await integration.check()).status).toBe('available');
+    expect(integration.status()).toMatchObject({ accountId, identityOk: true, status: 'configured' });
+  });
+
+  it.each([
+    [{ AWS_REGION: region, AWS_DEFAULT_REGION: 'us-west-2' }, region, undefined],
+    [{ AWS_DEFAULT_REGION: 'us-west-2' }, 'us-west-2', undefined],
+    [{}, 'eu-west-1', undefined],
+    [{ AWS_REGION: '', AWS_DEFAULT_REGION: '' }, 'eu-west-1', undefined],
+    [{ AWS_PROFILE: 'cli' }, 'ap-northeast-1', 'cli'],
+    [{ GUARDIAN_AWS_PROFILE: 'guardian', AWS_PROFILE: 'cli' }, 'ap-southeast-2', 'guardian'],
+    [{ GUARDIAN_AWS_PROFILE: 'guardian', AWS_REGION: 'us-east-2' }, 'us-east-2', 'guardian'],
+  ])('resolves environment/profile precedence %j', async (overrides, expectedRegion, expectedProfile) => {
+    const env = hostEnvironment('[default]\nregion = eu-west-1\n[profile cli]\nregion = ap-northeast-1\n[profile guardian]\nregion = ap-southeast-2\n');
+    const { clients } = setup();
+    const { integration } = await AwsSecurityIntegration.fromEnvironment({ ...env, ...overrides }, { clients });
+    integrations.push(integration!);
+    expect(integration!.status()).toMatchObject({ mode: 'host_cli', accountId, region: expectedRegion });
+    expect(integration!.status().profile).toBe(expectedProfile);
+  });
+
+  it('requires a region and does not substitute the SSO login region', async () => {
+    const { clients, calls } = setup();
+    const { integration, unavailable } = await AwsSecurityIntegration.fromEnvironment(hostEnvironment('[default]\nsso_region = us-east-1\n'), { clients });
+    expect(integration).toBeUndefined();
+    expect(unavailable).toMatchObject({ configured: false, mode: 'host_cli', status: 'needs_region', identityOk: false });
+    expect(unavailable?.message).toContain('AWS_REGION');
+    expect(calls).toEqual([]);
+  });
+
+  it.each(['http://attacker', 'secret region'])('does not call STS or echo invalid region %s', async value => {
+    const { clients, calls } = setup();
+    const result = await AwsSecurityIntegration.fromEnvironment({ ...hostEnvironment(), AWS_REGION: value }, { clients });
+    expect(result.unavailable?.status).toBe('needs_region');
+    expect(JSON.stringify(result)).not.toContain(value);
+    expect(calls).toEqual([]);
+  });
+
+  it.each(['CredentialsProviderError', 'TokenProviderError', 'ExpiredTokenException'])('keeps %s nonfatal and does not expose credential-process errors', async name => {
+    const { clients, calls } = setup({ GetCallerIdentityCommand: () => { throw Object.assign(new Error('secret token from credential process'), { name }); } });
+    const result = await AwsSecurityIntegration.fromEnvironment({ ...hostEnvironment(), AWS_REGION: region }, { clients });
+    expect(result.integration).toBeUndefined();
+    expect(result.unavailable).toMatchObject({ configured: false, status: 'unavailable', mode: 'host_cli', identityOk: false, region });
+    expect(result.unavailable?.message).toContain('aws sso login');
+    expect(JSON.stringify(result)).not.toContain('secret token');
+    expect(calls.map(item => item.name)).toEqual(['GetCallerIdentityCommand']);
+  });
+
+  it.each([undefined, '999', 'invalid-secret-account'])('refuses invalid STS account %s', async Account => {
+    const { clients, calls } = setup({ GetCallerIdentityCommand: () => ({ Account }) });
+    const result = await AwsSecurityIntegration.fromEnvironment({ ...hostEnvironment(), AWS_REGION: region }, { clients });
+    expect(result.integration).toBeUndefined();
+    expect(result.unavailable?.status).toBe('unavailable');
+    expect(result.unavailable?.accountId).toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([
+    { GUARDIAN_AWS_ACCOUNT_ID: accountId }, { GUARDIAN_AWS_REGION: region },
+    { GUARDIAN_AWS_PROFILE: '../invalid' }, { AWS_PROFILE: '../invalid' },
+  ])('fails fast for invalid explicit environment %j', async env => {
+    const { clients, calls } = setup();
+    await expect(AwsSecurityIntegration.fromEnvironment(env, { clients })).rejects.toThrow();
+    expect(calls).toEqual([]);
+  });
+
+  it('retains the pinned construction path and account mismatch guard', async () => {
+    const { clients, calls } = setup({ GetCallerIdentityCommand: () => ({ Account: '999999999999' }) });
+    const { integration } = await AwsSecurityIntegration.fromEnvironment({ GUARDIAN_AWS_ACCOUNT_ID: accountId, GUARDIAN_AWS_REGION: region, GUARDIAN_AWS_PROFILE: 'guardian', AWS_PROFILE: 'cli', AWS_REGION: 'us-east-1' }, { clients });
+    integrations.push(integration!);
+    expect(calls).toEqual([]);
+    expect(integration!.status()).toMatchObject({ mode: 'pinned', configured: true, accountId, region, profile: 'guardian', identityOk: false });
+    expect((await integration!.check()).errors[0].code).toBe('AccountMismatch');
+    expect(calls.map(item => item.name)).toEqual(['GetCallerIdentityCommand']);
+  });
+
+  it('bounds startup discovery and ignores a late identity response', async () => {
+    vi.useFakeTimers();
+    let resolve!: (identity: unknown) => void;
+    const { clients, calls } = setup({ GetCallerIdentityCommand: () => new Promise(done => { resolve = done; }) });
+    const pending = AwsSecurityIntegration.fromEnvironment({ ...hostEnvironment(), AWS_REGION: region }, { clients, timeoutMs: 20 });
+    await vi.advanceTimersByTimeAsync(21);
+    const result = await pending;
+    expect(result.integration).toBeUndefined();
+    expect(result.unavailable?.message).toContain('timed out');
+    expect(calls[0].signal.aborted).toBe(true);
+    resolve({ Account: accountId });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(result.integration).toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([undefined, 'cli'])('uses SDK credentials and pins endpoints for profile %s without making network calls', async profile => {
+    const env = { ...hostEnvironment(`[${profile ? `profile ${profile}` : 'default'}]\nregion = cn-north-1\nendpoint_url = http://attacker\n`), ...(profile ? { AWS_PROFILE: profile } : {}) };
+    if (profile) writeFileSync(env.AWS_SHARED_CREDENTIALS_FILE!, `[${profile}]\naws_access_key_id = test\naws_secret_access_key = test\n`);
+    for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+    vi.stubEnv('AWS_PROFILE', undefined);
+    vi.stubEnv('AWS_ACCESS_KEY_ID', profile ? undefined : 'test');
+    vi.stubEnv('AWS_SECRET_ACCESS_KEY', profile ? undefined : 'test');
+    vi.stubEnv('AWS_SESSION_TOKEN', undefined);
+    for (const key of ['AWS_ENDPOINT_URL', 'AWS_ENDPOINT_URL_STS', 'AWS_ENDPOINT_URL_EC2', 'AWS_ENDPOINT_URL_SECURITY_HUB', 'AWS_ENDPOINT_URL_GUARD_DUTY']) vi.stubEnv(key, 'http://attacker');
+    const hosts: string[] = [];
+    for (const Client of [STSClient, EC2Client, SecurityHubClient, GuardDutyClient]) {
+      const send = Client.prototype.send;
+      vi.spyOn(Client.prototype, 'send').mockImplementation(function (this: STSClient, command: any, options: any) {
+        this.middlewareStack.add(() => async (args: any) => {
+          hosts.push(args.request.hostname);
+          return { response: {}, output: { $metadata: {}, Account: accountId, Reservations: [], SecurityGroups: [], Findings: [], DetectorIds: [] } };
+        }, { step: 'finalizeRequest', name: 'captureWithoutNetwork', priority: 'high', override: true });
+        return send.call(this, command, options);
+      } as any);
+    }
+    const { integration } = await AwsSecurityIntegration.fromEnvironment(env);
+    expect(integration).toBeDefined();
+    integrations.push(integration!);
+    await integration!.check();
+    expect(hosts).toEqual(expect.arrayContaining(['sts.cn-north-1.amazonaws.com.cn', 'ec2.cn-north-1.amazonaws.com.cn', 'securityhub.cn-north-1.amazonaws.com.cn', 'guardduty.cn-north-1.amazonaws.com.cn']));
+    expect(hosts.every(host => host.endsWith('.cn-north-1.amazonaws.com.cn'))).toBe(true);
+  });
+});
+
 describe('AWS security collection boundaries', () => {
   it.each([
     { accountId: 'wrong', region }, { accountId, region: 'http://attacker' },
     { ...config, endpoint: 'https://attacker' }, { ...config, profile: '../credentials' },
+    { ...config, accessKeyId: 'test' }, { ...config, secretAccessKey: 'test' }, { ...config, credentials: {} },
   ])('rejects invalid enrollment %j', invalid => {
     expect(() => new AwsSecurityIntegration(invalid as any)).toThrow();
   });

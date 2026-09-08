@@ -47,6 +47,21 @@ After an existing build, Windows accepts `-StartOnly`; Unix accepts `--start-onl
 
 Changes to backend code require a build and restart. Stop the process you intend to replace before starting its new build; active jobs may be interrupted. Browser-only changes require rebuilding the UI and reloading the page.
 
+When updating an existing installation, keep its `--port` and `--data-dir` options and check `node --version` in the launch terminal (24.14 or later). Rebuilding files does not replace the running backend. A new UI can otherwise appear alongside an older backend and still report that AWS account/region configuration is required. Restarting ends browser sessions and clears memory-only AI provider keys; sign in again and re-enter those keys as needed.
+
+## AWS CLI and SSO setup
+
+Guardian uses credentials available to its host process; it does not sign you into AWS. For an existing AWS CLI SSO profile, authenticate and verify the intended account before starting Guardian:
+
+```sh
+aws sso login --profile YOUR_PROFILE
+aws sts get-caller-identity --profile YOUR_PROFILE
+```
+
+Complete the browser sign-in opened by the first command. In the same terminal used to launch Guardian, select that profile with `$env:AWS_PROFILE = "YOUR_PROFILE"` in PowerShell or `export AWS_PROFILE="YOUR_PROFILE"` on macOS/Linux. Configure the inventory region in the profile or `AWS_REGION`; the SSO login region is separate. `GUARDIAN_AWS_PROFILE`, if set, overrides `AWS_PROFILE`. Workload roles and environment credentials use their own authentication setup instead of SSO.
+
+Start or restart Guardian with the selected profile and existing port/data directory. In **Integrations**, check the reported account, region and verified identity, then use **Check AWS** or **Environments → Collect now**. A verified identity does not guarantee GuardDuty or Security Hub availability; service setup and permission gaps remain visible in coverage. See the [AWS operator guide](docs/guides/SECURITY-WORKSPACE.md#optional-aws-security) for explicit account pins, session renewal and recovery.
+
 ## Packaged distributions
 
 `npm run package:security` builds a local distribution with platform launchers. See the [packaging guide](docs/guides/SECURITY-PACKAGING.md) for the archive layout, target-platform dependency installation and verification.

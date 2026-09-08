@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { loadConfig } from '@smithy/node-config-provider';
 import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import { EC2Client, paginateDescribeInstances, paginateDescribeSecurityGroups, type Instance, type SecurityGroup } from '@aws-sdk/client-ec2';
 import { SecurityHubClient, DescribeHubCommand, paginateGetFindings as paginateSecurityHubFindings, type AwsSecurityFinding } from '@aws-sdk/client-securityhub';
@@ -7,6 +8,11 @@ import { GuardDutyClient, GetDetectorCommand, GetFindingsCommand, paginateListDe
 export interface AwsSecurityConfig { region: string; accountId: string; profile?: string }
 export interface AwsSecurityClients { sts: STSClient; ec2: EC2Client; securityhub: SecurityHubClient; guardduty: GuardDutyClient }
 export interface AwsSecurityOptions { clients?: AwsSecurityClients; timeoutMs?: number; now?: () => number }
+export interface AwsSecurityStatus {
+  configured: boolean; mode: 'pinned' | 'host_cli'; status: 'configured' | 'degraded' | 'needs_region' | 'unavailable';
+  target?: string; accountId?: string; region?: string; profile?: string; identityOk: boolean; lastIdentityAt?: number; message: string;
+}
+interface AwsSecurityBootstrap { integration?: AwsSecurityIntegration; unavailable?: AwsSecurityStatus }
 type Status = 'available' | 'degraded' | 'unavailable';
 export interface AwsSecurityReport {
   accountId: string; region: string; collectedAt: number; status: Status;
@@ -18,12 +24,20 @@ export interface AwsSecurityReport {
 const MAX_PAGES = 10;
 const MAX_ITEMS = 1000;
 const MANAGEMENT_PORTS = [22, 3389, 5985, 5986];
+const ACCOUNT_ID = /^\d{12}$/;
+const REGION = /^(?:af|ap|ca|cn|eu|il|me|mx|sa|us)(?:-gov)?-[a-z]+-\d+$/;
+const PROFILE = /^[A-Za-z0-9_.@+=-]{1,128}$/;
 class CollectionError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
 const idFor = (source: string, ...parts: string[]): string => `aws:${source}:${createHash('sha256').update(JSON.stringify(parts)).digest('hex')}`;
+const endpoint = (service: string, region: string) => `https://${service}.${region}.${region.startsWith('cn-') ? 'amazonaws.com.cn' : 'amazonaws.com'}`;
+function requestTimeout(value = 15000): number {
+  if (!Number.isFinite(value) || value <= 0) throw new Error('AWS timeout must be a positive finite duration.');
+  return Math.min(15000, Math.max(1, value));
+}
 
-/** Explicit account/region enrollment only. No ambient-credential autodiscovery. */
+/** One account/region pin: explicit enrollment or startup STS discovery, followed by explicit read-only collection. */
 export class AwsSecurityIntegration {
   readonly target: string;
   private readonly clients: AwsSecurityClients;
@@ -33,25 +47,89 @@ export class AwsSecurityIntegration {
   private readonly aborts = new Set<AbortController>();
   private pending?: Promise<AwsSecurityReport>;
   private closed = false;
+  private mode: AwsSecurityStatus['mode'] = 'pinned';
+  private identityOk = false;
+  private identityFailed = false;
+  private lastIdentityAt?: number;
+
+  static async fromEnvironment(env: NodeJS.ProcessEnv = process.env, options: AwsSecurityOptions = {}): Promise<AwsSecurityBootstrap> {
+    const accountId = env['GUARDIAN_AWS_ACCOUNT_ID'] || undefined;
+    const pinnedRegion = env['GUARDIAN_AWS_REGION'] || undefined;
+    const profile = env['GUARDIAN_AWS_PROFILE'] || env['AWS_PROFILE'] || undefined;
+    if (!!accountId !== !!pinnedRegion) throw new Error('AWS account and region pins must both be set: GUARDIAN_AWS_ACCOUNT_ID and GUARDIAN_AWS_REGION.');
+    if (profile !== undefined && !PROFILE.test(profile)) throw new Error('AWS profile must be a valid named profile.');
+    if (accountId && pinnedRegion) return { integration: new AwsSecurityIntegration({ accountId, region: pinnedRegion, ...(profile ? { profile } : {}) }, options) };
+
+    const timeoutMs = requestTimeout(options.timeoutMs);
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let sts: STSClient | undefined;
+    let region: string | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new CollectionError('Timeout', 'AWS host identity discovery timed out. Check host credentials and network access, then restart Guardian.'));
+        controller.abort();
+      }, timeoutMs);
+    });
+    try {
+      const discover = async () => {
+        const resolved = await loadConfig({
+          environmentVariableSelector: () => env['AWS_REGION'] || env['AWS_DEFAULT_REGION'] || undefined,
+          configFileSelector: selected => selected['region'] || undefined,
+          default: () => { throw new CollectionError('NeedsRegion', 'No AWS region is configured. Set AWS_REGION, AWS_DEFAULT_REGION or the selected AWS profile region, then restart Guardian.'); },
+        }, { profile: profile ?? 'default', preferredFile: 'config', configFilepath: env['AWS_CONFIG_FILE'], filepath: env['AWS_SHARED_CREDENTIALS_FILE'] })();
+        controller.signal.throwIfAborted();
+        if (!REGION.test(resolved)) throw new CollectionError('NeedsRegion', 'The host AWS region is invalid or unsupported. Set a supported AWS_REGION or profile region, then restart Guardian.');
+        region = resolved;
+        sts = options.clients?.sts ?? new STSClient({ region, ...(profile ? { profile } : {}), maxAttempts: 2, endpoint: endpoint('sts', region) });
+        const identity = await sts.send(new GetCallerIdentityCommand({}), { abortSignal: controller.signal });
+        controller.signal.throwIfAborted();
+        if (!identity.Account || !ACCOUNT_ID.test(identity.Account)) throw new CollectionError('InvalidIdentity', 'AWS did not return a valid account identity. Check the host AWS session, then restart Guardian.');
+        const integration = new AwsSecurityIntegration({ accountId: identity.Account, region, ...(profile ? { profile } : {}) }, options);
+        integration.mode = 'host_cli';
+        integration.identityOk = true;
+        integration.lastIdentityAt = integration.now();
+        return { integration };
+      };
+      return await Promise.race([discover(), deadline]);
+    } catch (error) {
+      return { unavailable: {
+        configured: false, mode: 'host_cli', status: error instanceof CollectionError && error.code === 'NeedsRegion' ? 'needs_region' : 'unavailable',
+        ...(region ? { region } : {}), ...(profile ? { profile } : {}), identityOk: false,
+        message: error instanceof CollectionError ? error.message : 'Unable to verify host AWS credentials. Check AWS_PROFILE and run aws sso login for an SSO profile, or restore the host credential chain, then restart Guardian. No inventory was collected.',
+      } };
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (!options.clients) sts?.destroy();
+    }
+  }
+
+  status(): AwsSecurityStatus {
+    return {
+      configured: true, mode: this.mode, status: this.identityFailed ? 'degraded' : 'configured', target: this.target,
+      ...this.config, identityOk: this.identityOk, ...(this.lastIdentityAt === undefined ? {} : { lastIdentityAt: this.lastIdentityAt }),
+      message: this.mode === 'host_cli'
+        ? `Using host AWS credentials for account ${this.config.accountId} (${this.config.region}). The account is pinned for this process. Set GUARDIAN_AWS_ACCOUNT_ID and GUARDIAN_AWS_REGION to keep an explicit pin across restarts.`
+        : `Read-only collection for ${this.target}, pinned by service configuration. Coverage and permission failures remain explicit.`,
+    };
+  }
 
   constructor(config: AwsSecurityConfig, options: AwsSecurityOptions = {}) {
-    if (!config || Object.keys(config).some(key => !['region', 'accountId', 'profile'].includes(key)) || !/^\d{12}$/.test(config.accountId ?? '')
-      || !/^(?:af|ap|ca|cn|eu|il|me|mx|sa|us)(?:-gov)?-[a-z]+-\d+$/.test(config.region ?? '')
-      || (config.profile !== undefined && !/^[A-Za-z0-9_.@+=-]{1,128}$/.test(config.profile))) throw new Error('An explicit AWS account ID, supported AWS region and optional named profile are required; endpoints and access keys are not accepted.');
+    if (!config || Object.keys(config).some(key => !['region', 'accountId', 'profile'].includes(key)) || !ACCOUNT_ID.test(config.accountId ?? '')
+      || !REGION.test(config.region ?? '')
+      || (config.profile !== undefined && !PROFILE.test(config.profile))) throw new Error('An explicit AWS account ID, supported AWS region and optional named profile are required; endpoints and access keys are not accepted.');
     this.config = Object.freeze({ ...config });
     this.target = `aws:${config.accountId}:${config.region}`;
-    if (options.timeoutMs !== undefined && (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)) throw new Error('AWS timeout must be a positive finite duration.');
-    this.timeoutMs = Math.min(15000, Math.max(1, options.timeoutMs ?? 15000));
+    this.timeoutMs = requestTimeout(options.timeoutMs);
     this.now = options.now ?? Date.now;
     const base = { region: config.region, ...(config.profile ? { profile: config.profile } : {}), maxAttempts: 2 };
     // Pin service endpoints so AWS_ENDPOINT_URL/profile endpoint overrides cannot
     // redirect signed inventory requests. Credentials still use the SDK chain.
-    const endpoint = (service: string) => `https://${service}.${config.region}.${config.region.startsWith('cn-') ? 'amazonaws.com.cn' : 'amazonaws.com'}`;
     this.clients = options.clients ?? {
-      sts: new STSClient({ ...base, endpoint: endpoint('sts') }),
-      ec2: new EC2Client({ ...base, endpoint: endpoint('ec2') }),
-      securityhub: new SecurityHubClient({ ...base, endpoint: endpoint('securityhub') }),
-      guardduty: new GuardDutyClient({ ...base, endpoint: endpoint('guardduty') }),
+      sts: new STSClient({ ...base, endpoint: endpoint('sts', config.region) }),
+      ec2: new EC2Client({ ...base, endpoint: endpoint('ec2', config.region) }),
+      securityhub: new SecurityHubClient({ ...base, endpoint: endpoint('securityhub', config.region) }),
+      guardduty: new GuardDutyClient({ ...base, endpoint: endpoint('guardduty', config.region) }),
     };
   }
 
@@ -109,15 +187,20 @@ export class AwsSecurityIntegration {
 
   private async collect(): Promise<AwsSecurityReport> {
     const report: AwsSecurityReport = { accountId: this.config.accountId, region: this.config.region, collectedAt: this.now(), status: 'unavailable', errors: [], coverage: [], findings: [], resources: { instances: [], securityGroups: [] } };
+    this.identityOk = false;
     try {
       const identity = await this.call(options => this.clients.sts.send(new GetCallerIdentityCommand({}), options));
       if (identity.Account !== this.config.accountId) throw new CollectionError('AccountMismatch', 'The authenticated AWS account differs from the configured account. No inventory or finding APIs were called.');
+      this.identityOk = true;
+      this.identityFailed = false;
+      this.lastIdentityAt = this.now();
     } catch (error) {
+      this.identityFailed = true;
       this.error(report, 'sts', error);
       report.coverage.push({ id: 'aws.identity', name: 'AWS account identity', status: 'unavailable', description: 'Account identity verification failed. All other collection was skipped.' });
       return report;
     }
-    report.coverage.push({ id: 'aws.identity', name: 'AWS account identity', status: 'available', description: 'STS identity matched the explicitly configured account.' });
+    report.coverage.push({ id: 'aws.identity', name: 'AWS account identity', status: 'available', description: this.mode === 'host_cli' ? 'STS identity matched the account discovered and pinned at process startup.' : 'STS identity matched the explicitly configured account.' });
     const service = async (id: string, name: string, description: string, action: () => Promise<void>) => {
       let status: Status = 'available';
       try { await action(); }
