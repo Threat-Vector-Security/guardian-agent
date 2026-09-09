@@ -160,7 +160,8 @@ const SceneContent: React.FC<SceneContentProps> = ({
     const x = (vector.x * widthHalf) + widthHalf;
     const y = -(vector.y * heightHalf) + heightHalf;
 
-    return new THREE.Vector2(x, y);
+    const rect = gl.domElement.getBoundingClientRect();
+    return new THREE.Vector2(rect.left + x, rect.top + y);
   }, [camera, gl]);
 
   const handleEntityHover = useCallback((entity: GameEntity | null, worldPos: THREE.Vector3 | null) => {

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useLayoutEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Paper,
   Typography,
@@ -38,7 +39,7 @@ interface QuickInspectorProps {
 }
 
 const InspectorContainer = styled(Paper)(({ theme }) => ({
-  position: 'absolute',
+  position: 'fixed',
   backgroundColor: theme.colors.surface,
   border: `1px solid ${theme.colors.border}`,
   borderRadius: '8px',
@@ -124,38 +125,22 @@ const QuickInspector: React.FC<QuickInspectorProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [adjustedPosition, setAdjustedPosition] = useState(position);
   
-  // Force re-render when item changes
-  useEffect(() => {
-    if (item) {
-      // Force re-render when data changes by updating state
-      setAdjustedPosition(prev => ({ ...prev }));
-    }
-  }, [item]);
-
-  // Adjust position to keep inspector within viewport and offset to the right
-  useEffect(() => {
-    if (!containerRef.current || !visible) return;
-    if (isBottomSheetViewport) return;
+  // Callers supply viewport coordinates; the portal avoids embedded editor offsets.
+  useLayoutEffect(() => {
+    if (!containerRef.current || !visible || isBottomSheetViewport) return;
 
     const rect = containerRef.current.getBoundingClientRect();
     const padding = 20;
-    const rightOffset = 100; // Offset to avoid control points
-    let newX = position.x + rightOffset;
-    let newY = position.y;
-
-    // Adjust horizontal position if it goes off screen
-    if (newX + rect.width + padding > window.innerWidth) {
-      // If offsetting right would go off screen, try left side instead
-      newX = position.x - rect.width - padding;
+    const offset = 40;
+    let x = position.x + offset;
+    if (x + rect.width + padding > window.innerWidth) {
+      x = position.x - rect.width - offset;
     }
-
-    // Adjust vertical position
-    if (position.y + rect.height + padding > window.innerHeight) {
-      newY = window.innerHeight - rect.height - padding;
-    }
-
-    setAdjustedPosition({ x: newX, y: newY });
-  }, [isBottomSheetViewport, position, visible]);
+    setAdjustedPosition({
+      x: Math.max(padding, Math.min(x, window.innerWidth - rect.width - padding)),
+      y: Math.max(padding, Math.min(position.y + offset, window.innerHeight - rect.height - padding))
+    });
+  }, [isBottomSheetViewport, item, position, visible]);
 
   if (!item || !visible) return null;
 
@@ -619,9 +604,11 @@ const QuickInspector: React.FC<QuickInspectorProps> = ({
     );
   }
 
-  return (
+  return createPortal(
     <Fade in={visible} timeout={200}>
       <InspectorContainer
+        role="dialog"
+        aria-label="Diagram item details"
         onMouseEnter={onInspectorMouseEnter}
         onMouseLeave={onInspectorMouseLeave}
         ref={containerRef}
@@ -634,7 +621,8 @@ const QuickInspector: React.FC<QuickInspectorProps> = ({
       >
         {inspectorContent}
       </InspectorContainer>
-    </Fade>
+    </Fade>,
+    document.body
   );
 };
 

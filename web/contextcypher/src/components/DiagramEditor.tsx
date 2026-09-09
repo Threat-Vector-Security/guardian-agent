@@ -4089,7 +4089,8 @@ const DiagramEditor: React.FC<DiagramEditorProps> = ({
         return;
       }
 
-      const rect = (event.target as HTMLElement).getBoundingClientRect();
+      const target = event.target as HTMLElement;
+      const rect = (target.closest('.react-flow__node') ?? target).getBoundingClientRect();
       // Find the current node data from our state
       const currentNode = nodes.find(n => n.id === node.id);
       if (currentNode) {
